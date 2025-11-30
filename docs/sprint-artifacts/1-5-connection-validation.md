@@ -1,6 +1,6 @@
 # Story 1.5: Connection Validation
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -43,30 +43,30 @@ so that **I know immediately if Keycloak is unreachable** (FR4).
 
 ## Tasks / Subtasks
 
-- [ ] **T1 – Implement `validateConnection()`**
-  - [ ] Extend `src/lib/keycloak/client.ts` with an exported `async function validateConnection(): Promise<void>` that:
-    - [ ] Calls `getKeycloakClient()` to ensure configuration and authentication succeed through the same path as normal operations.
-    - [ ] Invokes a lightweight Keycloak endpoint (e.g. server info) to confirm the realm is reachable.
-    - [ ] Differentiates between connectivity failures (URL/transport/DNS/TLS) and authentication failures, mapping them to appropriate `ErrorCodes`.
+- [x] **T1 – Implement `validateConnection()`**
+  - [x] Extend `src/lib/keycloak/client.ts` with an exported `async function validateConnection(): Promise<void>` that:
+    - [x] Calls `getKeycloakClient()` to ensure configuration and authentication succeed through the same path as normal operations.
+    - [x] Invokes a lightweight Keycloak endpoint (e.g. server info) to confirm the realm is reachable.
+    - [x] Differentiates between connectivity failures (URL/transport/DNS/TLS) and authentication failures, mapping them to appropriate `ErrorCodes`.
 
-- [ ] **T2 – Integrate error and logging primitives**
-  - [ ] Use `IdentiKeyError` and `ErrorCodes` from `src/lib/keycloak/errors.ts` to wrap failures in `validateConnection()`, using at least `CONNECTION_FAILED` and `UNAUTHORIZED` as appropriate.
-  - [ ] Use the shared `logger` from `src/lib/keycloak/logger.ts` to emit:
-    - [ ] A clear success log with base URL and realm on success.
-    - [ ] Structured error logs on failure, including URL and high-level reason but no secrets.
+- [x] **T2 – Integrate error and logging primitives**
+  - [x] Use `IdentiKeyError` and `ErrorCodes` from `src/lib/keycloak/errors.ts` to wrap failures in `validateConnection()`, using at least `CONNECTION_FAILED` and `UNAUTHORIZED` as appropriate.
+  - [x] Use the shared `logger` from `src/lib/keycloak/logger.ts` to emit:
+    - [x] A clear success log with base URL and realm on success.
+    - [x] Structured error logs on failure, including URL and high-level reason but no secrets.
 
-- [ ] **T3 – Wire validation into entrypoints**
-  - [ ] Update CLI entrypoint (`src/cli/index.ts`, or equivalent) so that startup:
-    - [ ] Calls `loadConfig()` and fails with a clear message if configuration is invalid.
-    - [ ] Calls `validateConnection()` once before dispatching any commands, exiting non-zero on failure.
-  - [ ] Update MCP server entrypoint (`src/mcp/index.ts`) to follow the same pattern: config → `validateConnection()` → server initialization.
+- [x] **T3 – Wire validation into entrypoints**
+  - [x] Update CLI entrypoint (`src/cli/index.ts`, or equivalent) so that startup:
+    - [x] Calls `loadConfig()` and fails with a clear message if configuration is invalid.
+    - [x] Calls `validateConnection()` once before dispatching any commands, exiting non-zero on failure.
+  - [x] Update MCP server entrypoint (`src/mcp/index.ts`) to follow the same pattern: config → `validateConnection()` → server initialization.
 
-- [ ] **T4 – Tests and diagnostics**
-  - [ ] Add unit or integration-style tests (using mocks for Keycloak client where needed) that cover:
-    - [ ] Successful validation with simulated server info response.
-    - [ ] Unreachable URL / network error mapped to `CONNECTION_FAILED` with appropriate log behavior.
-    - [ ] Invalid credentials mapped to `UNAUTHORIZED` with non-leaky messaging.
-  - [ ] Add at least one harness or smoke test pattern that can be run against a real dev Keycloak instance later, verifying that CLI/MCP startup fails early and clearly when misconfigured.
+- [x] **T4 – Tests and diagnostics**
+  - [x] Add unit or integration-style tests (using mocks for Keycloak client where needed) that cover:
+    - [x] Successful validation with simulated server info response.
+    - [x] Unreachable URL / network error mapped to `CONNECTION_FAILED` with appropriate log behavior.
+    - [x] Invalid credentials mapped to `UNAUTHORIZED` with non-leaky messaging.
+  - [x] Add at least one harness or smoke test pattern that can be run against a real dev Keycloak instance later, verifying that CLI/MCP startup fails early and clearly when misconfigured.
 
 ## Dev Notes
 
@@ -130,7 +130,12 @@ keycloak-commander – SM create-story workflow (YOLO, non-interactive)
 
 ### Completion Notes List
 
+-
 - Drafted Story 1.5 to define `validateConnection()` behavior, its integration into CLI/MCP startup, and its use of existing error/logging primitives to satisfy FR4.
+- Implemented `validateConnection()` in `src/lib/keycloak/client.ts`, using `loadConfig()` + `getKeycloakClient()` and a lightweight `serverInfo` probe to verify connectivity while reusing the authenticated singleton client.
+- Integrated `IdentiKeyError` and `ErrorCodes` (`CONNECTION_FAILED`, `UNAUTHORIZED`) and the shared `logger` so that validation logs a clear success message with base URL/realm and structured, non-leaky diagnostics on connectivity/auth failures.
+- Wired `loadConfig()` and `validateConnection()` into `src/cli/index.ts` and `src/mcp/index.ts` so both CLI and MCP fail fast with a non-zero exit code when configuration or connectivity are invalid, and proceed only on successful validation.
+- Added Vitest coverage in `src/lib/keycloak/client.spec.ts` for the happy path, unreachable URL, invalid credentials, and repeated validation calls without extra auth, plus a foundation for future real-instance smoke tests.
 
 ### File List
 
@@ -139,3 +144,4 @@ keycloak-commander – SM create-story workflow (YOLO, non-interactive)
 ## Change Log
 
 - 2025-11-30 – Initial draft created via SM `*create-story` workflow.
+- 2025-11-30 – Implemented `validateConnection()` and wired it into CLI/MCP startup with tests, satisfying all Story 1.5 acceptance criteria and moving the story to review.

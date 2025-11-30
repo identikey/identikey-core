@@ -3,6 +3,10 @@
 		"svelte": {
 			"command": "npx",
 			"args": ["-y", "@sveltejs/mcp"]
+		},
+		"keycloak-commander": {
+			"command": "bun",
+			"args": ["run", "src/mcp/index.ts"]
 		}
 	}
 }
