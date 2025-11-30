@@ -42,8 +42,8 @@ development_status:
   # Epic 1: Foundation (5 stories) - FR1-4
   epic-1: contexted
   1-1-project-structure-dependencies: done
-  1-2-configuration-loading: review
-  1-3-keycloak-client-wrapper: backlog
+  1-2-configuration-loading: done
+  1-3-keycloak-client-wrapper: review
   1-4-error-types-logging-setup: backlog
   1-5-connection-validation: backlog
   epic-1-retrospective: optional

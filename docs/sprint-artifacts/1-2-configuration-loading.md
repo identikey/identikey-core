@@ -1,6 +1,6 @@
 # Story 1.2: Configuration Loading
 
-Status: review
+Status: done
 
 ## Story
 
