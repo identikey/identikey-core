@@ -27,7 +27,7 @@ describe('loadConfig', () => {
 		const cfg: Config = loadConfig();
 
 		expect(cfg.keycloakUrl).toBe('https://auth.example.com');
-		expect(cfg.keycloakRealm).toBe('master');
+		expect(cfg.keycloakRealm).toBe('identikey');
 		expect(cfg.keycloakClientId).toBe('admin-cli');
 		expect(cfg.keycloakUsername).toBe('admin');
 		expect(cfg.keycloakPassword).toBe('secret');

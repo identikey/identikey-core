@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 const ConfigSchema = z.object({
 	keycloakUrl: z.string().url(),
-	keycloakRealm: z.string().default('master'),
+	keycloakRealm: z.string().default('identikey'),
 	keycloakClientId: z.string().default('admin-cli'),
 	keycloakUsername: z.string(),
 	keycloakPassword: z.string(),

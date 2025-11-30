@@ -144,7 +144,7 @@ Map Keycloak concepts to IdentiKey terminology:
 
 | Keycloak Term       | IdentiKey Term                        |
 | ------------------- | ------------------------------------- |
-| Realm               | (hidden — always master)              |
+| Realm               | (hidden — always identikey)           |
 | Client              | App                                   |
 | Group               | Guild                                 |
 | Authentication Flow | Login Flow                            |
@@ -274,7 +274,7 @@ Map Keycloak concepts to IdentiKey terminology:
 ## Technical Constraints
 
 - **Keycloak Version:** Must work with IdentiKey's deployed Keycloak instance (version TBD)
-- **Realm:** Always operates on `master` realm (IdentiKey convention)
+- **Realm:** Always operates on `identikey` realm (master realm is reserved for Keycloak administration only)
 - **Runtime:** Node.js / TypeScript (aligns with SvelteKit for future web UI)
 - **MCP:** Local stdio transport for Cursor integration
 

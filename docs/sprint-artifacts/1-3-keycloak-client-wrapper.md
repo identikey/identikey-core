@@ -1,6 +1,6 @@
 # Story 1.3: Keycloak Client Wrapper
 
-Status: review
+Status: done
 
 ## Story
 

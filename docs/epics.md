@@ -196,7 +196,7 @@ So that **I can connect to different Keycloak instances without code changes**.
 
 **And** missing required variables throw clear error with variable name
 **And** invalid URL format throws validation error
-**And** `KEYCLOAK_REALM` defaults to `master` if not provided
+**And** `KEYCLOAK_REALM` defaults to `identikey` if not provided (master realm is reserved for Keycloak admin only)
 **And** `KEYCLOAK_CLIENT_ID` defaults to `admin-cli` if not provided
 
 **Prerequisites:** Story 1.1

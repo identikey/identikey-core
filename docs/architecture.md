@@ -142,7 +142,7 @@ import KcAdminClient from '@keycloak/keycloak-admin-client';
 
 const client = new KcAdminClient({
   baseUrl: process.env.KEYCLOAK_URL,
-  realmName: process.env.KEYCLOAK_REALM // always 'master'
+  realmName: process.env.KEYCLOAK_REALM // always 'identikey'
 });
 
 await client.auth({
@@ -202,7 +202,7 @@ runMain(main);
 │              (@keycloak/keycloak-admin-client)              │
 │                                                             │
 │  • Auth: password grant (admin credentials)                 │
-│  • Realm: always 'master'                                   │
+│  • Realm: always 'identikey'                                │
 │  • Auto token refresh                                       │
 └─────────────────────────────────────────────────────────────┘
                               ▲
@@ -236,15 +236,15 @@ runMain(main);
 
 Map Keycloak concepts to IdentiKey terminology throughout the codebase:
 
-| Keycloak Term       | IdentiKey Term       | Notes                          |
-| ------------------- | -------------------- | ------------------------------ |
-| Realm               | _(hidden)_           | Always `master`, never exposed |
-| Client              | App                  | OIDC clients are "apps"        |
-| Group               | Guild                | Organizational units           |
-| Authentication Flow | Login Flow           | Auth flow config               |
-| User Federation     | _(hidden)_           | Not exposed in MVP             |
-| Protocol Mapper     | Token Claims         | If exposed later               |
-| Client Scope        | _(hidden initially)_ | Future growth feature          |
+| Keycloak Term       | IdentiKey Term       | Notes                                                       |
+| ------------------- | -------------------- | ----------------------------------------------------------- |
+| Realm               | _(hidden)_           | Always `identikey`; master realm reserved for KC admin only |
+| Client              | App                  | OIDC clients are "apps"                                     |
+| Group               | Guild                | Organizational units                                        |
+| Authentication Flow | Login Flow           | Auth flow config                                            |
+| User Federation     | _(hidden)_           | Not exposed in MVP                                          |
+| Protocol Mapper     | Token Claims         | If exposed later                                            |
+| Client Scope        | _(hidden initially)_ | Future growth feature                                       |
 
 **Type Mapping Example:**
 
@@ -500,7 +500,7 @@ logger.error({ err, userId }, 'Failed to fetch user');
 ```bash
 # .env.example
 KEYCLOAK_URL=https://auth.identikey.io
-KEYCLOAK_REALM=master
+KEYCLOAK_REALM=identikey
 KEYCLOAK_CLIENT_ID=admin-cli
 KEYCLOAK_USERNAME=admin
 KEYCLOAK_PASSWORD=your-password
@@ -514,7 +514,7 @@ import { z } from 'zod';
 
 const ConfigSchema = z.object({
   keycloakUrl: z.string().url(),
-  keycloakRealm: z.string().default('master'),
+  keycloakRealm: z.string().default('identikey'),
   keycloakClientId: z.string().default('admin-cli'),
   keycloakUsername: z.string(),
   keycloakPassword: z.string()

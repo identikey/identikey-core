@@ -1,0 +1,293 @@
+<story-context id=".bmad/bmm/workflows/4-implementation/story-context/template" v="1.0">
+  <metadata>
+    <epicId>1</epicId>
+    <storyId>4</storyId>
+    <title>Error Types &amp; Logging Setup</title>
+    <status>ready-for-dev</status>
+    <generatedAt>2025-11-30</generatedAt>
+    <generator>BMAD Story Context Workflow</generator>
+    <sourceStoryPath>docs/sprint-artifacts/1-4-error-types-logging-setup.md</sourceStoryPath>
+  </metadata>
+
+  <story>
+    <asA>developer</asA>
+    <iWant>standardized error types and structured logging</iWant>
+    <soThat>errors are consistent and debuggable across all services</soThat>
+    <tasks><![CDATA[
+- [ ] **T1 – Implement IdentiKey error type**
+  - [ ] Create `src/lib/keycloak/errors.ts` exporting:
+    - [ ] `class IdentiKeyError extends Error` with `message`, `code`, and optional `cause`.  
+    - [ ] A frozen `ErrorCodes` object enumerating at least:
+          `USER_NOT_FOUND`, `APP_NOT_FOUND`, `GUILD_NOT_FOUND`, `AUTH_FLOW_NOT_FOUND`,
+          `UNAUTHORIZED`, `CONNECTION_FAILED`, `INVALID_INPUT`.
+  - [ ] Ensure stack traces are preserved and `name` is set to `"IdentiKeyError"`.
+
+- [ ] **T2 – Implement shared logger**
+  - [ ] Create `src/lib/keycloak/logger.ts` exporting a singleton `logger` from `pino`.
+  - [ ] Configure `level` from `process.env.LOG_LEVEL ?? 'info'`.
+  - [ ] In `NODE_ENV === 'development'`, enable `pino-pretty` transport for readable console output; otherwise emit plain JSON.
+  - [ ] Add (or prepare for) redaction of obviously sensitive fields so they never appear in structured logs.
+
+- [ ] **T3 – Wire into existing foundation**
+  - [ ] Use `IdentiKeyError` as the canonical error type for connectivity/auth failures in `client.ts` (e.g. wrapping Keycloak admin client auth errors) without changing external APIs.
+  - [ ] Use `logger` for connection validation and other core messages instead of `console.log` or ad-hoc logging.
+
+- [ ] **T4 – Tests and safety checks**
+  - [ ] Add unit tests verifying:
+    - [ ] `IdentiKeyError` preserves message, code, and cause.  
+    - [ ] `ErrorCodes` is stable and treated as a closed set for current use cases.  
+    - [ ] `logger` honors `LOG_LEVEL` and does not throw during initialization.  
+  - [ ] Add at least one test or harness that exercises wrapping of a synthetic Keycloak/network error into `IdentiKeyError` with `CONNECTION_FAILED` or `UNAUTHORIZED`.
+    ]]></tasks>
+  </story>
+
+  <acceptanceCriteria><![CDATA[
+1. **IdentiKey error type and codes**
+   - Given a Keycloak or network error occurs in a connectivity path (e.g. during configuration loading or Keycloak client initialization)  
+     When it is handled in the core layer  
+     Then it is wrapped in an `IdentiKeyError` instance with:
+       - a specific, non-generic `code` drawn from a constrained `ErrorCodes` set, and  
+       - an optional `cause` preserving the original error for debugging.
+
+2. **Structured logging with Pino**
+   - Given the application is running in any environment  
+     When the logger is used from core modules (`config.ts`, `client.ts`, future services)  
+     Then logs are emitted via a shared `logger` built on `pino`, with:
+       - JSON output by default in non-development environments, and  
+       - pretty-printed, human-readable output in development.
+
+3. **Environment-driven log level**
+   - Given `LOG_LEVEL` is set in the environment  
+     When the logger is created  
+     Then the effective log level honors `LOG_LEVEL`, defaulting to `info` when unset.
+
+4. **No secret leakage**
+   - Given errors are wrapped and logs are written  
+     When sensitive values such as passwords, tokens, client secrets, or full credential objects are involved  
+     Then those values are never logged (neither in messages nor in structured fields), and error messages remain high-level and non-leaky.
+
+5. **Ready for Epic 1 consumers**
+   - Given later epics introduce domain services (users, apps, guilds, roles, flows, sessions, events)  
+     When those services depend on the error and logging primitives from this story  
+     Then they can:
+       - throw `IdentiKeyError` with appropriate codes without redesigning the base types, and  
+       - use the shared `logger` directly without additional per-service configuration.
+  ]]></acceptanceCriteria>
+
+  <artifacts>
+    <docs>
+      <!-- PRD: Non-Functional Requirements - Security -->
+      <doc>
+        <path>docs/prd.md</path>
+        <title>keycloak-commander — Product Requirements Document</title>
+        <section>Non-Functional Requirements – Security</section>
+        <snippet>
+          <![CDATA[
+- **NFR1:** Credentials (Keycloak admin password, client secrets) are never logged or exposed in error messages
+- **NFR2:** MCP server only accepts local connections (stdio transport, not network-exposed)
+- **NFR3:** CLI does not store credentials in command history (reads from env vars or prompts)
+- **NFR4:** All Keycloak API calls use HTTPS in production
+          ]]>
+        </snippet>
+      </doc>
+
+      <!-- Epics: Story 1.4 definition -->
+      <doc>
+        <path>docs/epics.md</path>
+        <title>keycloak-commander — Epic Breakdown</title>
+        <section>Story 1.4: Error Types &amp; Logging Setup</section>
+        <snippet>
+          <![CDATA[
+As a **developer**,
+I want **standardized error types and structured logging**,
+So that **errors are consistent and debuggable across all services**.
+
+Given a Keycloak API error occurs
+When it's caught in the service layer
+Then it's wrapped in `IdentiKeyError` with code, message, and cause
+
+And pino logger is configured with:
+
+- JSON output in production
+- Pretty output in development
+- Log level from `LOG_LEVEL` env var (default: `info`)
+
+And sensitive data (passwords, secrets) is never logged
+          ]]>
+        </snippet>
+      </doc>
+
+      <!-- Architecture: Error Handling and Logging Strategy -->
+      <doc>
+        <path>docs/architecture.md</path>
+        <title>Architecture — keycloak-commander</title>
+        <section>Error Handling &amp; Logging Strategy</section>
+        <snippet>
+          <![CDATA[
+// src/lib/keycloak/errors.ts
+export class IdentiKeyError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public cause?: Error
+  ) {
+    super(message);
+    this.name = 'IdentiKeyError';
+  }
+}
+
+// Error codes
+export const ErrorCodes = {
+  USER_NOT_FOUND: 'USER_NOT_FOUND',
+  APP_NOT_FOUND: 'APP_NOT_FOUND',
+  GUILD_NOT_FOUND: 'GUILD_NOT_FOUND',
+  AUTH_FLOW_NOT_FOUND: 'AUTH_FLOW_NOT_FOUND',
+  UNAUTHORIZED: 'UNAUTHORIZED',
+  CONNECTION_FAILED: 'CONNECTION_FAILED',
+  INVALID_INPUT: 'INVALID_INPUT'
+} as const;
+
+// src/lib/keycloak/logger.ts
+import pino from 'pino';
+
+export const logger = pino({
+  level: process.env.LOG_LEVEL ?? 'info',
+  transport: process.env.NODE_ENV === 'development'
+    ? { target: 'pino-pretty' }
+    : undefined
+});
+          ]]>
+        </snippet>
+      </doc>
+
+      <!-- Tech Spec: Epic 1 error/logging objectives -->
+      <doc>
+        <path>docs/sprint-artifacts/tech-spec-epic-1.md</path>
+        <title>Epic Technical Specification: Epic 1 – Foundation</title>
+        <section>Error Types &amp; Logging Setup</section>
+        <snippet>
+          <![CDATA[
+Define standard error types (`IdentiKeyError`, error codes) and structured logging (`pino`) for all subsequent epics.
+Provide a connection validation mechanism that can be invoked at startup from CLI and MCP entrypoints, surfacing actionable diagnostics when Keycloak is unreachable or credentials are invalid.
+Once this epic is complete, higher-level epics can safely assume access to a typed, authenticated `KcAdminClient` instance, a validated configuration object, common logging and error primitives, and a `validateConnection()` routine that can be used by any entrypoint to gate startup.
+          ]]>
+        </snippet>
+      </doc>
+    </docs>
+
+    <code>
+      <!-- Config loader -->
+      <artifact>
+        <path>src/lib/keycloak/config.ts</path>
+        <kind>module</kind>
+        <symbol>loadConfig</symbol>
+        <lines></lines>
+        <reason>Loads and validates Keycloak connection and logging configuration from environment variables using Zod; error wrapping and logging behavior depend on this validated configuration.</reason>
+      </artifact>
+
+      <!-- Keycloak client wrapper -->
+      <artifact>
+        <path>src/lib/keycloak/client.ts</path>
+        <kind>module</kind>
+        <symbol>getKeycloakClient, validateConnection</symbol>
+        <lines></lines>
+        <reason>Provides the singleton authenticated Keycloak admin client and connection validation hook where connectivity/auth failures will be wrapped into IdentiKeyError and logged via the shared logger.</reason>
+      </artifact>
+
+      <!-- Client wrapper tests -->
+      <artifact>
+        <path>src/lib/keycloak/client.spec.ts</path>
+        <kind>test</kind>
+        <symbol>client wrapper tests</symbol>
+        <lines></lines>
+        <reason>Verifies configuration usage, singleton semantics, and connection validation behavior; will be extended to assert IdentiKeyError wrapping and logging semantics.</reason>
+      </artifact>
+
+      <!-- Planned error primitives -->
+      <artifact>
+        <path>src/lib/keycloak/errors.ts</path>
+        <kind>module</kind>
+        <symbol>IdentiKeyError, ErrorCodes</symbol>
+        <lines></lines>
+        <reason>Defines the canonical IdentiKeyError type and constrained ErrorCodes set that all services will use for connectivity and domain failures.</reason>
+      </artifact>
+
+      <!-- Planned logger -->
+      <artifact>
+        <path>src/lib/keycloak/logger.ts</path>
+        <kind>module</kind>
+        <symbol>logger</symbol>
+        <lines></lines>
+        <reason>Provides the shared Pino logger instance with environment-driven log level and dev-friendly pretty output, ensuring consistent structured logging across services.</reason>
+      </artifact>
+    </code>
+
+    <dependencies>
+      <node>
+        <package name="@keycloak/keycloak-admin-client" version="^25.0.0" />
+        <package name="@modelcontextprotocol/sdk" version="^1.0.0" />
+        <package name="citty" version="^0.1.6" />
+        <package name="zod" version="^3.24.0" />
+        <package name="pino" version="^9.5.0" />
+        <package name="dotenv" version="^16.4.7" />
+        <package name="vitest" version="^4.0.5" />
+      </node>
+    </dependencies>
+  </artifacts>
+
+  <constraints>
+    <![CDATA[
+- All connectivity and domain errors surfaced from the Keycloak boundary must be represented as `IdentiKeyError` instances with specific, non-generic codes from `ErrorCodes`.
+- Services and entrypoints must never log secrets, passwords, tokens, client secrets, or full credential objects; logs may only include high-level identifiers and scrubbed messages.
+- ErrorCodes is treated as a closed set for current use cases; introducing new codes requires updating the shared `ErrorCodes` constant rather than ad-hoc string literals.
+- Logging must be centralized through the shared `logger` instance from `logger.ts`; modules should avoid ad-hoc `console.log` usage.
+- Error handling and logging concerns live in the foundation layer (`errors.ts`, `logger.ts`, `client.ts`) so that higher-level services can be implemented without duplicating connectivity/error semantics.
+    ]]>
+  </constraints>
+
+  <interfaces>
+    <![CDATA[
+- IdentiKeyError API:
+  - `new IdentiKeyError(message: string, code: typeof ErrorCodes[keyof typeof ErrorCodes], cause?: Error)`
+  - Extends Error, preserves stack traces, and sets `name` to `"IdentiKeyError"`.
+
+- ErrorCodes:
+  - A frozen object containing:
+    - `USER_NOT_FOUND`, `APP_NOT_FOUND`, `GUILD_NOT_FOUND`, `AUTH_FLOW_NOT_FOUND`,
+      `UNAUTHORIZED`, `CONNECTION_FAILED`, `INVALID_INPUT`.
+
+- Logger API:
+  - `logger` exported from `src/lib/keycloak/logger.ts` with standard Pino methods (`info`, `warn`, `error`, `debug`).
+  - Configured with `level` from `LOG_LEVEL` (default `info`) and `pino-pretty` transport when `NODE_ENV === 'development'`.
+
+- Client/Validation interplay:
+  - `getKeycloakClient(): Promise<KcAdminClient>` — obtains a singleton authenticated client based on validated config.
+  - `validateConnection(): Promise<void>` — uses the same client/auth path to perform a lightweight connectivity check and will surface failures wrapped in IdentiKeyError with appropriate codes.
+    ]]>
+  </interfaces>
+
+  <tests>
+    <standards>
+      <![CDATA[
+Use Vitest for unit-level tests that focus on error-wrapping behavior and logger initialization; avoid real Keycloak I/O by mocking the admin client and environment. Prioritize tests that assert IdentiKeyError shape, ErrorCodes stability, and that logger initialization respects LOG_LEVEL and does not leak secrets into log payloads.
+      ]]>
+    </standards>
+    <locations>
+      <![CDATA[
+- `src/**/*.spec.ts`
+- `src/**/*.test.ts`
+      ]]>
+    </locations>
+    <ideas>
+      <![CDATA[
+- AC1: Simulate a Keycloak or network error during client authentication and verify it can be wrapped into an `IdentiKeyError` with an appropriate code (e.g. `CONNECTION_FAILED` or `UNAUTHORIZED`) and a preserved cause.
+- AC2: Verify that the shared logger respects `LOG_LEVEL`, emitting debug logs only when configured, and that JSON vs pretty output toggles with NODE_ENV without throwing during initialization.
+- AC3: Assert that obvious sensitive fields (passwords, tokens, client secrets) are never included in structured log objects, even when errors occur.
+- AC4: Confirm that services depending on the error and logging primitives can surface failures without needing to know about raw Keycloak error types.
+- AC5: Add a harness test around a synthetic connectivity/auth failure path that exercises both IdentiKeyError wrapping and logging, ensuring no secret leakage while still producing actionable diagnostics.
+      ]]>
+    </ideas>
+  </tests>
+</story-context>
+
+

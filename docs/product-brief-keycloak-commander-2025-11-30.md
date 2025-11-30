@@ -33,13 +33,13 @@ The raw Keycloak admin console is click-heavy, Keycloak-terminology-heavy, and i
 
 **IdentiKey Admin** — A purpose-built interface that abstracts Keycloak into IdentiKey concepts:
 
-| Keycloak Term       | IdentiKey Term             |
-| ------------------- | -------------------------- |
-| Realm               | _(hidden — always master)_ |
-| Client              | App                        |
-| Group               | Guild                      |
-| Authentication Flow | Login Flow                 |
-| Protocol Mapper     | Token Claims               |
+| Keycloak Term       | IdentiKey Term                |
+| ------------------- | ----------------------------- |
+| Realm               | _(hidden — always identikey)_ |
+| Client              | App                           |
+| Group               | Guild                         |
+| Authentication Flow | Login Flow                    |
+| Protocol Mapper     | Token Claims                  |
 
 Three interfaces expose these abstractions:
 
@@ -72,7 +72,7 @@ Three interfaces expose these abstractions:
 
 ## IdentiKey Architecture Context
 
-- **Single Master Realm** — All users live in one realm
+- **Dedicated `identikey` Realm** — All IdentiKey users, apps, guilds live here (master realm is reserved for Keycloak administration only)
 - **Multi-tenant via Clients** — Multiple applications connect via OIDC
 - **Shared User Database** — Users can authenticate to any client they're authorized for
 - **Groups = "Guilds"** — Organizational units with delegated admin capabilities
@@ -124,7 +124,7 @@ Three interfaces expose these abstractions:
 - **MCP:** Local MCP server (Node/TypeScript)
 - **CLI:** TypeScript, potentially using a framework like Commander.js or similar
 - **Target:** Keycloak Admin REST API
-- **Realm:** Always `master` (IdentiKey convention)
+- **Realm:** Always `identikey` (master realm reserved for Keycloak admin operations only)
 
 ### Architecture Pattern
 
