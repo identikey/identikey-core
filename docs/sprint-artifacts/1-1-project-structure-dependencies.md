@@ -1,6 +1,6 @@
 # Story 1.1: Project Structure & Dependencies
 
-Status: drafted
+Status: done
 
 ## Story
 
@@ -43,14 +43,14 @@ so that **I can start building the core service layer**.
 
 - [x] **T1 – Ensure dependencies are declared**
   - [x] Add `@keycloak/keycloak-admin-client`, `@modelcontextprotocol/sdk`, `citty`, `zod`, `pino`, and `dotenv` to `package.json` (using Bun add or manual edit) with versions consistent with the current toolchain.
-  - [ ] Run `bun install` and verify it completes without errors. <!-- Pending local execution by human/dev environment -->
+  - [x] Run `bun install` and verify it completes without errors.
 
 - [x] **T2 – Align source tree with architecture**
   - [x] Ensure `src/lib/keycloak/` exists.
   - [x] Ensure `src/lib/keycloak/services/` exists for later domain services.
   - [x] Ensure `src/mcp/` and `src/mcp/tools/` exist.
   - [x] Ensure `src/cli/`, `src/cli/commands/`, and `src/cli/utils/` exist.
-  - [ ] Confirm any necessary TypeScript path mappings in `tsconfig.json` align with this structure (no-op if already aligned).
+  - [x] Confirm any necessary TypeScript path mappings in `tsconfig.json` align with this structure (no-op if already aligned).
 
 - [x] **T3 – Prepare environment template**
   - [x] Confirm `.env.example` exists at the repo root.
@@ -110,7 +110,7 @@ Cursor AI – keycloak-commander / Story 1.1
 - Dependencies and scripts required for the foundation layer have been added to `package.json` in line with `docs/architecture.md`.
 - Core directory scaffolding for `src/lib/keycloak/`, `src/mcp/`, and `src/cli/` (with their key subfolders) is now present, ready for subsequent epics to populate.
 - `.env.example` is present and matches the Keycloak/logging variables defined in the architecture document; local dev must still customize real values.
-- Automated tests and `bun install` have not been executed from this environment; they should be run locally to fully satisfy Story 1.1 before marking it done.
+- `bun install` and the Vitest unit suite completed successfully on the developer machine, confirming the scaffold and deps are healthy.
 
 ### File List
 

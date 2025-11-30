@@ -1,0 +1,186 @@
+<story-context id=".bmad/bmm/workflows/4-implementation/story-context/template" v="1.0">
+  <metadata>
+    <epicId>1</epicId>
+    <storyId>2</storyId>
+    <title>Story 1.2: Configuration Loading</title>
+    <status>drafted</status>
+    <generatedAt>2025-11-30</generatedAt>
+    <generator>BMAD Story Context Workflow (manually executed)</generator>
+    <sourceStoryPath>docs/sprint-artifacts/1-2-configuration-loading.md</sourceStoryPath>
+  </metadata>
+
+  <story>
+    <asA>developer</asA>
+    <iWant>configuration loaded from environment variables</iWant>
+    <soThat>I can connect to different Keycloak instances without code changes</soThat>
+    <tasks>
+      <![CDATA[
+- T1 – Implement config module
+  - Create `src/lib/keycloak/config.ts` that defines a Zod `Config` schema, loads env vars via `process.env` / `dotenv` in dev, and exposes `loadConfig()`.
+  - Ensure the module never logs secrets and only throws/propagates validation errors.
+- T2 – Wire dotenv/dev loading
+  - Ensure `.env` is loaded automatically in dev.
+  - Keep `.env.example` and the `Config` schema in sync.
+- T3 – Unit tests for config behavior
+  - Cover happy-path loading, defaulting of realm/client ID, and failures for missing/invalid env vars.
+  - Make tests independent of the real developer `.env`.
+- T4 – Integration sanity check
+  - Call `loadConfig()` from an entrypoint (CLI/MCP) to confirm it integrates cleanly.
+      ]]>
+    </tasks>
+  </story>
+
+  <acceptanceCriteria>
+    <![CDATA[
+1. Configuration loaded from `.env`:
+   - Given a `.env` file with `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_USERNAME`, `KEYCLOAK_PASSWORD`
+     When the config module is imported
+     Then configuration is loaded into a typed object.
+
+2. Zod schema validation:
+   - Configuration is validated with a Zod schema that enforces:
+     - `KEYCLOAK_URL` is a valid URL.
+     - `KEYCLOAK_USERNAME` and `KEYCLOAK_PASSWORD` are present.
+
+3. Clear errors for missing variables:
+   - Missing required variables throw a clear error that names the missing variable.
+
+4. URL format validation:
+   - Invalid URL format for `KEYCLOAK_URL` throws a validation error (not a generic runtime error).
+
+5. Sensible defaults:
+   - `KEYCLOAK_REALM` defaults to `master` if not provided.
+   - `KEYCLOAK_CLIENT_ID` defaults to `admin-cli` if not provided.
+    ]]>
+  </acceptanceCriteria>
+
+  <artifacts>
+    <docs>
+      <!-- PRD: FR3 configuration requirement -->
+      <doc>
+        <path>docs/prd.md</path>
+        <title>keycloak-commander — Product Requirements Document</title>
+        <section>Authentication &amp; Connection (FR1–4)</section>
+        <snippet>
+          <![CDATA[
+The system must authenticate to the Keycloak Admin API using configured credentials, with connection configuration provided via environment variables (FR3), and must validate the connection on startup with clear errors when unreachable.
+          ]]>
+        </snippet>
+      </doc>
+
+      <!-- Epics: Story 1.2 definition -->
+      <doc>
+        <path>docs/epics.md</path>
+        <title>keycloak-commander — Epic Breakdown</title>
+        <section>Story 1.2: Configuration Loading</section>
+        <snippet>
+          <![CDATA[
+As a developer, I want configuration loaded from environment variables so that I can connect to different Keycloak instances without code changes, with Zod validation, clear errors for missing variables, and sensible defaults for realm and client ID.
+          ]]>
+        </snippet>
+      </doc>
+
+      <!-- Architecture: config.ts example and .env contract -->
+      <doc>
+        <path>docs/architecture.md</path>
+        <title>Architecture — keycloak-commander</title>
+        <section>Configuration</section>
+        <snippet>
+          <![CDATA[
+The architecture defines `src/lib/keycloak/config.ts` with a Zod `ConfigSchema` mapping `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_USERNAME`, and `KEYCLOAK_PASSWORD`, and an `.env.example` that documents these variables plus `LOG_LEVEL`.
+          ]]>
+        </snippet>
+      </doc>
+
+      <!-- Tech spec: configuration model and API -->
+      <doc>
+        <path>docs/sprint-artifacts/tech-spec-epic-1.md</path>
+        <title>Epic Technical Specification: Epic 1 – Foundation</title>
+        <section>Configuration Model &amp; Config Loader API</section>
+        <snippet>
+          <![CDATA[
+The Epic 1 tech spec defines a `Config` model with `keycloakUrl`, `keycloakRealm`, `keycloakClientId`, `keycloakUsername`, and `keycloakPassword`, and a `loadConfig(): Config` API that reads environment variables, validates them via Zod, and throws descriptive errors when required values are missing or malformed.
+          ]]>
+        </snippet>
+      </doc>
+    </docs>
+
+    <code>
+      <!-- Env template for configuration -->
+      <artifact>
+        <path>.env.example</path>
+        <kind>config-template</kind>
+        <symbol>.env example</symbol>
+        <lines></lines>
+        <reason>Documents required Keycloak and logging environment variables that `config.ts` must consume and validate.</reason>
+      </artifact>
+
+      <!-- Dependencies manifest -->
+      <artifact>
+        <path>package.json</path>
+        <kind>manifest</kind>
+        <symbol>dependencies</symbol>
+        <lines></lines>
+        <reason>Declares `zod`, `dotenv`, and related libraries used by the configuration loader and surrounding infrastructure.</reason>
+      </artifact>
+    </code>
+
+    <dependencies>
+      <node>
+        <package name="@keycloak/keycloak-admin-client" version="^25.0.0" />
+        <package name="@modelcontextprotocol/sdk" version="^1.0.0" />
+        <package name="citty" version="^0.1.6" />
+        <package name="zod" version="^3.24.0" />
+        <package name="pino" version="^9.5.0" />
+        <package name="dotenv" version="^16.4.7" />
+        <package name="vitest" version="^4.0.5" />
+      </node>
+    </dependencies>
+  </artifacts>
+
+  <constraints>
+    <![CDATA[
+- Configuration must be centralized in `src/lib/keycloak/config.ts`; other modules should not read raw `process.env` values directly.
+- The `Config` schema must not log or leak secrets; validation errors should reference variable names, not values.
+- `KEYCLOAK_URL` should generally be HTTPS in non-development environments, in line with the security architecture.
+- The configuration API must remain interface-agnostic so MCP, CLI, and future Web UI can all reuse it.
+    ]]>
+  </constraints>
+
+  <interfaces>
+    <![CDATA[
+- Config Loader API:
+  - `loadConfig(): Config`
+  - Consumer-facing shape:
+    - `keycloakUrl: string`
+    - `keycloakRealm: string`
+    - `keycloakClientId: string`
+    - `keycloakUsername: string`
+    - `keycloakPassword: string`
+    ]]>
+  </interfaces>
+
+  <tests>
+    <standards>
+      <![CDATA[
+Use Vitest for unit tests in a Node environment, focusing on deterministic behavior of `loadConfig()` (no network, no Keycloak calls). Tests should manipulate `process.env` in isolation per test case and assert Zod validation results and defaults.
+      ]]>
+    </standards>
+    <locations>
+      <![CDATA[
+- `src/**/*.spec.ts`
+- `src/**/*.test.ts`
+      ]]>
+    </locations>
+    <ideas>
+      <![CDATA[
+- AC1: With all required env vars set, `loadConfig()` returns a fully-populated `Config` object.
+- AC2: If `KEYCLOAK_URL` is missing or not a valid URL, `loadConfig()` throws a Zod error mentioning the `keycloakUrl` field.
+- AC3: If `KEYCLOAK_USERNAME` or `KEYCLOAK_PASSWORD` is missing, `loadConfig()` throws a clear validation error naming the missing field(s).
+- AC5: When `KEYCLOAK_REALM` and `KEYCLOAK_CLIENT_ID` are omitted, `loadConfig()` defaults them to `master` and `admin-cli` respectively.
+      ]]>
+    </ideas>
+  </tests>
+</story-context>
+
+
