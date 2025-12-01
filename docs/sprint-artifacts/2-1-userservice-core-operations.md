@@ -1,6 +1,6 @@
 # Story 2.1: UserService Core Operations
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -35,21 +35,21 @@ so that **MCP and CLI can share the same logic**.
 
 ## Tasks / Subtasks
 
-- [ ] **T1 – Implement `UserService` core operations**
-  - [ ] Define `User`, `CreateUserInput`, `UpdateUserInput`, and any list/pagination types in `src/lib/keycloak/types.ts` consistent with `docs/architecture.md`.
-  - [ ] Implement `UserService` in `src/lib/keycloak/services/users.ts` with the method surface defined in the acceptance criteria, delegating to `client.users.*`.
-  - [ ] Ensure `UserService` obtains its `KcAdminClient` instance via the shared `getKeycloakClient()` helper and never instantiates the client directly.
-  - [ ] Wrap connectivity/auth failures and logical errors in `IdentiKeyError` with appropriate `ErrorCodes` (`USER_NOT_FOUND`, `INVALID_INPUT`, `CONNECTION_FAILED`, `UNAUTHORIZED`, etc.).
+- [x] **T1 – Implement `UserService` core operations**
+  - [x] Define `User`, `CreateUserInput`, `UpdateUserInput`, and any list/pagination types in `src/lib/keycloak/types.ts` consistent with `docs/architecture.md`.
+  - [x] Implement `UserService` in `src/lib/keycloak/services/users.ts` with the method surface defined in the acceptance criteria, delegating to `client.users.*`.
+  - [x] Ensure `UserService` obtains its `KcAdminClient` instance via the shared `getKeycloakClient()` helper and never instantiates the client directly.
+  - [x] Wrap connectivity/auth failures and logical errors in `IdentiKeyError` with appropriate `ErrorCodes` (`USER_NOT_FOUND`, `INVALID_INPUT`, `CONNECTION_FAILED`, `UNAUTHORIZED`, etc.).
 
-- [ ] **T2 – Implement user mappers and exports**
-  - [ ] Add `mapKeycloakUser` (and any helpers) under `src/lib/keycloak/mappers/users.ts` to map Keycloak `UserRepresentation` into the IdentiKey `User` type, including `guilds` from group memberships.
-  - [ ] Expose `UserService` (and its factory, if any) from `src/lib/keycloak/services/index.ts` so MCP and CLI can share it.
-  - [ ] Ensure naming and file layout match the service-first patterns in `docs/architecture.md` and `docs/epics.md` (services per domain, no Keycloak types leaking through).
+- [x] **T2 – Implement user mappers and exports**
+  - [x] Add `mapKeycloakUser` (and any helpers) under `src/lib/keycloak/mappers/users.ts` to map Keycloak `UserRepresentation` into the IdentiKey `User` type, including `guilds` from group memberships.
+  - [x] Expose `UserService` (and its factory, if any) from `src/lib/keycloak/services/index.ts` so MCP and CLI can share it.
+  - [x] Ensure naming and file layout match the service-first patterns in `docs/architecture.md` and `docs/epics.md` (services per domain, no Keycloak types leaking through).
 
-- [ ] **T3 – Tests and diagnostics**
-  - [ ] Add Vitest coverage for `UserService.list`, `get`, `create`, `update`, `delete`, `resetPassword`, `getCredentials`, and `deleteCredential` using mocks of `@keycloak/keycloak-admin-client`.
-  - [ ] Verify error paths produce `IdentiKeyError` with stable codes and scrubbed messages, not raw Keycloak errors.
-  - [ ] Add at least one higher-level test that exercises `UserService` via the same config/client wiring used by CLI/MCP, to catch regressions in how the service is constructed.
+- [x] **T3 – Tests and diagnostics**
+  - [x] Add Vitest coverage for `UserService.list`, `get`, `create`, `update`, `delete`, `resetPassword`, `getCredentials`, and `deleteCredential` using mocks of `@keycloak/keycloak-admin-client`.
+  - [x] Verify error paths produce `IdentiKeyError` with stable codes and scrubbed messages, not raw Keycloak errors.
+  - [x] Add at least one higher-level test that exercises `UserService` via the same config/client wiring used by CLI/MCP, to catch regressions in how the service is constructed.
 
 ## Dev Notes
 
@@ -114,11 +114,22 @@ keycloak-commander – SM create-story workflow (YOLO, non-interactive)
 - Drafted Story 2.1 to define `UserService` core operations and their mapping to FR5–FR13, grounded in `docs/epics.md` and `docs/prd.md`.
 - Identified dependencies on Epic 1 foundation (`config.ts`, `client.ts`, `errors.ts`, `logger.ts`, `validateConnection()`) and made them explicit in Dev Notes and tasks.
 - Outlined implementation tasks, mappers, and test coverage needed to deliver a reusable UserService suitable for both MCP and CLI layers.
+- ✅ Implemented `types.ts` with `User`, `CreateUserInput`, `UpdateUserInput`, `ListOptions`, and `Credential` domain types.
+- ✅ Implemented `mappers/users.ts` with `mapKeycloakUser` and `mapKeycloakCredential` functions to transform Keycloak representations.
+- ✅ Implemented `services/users.ts` with full `UserService` class: `list`, `search`, `get`, `create`, `update`, `delete`, `resetPassword`, `getCredentials`, `deleteCredential`.
+- ✅ Implemented `services/index.ts` with `getUserService()` factory that uses the shared Keycloak client singleton.
+- ✅ Added 26 comprehensive unit tests covering all methods, error classification (401/403→UNAUTHORIZED, 404→USER_NOT_FOUND, network→CONNECTION_FAILED), and edge cases.
 
 ### File List
 
 - docs/sprint-artifacts/2-1-userservice-core-operations.md
+- src/lib/keycloak/types.ts (new)
+- src/lib/keycloak/mappers/users.ts (new)
+- src/lib/keycloak/services/users.ts (new)
+- src/lib/keycloak/services/index.ts (new)
+- src/lib/keycloak/services/users.spec.ts (new)
 
 ## Change Log
 
 - 2025-12-01 – Initial draft created via SM `*create-story` workflow.
+- 2025-12-01 – Implemented all tasks (T1, T2, T3): types, mappers, UserService, exports, and 26 unit tests. All 45 tests pass.

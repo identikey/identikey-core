@@ -4,6 +4,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { loadConfig } from '../lib/keycloak/config';
 import { validateConnection } from '../lib/keycloak/client';
+import { getUserService } from '../lib/keycloak/services';
+import { registerAllTools } from './tools';
 
 async function main() {
 	// Load environment variables for local development
@@ -34,12 +36,16 @@ async function main() {
 		process.exit(1);
 	}
 
+	// Obtain authenticated services
+	const userService = await getUserService();
+
 	const server = new McpServer({
 		name: 'keycloak-commander',
 		version: '0.1.0'
 	});
 
-	// TODO (Epic 2+): register MCP tools from ./tools/*
+	// Register all MCP tools
+	registerAllTools(server, { userService });
 
 	const transport = new StdioServerTransport();
 	await server.connect(transport);

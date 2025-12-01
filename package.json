@@ -3,6 +3,9 @@
 	"private": true,
 	"version": "0.0.1",
 	"type": "module",
+	"bin": {
+		"kc": "./src/cli/index.ts"
+	},
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",

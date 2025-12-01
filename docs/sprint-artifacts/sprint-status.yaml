@@ -49,13 +49,14 @@ development_status:
   epic-1-retrospective: done
 
   # Epic 2: User Administration (6 stories) - FR5-13
-  epic-2: backlog
-  2-1-userservice-core-operations: ready-for-dev
-  2-2-user-mcp-tools: backlog
-  2-3-user-cli-commands: backlog
-  2-4-user-search-integration: backlog
-  2-5-pagination-support: backlog
-  2-6-credential-management: backlog
+  epic-2: contexted
+  2-1-userservice-core-operations: done
+  2-2-user-mcp-tools: done
+  2-3-user-cli-commands: done
+  # 2-4, 2-5, 2-6 consolidated — all functionality implemented in 2-1/2-2/2-3
+  2-4-user-search-integration: done
+  2-5-pagination-support: done
+  2-6-credential-management: done
   epic-2-retrospective: optional
 
   # Epic 3: App Management (4 stories) - FR14-19
@@ -77,8 +78,8 @@ development_status:
   epic-4-retrospective: optional
 
   # Epic 5: Login Flow Administration (5 stories) - FR34-41 🔥 PRIMARY USE CASE
-  epic-5: backlog
-  5-1-authflowservice-core-operations: backlog
+  epic-5: contexted
+  5-1-authflowservice-core-operations: ready-for-dev
   5-2-login-flow-mcp-tools: backlog
   5-3-login-flow-cli-commands: backlog
   5-4-execution-modification: backlog

@@ -1,0 +1,285 @@
+<story-context id=".bmad/bmm/workflows/4-implementation/story-context/template" v="1.0">
+  <metadata>
+    <epicId>2</epicId>
+    <storyId>2</storyId>
+    <title>User MCP Tools</title>
+    <status>ready-for-dev</status>
+    <generatedAt>2025-12-01</generatedAt>
+    <generator>BMAD Story Context Workflow (YOLO)</generator>
+    <sourceStoryPath>docs/sprint-artifacts/2-2-user-mcp-tools.md</sourceStoryPath>
+  </metadata>
+
+  <story>
+    <asA>AI agent</asA>
+    <iWant>MCP tools for all user operations</iWant>
+    <soThat>I can help admins manage users conversationally</soThat>
+    <tasks><![CDATA[
+- [ ] **T1 – Implement MCP user tools**
+  - [ ] Create `src/mcp/tools/users.ts` with Zod schemas for input validation.
+  - [ ] Implement `list_users` tool: call `UserService.list/search`, return users array.
+  - [ ] Implement `get_user` tool: call `UserService.get`, return single user.
+  - [ ] Implement `create_user` tool: call `UserService.create`, return created user.
+  - [ ] Implement `update_user` tool: call `UserService.update`, return updated user.
+  - [ ] Implement `delete_user` tool: call `UserService.delete`, confirm deletion.
+  - [ ] Implement `reset_user_password` tool: call `UserService.resetPassword`, confirm reset.
+  - [ ] Implement `get_user_credentials` tool: call `UserService.getCredentials`, return credentials array.
+  - [ ] Implement `delete_user_credential` tool: call `UserService.deleteCredential`, confirm deletion.
+
+- [ ] **T2 – Register tools and integrate with MCP server**
+  - [ ] Create `src/mcp/tools/index.ts` to export a `registerUserTools(server, userService)` function.
+  - [ ] Update `src/mcp/index.ts` to obtain `UserService` via `getUserService()` and register tools on startup.
+  - [ ] Ensure MCP server validates connection before registering tools.
+
+- [ ] **T3 – Tests**
+  - [ ] Add Vitest tests for MCP user tools verifying input validation and response structure.
+  - [ ] Verify error responses include IdentiKeyError codes and actionable messages.
+  - [ ] Test tool registration succeeds with mocked UserService.
+    ]]></tasks>
+  </story>
+
+  <acceptanceCriteria><![CDATA[
+1. **MCP tool surface**
+   - Given MCP server is running  
+     When tools are listed  
+     Then the following user tools are available:
+
+     | Tool                     | Maps to                      | Input Schema                                                 |
+     | ------------------------ | ---------------------------- | ------------------------------------------------------------ |
+     | `list_users`             | UserService.list             | `{ search?: string, max?: number, offset?: number }`         |
+     | `get_user`               | UserService.get              | `{ id: string }`                                             |
+     | `create_user`            | UserService.create           | `{ username, email?, firstName?, lastName?, enabled? }`      |
+     | `update_user`            | UserService.update           | `{ id, username?, email?, firstName?, lastName?, enabled? }` |
+     | `delete_user`            | UserService.delete           | `{ id }`                                                     |
+     | `reset_user_password`    | UserService.resetPassword    | `{ id, password, temporary? }`                               |
+     | `get_user_credentials`   | UserService.getCredentials   | `{ id }`                                                     |
+     | `delete_user_credential` | UserService.deleteCredential | `{ id, credentialId }`                                       |
+
+2. **Tool metadata**
+   - Each tool has a descriptive `title` and `description` for AI discoverability.
+
+3. **Structured responses (FR50)**
+   - Responses include `structuredContent` with typed data for AI reasoning.
+
+4. **Error handling (FR51)**
+   - Error responses include actionable messages with context (user ID, operation attempted, error code).
+  ]]></acceptanceCriteria>
+
+  <artifacts>
+    <docs>
+      <!-- PRD: User Management FR5–FR13 and MCP Interface FR49–FR51 -->
+      <doc>
+        <path>docs/prd.md</path>
+        <title>keycloak-commander — Product Requirements Document</title>
+        <section>User Management and MCP Interface</section>
+        <snippet>
+          <![CDATA[
+User Management:
+- FR5–FR13: CRUD, password reset, and credential management for users.
+
+MCP Interface:
+- FR49: All FR5–FR48 operations are exposed as MCP tools callable by AI agents.
+- FR50: MCP responses include structured data suitable for AI reasoning.
+- FR51: MCP error responses include actionable information for debugging.
+          ]]>
+        </snippet>
+      </doc>
+
+      <!-- Epics: Story 2.2 definition -->
+      <doc>
+        <path>docs/epics.md</path>
+        <title>keycloak-commander — Epic Breakdown</title>
+        <section>Story 2.2: User MCP Tools</section>
+        <snippet>
+          <![CDATA[
+As an **AI agent**,
+I want **MCP tools for all user operations**,
+So that **I can help admins manage users conversationally**.
+
+Tools:
+- list_users, get_user, create_user, update_user, delete_user,
+  reset_user_password, get_user_credentials, delete_user_credential.
+
+All tools map directly to UserService methods and expose structured responses for AI reasoning.
+          ]]>
+        </snippet>
+      </doc>
+
+      <!-- Architecture: MCP Tool Pattern -->
+      <doc>
+        <path>docs/architecture.md</path>
+        <title>Architecture — keycloak-commander</title>
+        <section>MCP Tool Pattern</section>
+        <snippet>
+          <![CDATA[
+MCP Tool Pattern:
+- Tools live in src/mcp/tools/, registered via functions like registerUserTools(server, userService).
+- Input and output schemas are defined with Zod for validation and documentation.
+- Tools delegate to service layer (e.g., UserService) and return both text content and structuredContent.
+
+Example:
+export function registerUserTools(server: McpServer, userService: UserService) {
+  server.registerTool(
+    'list_users',
+    {
+      title: 'List Users',
+      description: 'List all users with optional search filter',
+      inputSchema: { ... },
+      outputSchema: { users: z.array(UserSchema) }
+    },
+    async ({ search, max }) => {
+      const users = await userService.list({ search, max });
+      return {
+        content: [{ type: 'text', text: JSON.stringify(users, null, 2) }],
+        structuredContent: { users }
+      };
+    }
+  );
+}
+          ]]>
+        </snippet>
+      </doc>
+
+      <!-- Story 2.1: UserService Core Operations (dependency) -->
+      <doc>
+        <path>docs/sprint-artifacts/2-1-userservice-core-operations.md</path>
+        <title>Story 2.1: UserService Core Operations</title>
+        <section>Dev Notes and Learnings</section>
+        <snippet>
+          <![CDATA[
+UserService is implemented in src/lib/keycloak/services/users.ts with methods covering FR5–FR13,
+and getUserService() provides a shared factory that MCP and CLI layers consume.
+
+All user-related errors are surfaced as IdentiKeyError with stable ErrorCodes, and tests demonstrate
+mocking patterns for the Keycloak admin client.
+          ]]>
+        </snippet>
+      </doc>
+    </docs>
+
+    <code>
+      <!-- UserService and factory -->
+      <artifact>
+        <path>src/lib/keycloak/services/users.ts</path>
+        <kind>module</kind>
+        <symbol>UserService</symbol>
+        <lines></lines>
+        <reason>Backing implementation for all user operations exposed via MCP tools.</reason>
+      </artifact>
+
+      <artifact>
+        <path>src/lib/keycloak/services/index.ts</path>
+        <kind>module</kind>
+        <symbol>getUserService</symbol>
+        <lines></lines>
+        <reason>Factory that MCP server uses to construct UserService with an authenticated Keycloak client.</reason>
+      </artifact>
+
+      <!-- Domain types -->
+      <artifact>
+        <path>src/lib/keycloak/types.ts</path>
+        <kind>module</kind>
+        <symbol>User and related input types</symbol>
+        <lines></lines>
+        <reason>Defines the domain types used in MCP schemas for user-related tools.</reason>
+      </artifact>
+
+      <!-- MCP user tools -->
+      <artifact>
+        <path>src/mcp/tools/users.ts</path>
+        <kind>module</kind>
+        <symbol>registerUserTools and individual user tools</symbol>
+        <lines></lines>
+        <reason>Defines the MCP tools that wrap UserService methods for listing, retrieving, creating, updating, and managing user credentials.</reason>
+      </artifact>
+
+      <!-- MCP tools index and server wiring -->
+      <artifact>
+        <path>src/mcp/tools/index.ts</path>
+        <kind>module</kind>
+        <symbol>registerTools</symbol>
+        <lines></lines>
+        <reason>Exports registration helpers (including user tools) that MCP server startup calls.</reason>
+      </artifact>
+
+      <artifact>
+        <path>src/mcp/index.ts</path>
+        <kind>module</kind>
+        <symbol>MCP server startup</symbol>
+        <lines></lines>
+        <reason>Initializes the MCP server, obtains UserService, validates connection, and registers user tools.</reason>
+      </artifact>
+
+      <!-- Tests -->
+      <artifact>
+        <path>src/mcp/tools/users.spec.ts</path>
+        <kind>test</kind>
+        <symbol>User MCP tools tests</symbol>
+        <lines></lines>
+        <reason>Vitest coverage ensuring input schemas, structured responses, and error handling for user MCP tools behave as specified.</reason>
+      </artifact>
+    </code>
+
+    <dependencies>
+      <node>
+        <package name="@modelcontextprotocol/sdk" version="^1.0.0" />
+        <package name="zod" version="^3.24.0" />
+        <package name="vitest" version="^4.0.5" />
+      </node>
+    </dependencies>
+  </artifacts>
+
+  <constraints>
+    <![CDATA[
+- MCP tools must remain thin wrappers over UserService and must not contain business logic beyond validation, formatting, and error framing.
+- All user tools must use snake_case names and follow consistent input/output schema conventions to keep the MCP surface predictable for AI agents.
+- Tools must return both human-readable text content and machine-friendly structuredContent, with no raw Keycloak representations leaking through.
+- Error handling must rely on IdentiKeyError and ErrorCodes from the service layer; tools should not invent their own error codes or messages, only format them.
+    ]]>
+  </constraints>
+
+  <interfaces>
+    <![CDATA[
+- MCP user tools:
+  - `list_users(input: { search?: string; max?: number; offset?: number })`
+  - `get_user(input: { id: string })`
+  - `create_user(input: { username: string; email?: string; firstName?: string; lastName?: string; enabled?: boolean })`
+  - `update_user(input: { id: string; username?: string; email?: string; firstName?: string; lastName?: string; enabled?: boolean })`
+  - `delete_user(input: { id: string })`
+  - `reset_user_password(input: { id: string; password: string; temporary?: boolean })`
+  - `get_user_credentials(input: { id: string })`
+  - `delete_user_credential(input: { id: string; credentialId: string })`
+
+Each tool:
+  - Accepts validated input via Zod schema.
+  - Delegates to the corresponding UserService method.
+  - Returns structuredContent shaped around IdentiKey User or credential types.
+    ]]>
+  </interfaces>
+
+  <tests>
+    <standards>
+      <![CDATA[
+Use Vitest to test MCP tools with a mocked UserService, focusing on:
+- Input validation behavior for each tool.
+- Correct mapping of UserService results into structuredContent.
+- Error framing that surfaces IdentiKeyError codes and contextual info appropriate for AI debugging.
+      ]]>
+    </standards>
+    <locations>
+      <![CDATA[
+- `src/**/*.spec.ts`
+- `src/**/*.test.ts`
+      ]]>
+    </locations>
+    <ideas>
+      <![CDATA[
+- Confirm that list_users passes search/max/offset through to UserService.list and returns a structured users array.
+- Simulate USER_NOT_FOUND from UserService.get and assert that get_user returns an error payload with the correct code and user id in context.
+- Validate that create_user and update_user reject invalid inputs at the schema level before hitting UserService.
+- Ensure that credential-related tools (get_user_credentials, delete_user_credential) return and accept the right identifiers and that errors remain actionable.
+      ]]>
+    </ideas>
+  </tests>
+</story-context>
+
+
