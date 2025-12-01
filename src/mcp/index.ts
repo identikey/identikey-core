@@ -1,4 +1,4 @@
-import { load as loadEnv } from 'dotenv';
+import { config as loadEnv } from 'dotenv';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 

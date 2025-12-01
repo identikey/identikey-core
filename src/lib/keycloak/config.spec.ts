@@ -9,8 +9,7 @@ function resetEnv() {
 	delete process.env.KEYCLOAK_URL;
 	delete process.env.KEYCLOAK_REALM;
 	delete process.env.KEYCLOAK_CLIENT_ID;
-	delete process.env.KEYCLOAK_USERNAME;
-	delete process.env.KEYCLOAK_PASSWORD;
+	delete process.env.KEYCLOAK_CLIENT_SECRET;
 	delete process.env.LOG_LEVEL;
 }
 
@@ -21,25 +20,23 @@ describe('loadConfig', () => {
 
 	it('loads configuration from environment with sensible defaults', () => {
 		process.env.KEYCLOAK_URL = 'https://auth.example.com';
-		process.env.KEYCLOAK_USERNAME = 'admin';
-		process.env.KEYCLOAK_PASSWORD = 'secret';
+		process.env.KEYCLOAK_CLIENT_ID = 'keycloak-commander';
+		process.env.KEYCLOAK_CLIENT_SECRET = 'super-secret';
 
 		const cfg: Config = loadConfig();
 
 		expect(cfg.keycloakUrl).toBe('https://auth.example.com');
-		expect(cfg.keycloakRealm).toBe('identikey');
-		expect(cfg.keycloakClientId).toBe('admin-cli');
-		expect(cfg.keycloakUsername).toBe('admin');
-		expect(cfg.keycloakPassword).toBe('secret');
+		expect(cfg.keycloakRealm).toBe('master');
+		expect(cfg.keycloakClientId).toBe('keycloak-commander');
+		expect(cfg.keycloakClientSecret).toBe('super-secret');
 		expect(cfg.logLevel).toBe('info');
 	});
 
-	it('respects explicit realm and client id from env', () => {
+	it('respects explicit realm from env', () => {
 		process.env.KEYCLOAK_URL = 'https://auth.example.com';
 		process.env.KEYCLOAK_REALM = 'custom';
 		process.env.KEYCLOAK_CLIENT_ID = 'kc-admin';
-		process.env.KEYCLOAK_USERNAME = 'admin';
-		process.env.KEYCLOAK_PASSWORD = 'secret';
+		process.env.KEYCLOAK_CLIENT_SECRET = 'secret';
 		process.env.LOG_LEVEL = 'debug';
 
 		const cfg = loadConfig();
@@ -50,7 +47,7 @@ describe('loadConfig', () => {
 	});
 
 	it('throws a validation error when required variables are missing', () => {
-		// Only URL is provided; username/password missing
+		// Only URL is provided; client id/secret missing
 		process.env.KEYCLOAK_URL = 'https://auth.example.com';
 
 		expect(() => loadConfig()).toThrowError();
@@ -58,8 +55,8 @@ describe('loadConfig', () => {
 
 	it('throws when KEYCLOAK_URL is not a valid URL', () => {
 		process.env.KEYCLOAK_URL = 'not-a-url';
-		process.env.KEYCLOAK_USERNAME = 'admin';
-		process.env.KEYCLOAK_PASSWORD = 'secret';
+		process.env.KEYCLOAK_CLIENT_ID = 'keycloak-commander';
+		process.env.KEYCLOAK_CLIENT_SECRET = 'secret';
 
 		expect(() => loadConfig()).toThrowError();
 	});
@@ -67,12 +64,12 @@ describe('loadConfig', () => {
 	it('supports overriding values via partial env parameter for tests', () => {
 		const cfg = loadConfig({
 			keycloakUrl: 'https://override.example.com',
-			keycloakUsername: 'tester',
-			keycloakPassword: 'pwd'
+			keycloakClientId: 'test-client',
+			keycloakClientSecret: 'test-secret'
 		});
 
 		expect(cfg.keycloakUrl).toBe('https://override.example.com');
-		expect(cfg.keycloakUsername).toBe('tester');
-		expect(cfg.keycloakPassword).toBe('pwd');
+		expect(cfg.keycloakClientId).toBe('test-client');
+		expect(cfg.keycloakClientSecret).toBe('test-secret');
 	});
 });

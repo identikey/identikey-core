@@ -1,6 +1,6 @@
 # Story 1.5: Connection Validation
 
-Status: review
+Status: Done
 
 ## Story
 

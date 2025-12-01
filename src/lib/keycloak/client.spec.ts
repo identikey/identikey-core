@@ -64,9 +64,8 @@ describe('getKeycloakClient', () => {
 		mockedLoadConfig.mockReturnValue({
 			keycloakUrl: 'https://auth.example.com',
 			keycloakRealm: 'master',
-			keycloakClientId: 'admin-cli',
-			keycloakUsername: 'admin',
-			keycloakPassword: 'secret',
+			keycloakClientId: 'keycloak-commander',
+			keycloakClientSecret: 'super-secret',
 			logLevel: 'info'
 		});
 
@@ -82,10 +81,9 @@ describe('getKeycloakClient', () => {
 
 		expect(authMock).toHaveBeenCalledTimes(1);
 		expect(authMock).toHaveBeenCalledWith({
-			username: 'admin',
-			password: 'secret',
-			grantType: 'password',
-			clientId: 'admin-cli'
+			grantType: 'client_credentials',
+			clientId: 'keycloak-commander',
+			clientSecret: 'super-secret'
 		});
 
 		// Basic sanity: the returned client is the instance created by the constructor mock.
@@ -96,9 +94,8 @@ describe('getKeycloakClient', () => {
 		mockedLoadConfig.mockReturnValue({
 			keycloakUrl: 'https://auth.example.com',
 			keycloakRealm: 'master',
-			keycloakClientId: 'admin-cli',
-			keycloakUsername: 'admin',
-			keycloakPassword: 'secret',
+			keycloakClientId: 'keycloak-commander',
+			keycloakClientSecret: 'super-secret',
 			logLevel: 'info'
 		});
 
@@ -116,9 +113,8 @@ describe('getKeycloakClient', () => {
 		mockedLoadConfig.mockReturnValue({
 			keycloakUrl: 'https://auth.example.com',
 			keycloakRealm: 'master',
-			keycloakClientId: 'admin-cli',
-			keycloakUsername: 'admin',
-			keycloakPassword: 'secret',
+			keycloakClientId: 'keycloak-commander',
+			keycloakClientSecret: 'super-secret',
 			logLevel: 'info'
 		});
 
@@ -150,9 +146,8 @@ describe('validateConnection', () => {
 		mockedLoadConfig.mockReturnValue({
 			keycloakUrl: 'https://auth.example.com',
 			keycloakRealm: 'master',
-			keycloakClientId: 'admin-cli',
-			keycloakUsername: 'admin',
-			keycloakPassword: 'secret',
+			keycloakClientId: 'keycloak-commander',
+			keycloakClientSecret: 'super-secret',
 			logLevel: 'info'
 		});
 
@@ -174,9 +169,8 @@ describe('validateConnection', () => {
 		mockedLoadConfig.mockReturnValue({
 			keycloakUrl: 'https://auth.example.com',
 			keycloakRealm: 'master',
-			keycloakClientId: 'admin-cli',
-			keycloakUsername: 'admin',
-			keycloakPassword: 'secret',
+			keycloakClientId: 'keycloak-commander',
+			keycloakClientSecret: 'super-secret',
 			logLevel: 'info'
 		});
 
@@ -199,9 +193,8 @@ describe('validateConnection', () => {
 		mockedLoadConfig.mockReturnValue({
 			keycloakUrl: 'https://bad-host.example.com',
 			keycloakRealm: 'master',
-			keycloakClientId: 'admin-cli',
-			keycloakUsername: 'admin',
-			keycloakPassword: 'secret',
+			keycloakClientId: 'keycloak-commander',
+			keycloakClientSecret: 'super-secret',
 			logLevel: 'info'
 		});
 
@@ -234,9 +227,8 @@ describe('validateConnection', () => {
 		mockedLoadConfig.mockReturnValue({
 			keycloakUrl: 'https://auth.example.com',
 			keycloakRealm: 'master',
-			keycloakClientId: 'admin-cli',
-			keycloakUsername: 'admin',
-			keycloakPassword: 'secret',
+			keycloakClientId: 'keycloak-commander',
+			keycloakClientSecret: 'super-secret',
 			logLevel: 'info'
 		});
 
@@ -265,18 +257,16 @@ describe('validateConnection', () => {
 			})
 		);
 		expect(message).toContain('Authentication failed when validating Keycloak connection');
-		expect(message).toContain('KEYCLOAK_USERNAME');
-		expect(message).toContain('KEYCLOAK_PASSWORD');
 		expect(message).toContain('KEYCLOAK_CLIENT_ID');
+		expect(message).toContain('KEYCLOAK_CLIENT_SECRET');
 	});
 
 	it('reuses the existing client and avoids extra auth when validateConnection is called multiple times', async () => {
 		mockedLoadConfig.mockReturnValue({
 			keycloakUrl: 'https://auth.example.com',
 			keycloakRealm: 'master',
-			keycloakClientId: 'admin-cli',
-			keycloakUsername: 'admin',
-			keycloakPassword: 'secret',
+			keycloakClientId: 'keycloak-commander',
+			keycloakClientSecret: 'super-secret',
 			logLevel: 'info'
 		});
 

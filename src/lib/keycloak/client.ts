@@ -43,10 +43,9 @@ async function createClient(config?: Config): Promise<KcAdminClient> {
 
 	try {
 		await kc.auth({
-			username: cfg.keycloakUsername,
-			password: cfg.keycloakPassword,
-			grantType: 'password',
-			clientId: cfg.keycloakClientId
+			grantType: 'client_credentials',
+			clientId: cfg.keycloakClientId,
+			clientSecret: cfg.keycloakClientSecret
 		});
 	} catch (unknownError) {
 		const error =
@@ -121,7 +120,7 @@ export async function validateConnection(): Promise<void> {
 
 		const hint =
 			code === ErrorCodes.UNAUTHORIZED
-				? 'Authentication failed when validating Keycloak connection; check KEYCLOAK_USERNAME, KEYCLOAK_PASSWORD, and KEYCLOAK_CLIENT_ID.'
+				? 'Authentication failed when validating Keycloak connection; check KEYCLOAK_CLIENT_ID and KEYCLOAK_CLIENT_SECRET.'
 				: 'Failed to reach Keycloak; check KEYCLOAK_URL, network, DNS, and TLS configuration.';
 
 		logger.error(
