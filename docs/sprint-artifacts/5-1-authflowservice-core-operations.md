@@ -1,6 +1,6 @@
 # Story 5.1: AuthFlowService Core Operations
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -39,24 +39,24 @@ So that **MCP and CLI can share the same logic for debugging login flows**.
 
 ## Tasks / Subtasks
 
-- [ ] **T1 – Define types and mappers**
-  - [ ] Add `LoginFlow`, `FlowExecution`, `FlowBindingType` to `src/lib/keycloak/types.ts`
-  - [ ] Create `src/lib/keycloak/mappers/auth-flows.ts` with `mapKeycloakFlow`, `mapKeycloakExecution`
+- [x] **T1 – Define types and mappers**
+  - [x] Add `LoginFlow`, `FlowExecution`, `FlowBindingType` to `src/lib/keycloak/types.ts`
+  - [x] Create `src/lib/keycloak/mappers/auth-flows.ts` with `mapKeycloakFlow`, `mapKeycloakExecution`
 
-- [ ] **T2 – Implement AuthFlowService**
-  - [ ] Create `src/lib/keycloak/services/auth-flows.ts`
-  - [ ] Implement `list()` — list all flows
-  - [ ] Implement `get(flowAlias)` — get single flow
-  - [ ] Implement `listExecutions(flowAlias)` — list flow steps with hierarchy
-  - [ ] Implement `copy(sourceAlias, newAlias)` — copy flow
+- [x] **T2 – Implement AuthFlowService**
+  - [x] Create `src/lib/keycloak/services/auth-flows.ts`
+  - [x] Implement `list()` — list all flows
+  - [x] Implement `get(flowAlias)` — get single flow
+  - [x] Implement `listExecutions(flowAlias)` — list flow steps with hierarchy
+  - [x] Implement `copy(sourceAlias, newAlias)` — copy flow
 
-- [ ] **T3 – Export service**
-  - [ ] Add `getAuthFlowService()` factory to `src/lib/keycloak/services/index.ts`
+- [x] **T3 – Export service**
+  - [x] Add `getAuthFlowService()` factory to `src/lib/keycloak/services/index.ts`
 
-- [ ] **T4 – Tests**
-  - [ ] Add Vitest tests for AuthFlowService methods
-  - [ ] Mock `@keycloak/keycloak-admin-client` authenticationManagement
-  - [ ] Test error handling for not-found cases
+- [x] **T4 – Tests**
+  - [x] Add Vitest tests for AuthFlowService methods (19 tests)
+  - [x] Mock `@keycloak/keycloak-admin-client` authenticationManagement
+  - [x] Test error handling for not-found cases
 
 ## Dev Notes
 
@@ -109,10 +109,19 @@ keycloak-commander – SM create-story workflow
 - Scoped to list/get/executions/copy (read operations + copy)
 - Execution modification deferred to Story 5.4
 - Default binding deferred to Story 5.5
+- 2025-12-01: Implemented AuthFlowService with 4 methods (list, get, listExecutions, copy)
+- Added new error codes: EXECUTION_NOT_FOUND, FLOW_IS_BUILTIN, INVALID_PROVIDER
+- All 19 unit tests passing
 
 ### File List
 
 - docs/sprint-artifacts/5-1-authflowservice-core-operations.md
+- src/lib/keycloak/types.ts (LoginFlow, FlowExecution, FlowBindingType)
+- src/lib/keycloak/errors.ts (new error codes)
+- src/lib/keycloak/mappers/auth-flows.ts (mapKeycloakFlow, mapKeycloakExecution)
+- src/lib/keycloak/services/auth-flows.ts (AuthFlowService)
+- src/lib/keycloak/services/auth-flows.spec.ts (19 tests)
+- src/lib/keycloak/services/index.ts (getAuthFlowService export)
 
 ## Change Log
 

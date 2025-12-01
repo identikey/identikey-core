@@ -79,7 +79,7 @@ development_status:
 
   # Epic 5: Login Flow Administration (5 stories) - FR34-41 🔥 PRIMARY USE CASE
   epic-5: contexted
-  5-1-authflowservice-core-operations: ready-for-dev
+  5-1-authflowservice-core-operations: done
   5-2-login-flow-mcp-tools: backlog
   5-3-login-flow-cli-commands: backlog
   5-4-execution-modification: backlog

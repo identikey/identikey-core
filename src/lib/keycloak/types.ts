@@ -54,3 +54,40 @@ export interface Credential {
 	userLabel?: string;
 	createdDate?: number;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Login Flow Types (Epic 5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Authentication flow (e.g., browser, direct-grant) */
+export interface LoginFlow {
+	id: string;
+	alias: string;
+	description?: string;
+	providerId: string;
+	topLevel: boolean;
+	builtIn: boolean;
+}
+
+/** A single execution step within a login flow */
+export interface FlowExecution {
+	id: string;
+	displayName: string;
+	requirement: 'REQUIRED' | 'ALTERNATIVE' | 'CONDITIONAL' | 'DISABLED';
+	configurable: boolean;
+	providerId?: string;
+	/** Nesting depth (0 = top-level) */
+	level: number;
+	/** Position within this level */
+	index: number;
+	/** True if this execution is itself a subflow */
+	authenticationFlow: boolean;
+}
+
+/** Binding types for default flow assignment */
+export type FlowBindingType =
+	| 'browser'
+	| 'direct-grant'
+	| 'registration'
+	| 'reset-credentials'
+	| 'docker-auth';
