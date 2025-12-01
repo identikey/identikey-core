@@ -4,7 +4,7 @@
  * Formatters for table and JSON output in CLI commands.
  */
 
-import type { User, Credential } from '../../lib/keycloak/types';
+import type { User, Credential, LoginFlow, FlowExecution } from '../../lib/keycloak/types';
 import { IdentiKeyError } from '../../lib/keycloak/errors';
 
 /**
@@ -153,4 +153,112 @@ export function printError(error: unknown): void {
 export function printSuccess(message: string): void {
 	// eslint-disable-next-line no-console
 	console.log(`✓ ${message}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth Flow Output
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Print a table of login flows
+ */
+export function printFlowsTable(flows: LoginFlow[]): void {
+	if (flows.length === 0) {
+		// eslint-disable-next-line no-console
+		console.log('No authentication flows found.');
+		return;
+	}
+
+	const aliasWidth = Math.max(5, ...flows.map((f) => f.alias.length));
+	const providerWidth = Math.max(8, ...flows.map((f) => f.providerId.length));
+
+	const header = [
+		'ALIAS'.padEnd(aliasWidth),
+		'PROVIDER'.padEnd(providerWidth),
+		'TOP'.padEnd(3),
+		'BUILTIN'
+	].join('  ');
+
+	const separator = '-'.repeat(header.length);
+
+	// eslint-disable-next-line no-console
+	console.log(header);
+	// eslint-disable-next-line no-console
+	console.log(separator);
+
+	for (const flow of flows) {
+		const row = [
+			flow.alias.padEnd(aliasWidth),
+			flow.providerId.padEnd(providerWidth),
+			(flow.topLevel ? 'yes' : 'no').padEnd(3),
+			flow.builtIn ? 'yes' : 'no'
+		].join('  ');
+		// eslint-disable-next-line no-console
+		console.log(row);
+	}
+
+	// eslint-disable-next-line no-console
+	console.log(`\n${flows.length} flow(s) found.`);
+}
+
+/**
+ * Print full flow details
+ */
+export function printFlowDetails(flow: LoginFlow): void {
+	// eslint-disable-next-line no-console
+	console.log(`Flow: ${flow.alias}`);
+	// eslint-disable-next-line no-console
+	console.log(`  ID:          ${flow.id}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Description: ${flow.description ?? '(none)'}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Provider:    ${flow.providerId}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Top-level:   ${flow.topLevel ? 'yes' : 'no'}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Built-in:    ${flow.builtIn ? 'yes' : 'no'}`);
+}
+
+/**
+ * Print executions table with hierarchy indentation
+ */
+export function printExecutionsTable(flowAlias: string, executions: FlowExecution[]): void {
+	if (executions.length === 0) {
+		// eslint-disable-next-line no-console
+		console.log(`No executions found for flow "${flowAlias}".`);
+		return;
+	}
+
+	// eslint-disable-next-line no-console
+	console.log(`EXECUTIONS for "${flowAlias}":\n`);
+
+	const nameWidth = Math.max(4, ...executions.map((e) => e.displayName.length + e.level * 2));
+	const reqWidth = Math.max(11, ...executions.map((e) => e.requirement.length));
+
+	const header = ['NAME'.padEnd(nameWidth), 'REQUIREMENT'.padEnd(reqWidth), 'LVL', 'SUBFLOW'].join(
+		'  '
+	);
+
+	const separator = '-'.repeat(header.length);
+
+	// eslint-disable-next-line no-console
+	console.log(header);
+	// eslint-disable-next-line no-console
+	console.log(separator);
+
+	for (const exec of executions) {
+		const indent = '  '.repeat(exec.level);
+		const name = indent + exec.displayName;
+		const row = [
+			name.padEnd(nameWidth),
+			exec.requirement.padEnd(reqWidth),
+			String(exec.level).padStart(3),
+			exec.authenticationFlow ? 'yes' : 'no'
+		].join('  ');
+		// eslint-disable-next-line no-console
+		console.log(row);
+	}
+
+	// eslint-disable-next-line no-console
+	console.log(`\n${executions.length} execution(s).`);
 }

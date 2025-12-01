@@ -255,4 +255,3 @@ describe('Auth Flow MCP Tools', () => {
 		});
 	});
 });
-

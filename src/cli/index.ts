@@ -7,6 +7,7 @@
 
 import { runMain, defineCommand } from 'citty';
 import { usersCommand } from './commands/users';
+import { authFlowsCommand } from './commands/auth-flows';
 
 const main = defineCommand({
 	meta: {
@@ -14,7 +15,8 @@ const main = defineCommand({
 		description: 'IdentiKey Admin CLI'
 	},
 	subCommands: {
-		users: usersCommand
+		users: usersCommand,
+		'auth-flows': authFlowsCommand
 	}
 });
 
