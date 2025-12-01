@@ -4,7 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { loadConfig } from '../lib/keycloak/config';
 import { validateConnection } from '../lib/keycloak/client';
-import { getUserService } from '../lib/keycloak/services';
+import { getUserService, getAuthFlowService } from '../lib/keycloak/services';
 import { registerAllTools } from './tools';
 
 async function main() {
@@ -38,6 +38,7 @@ async function main() {
 
 	// Obtain authenticated services
 	const userService = await getUserService();
+	const authFlowService = await getAuthFlowService();
 
 	const server = new McpServer({
 		name: 'keycloak-commander',
@@ -45,7 +46,7 @@ async function main() {
 	});
 
 	// Register all MCP tools
-	registerAllTools(server, { userService });
+	registerAllTools(server, { userService, authFlowService });
 
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
