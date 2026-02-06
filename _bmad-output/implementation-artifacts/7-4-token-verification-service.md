@@ -1,6 +1,6 @@
 # Story 7.4: Token Verification Service
 
-**Status:** review
+**Status:** done
 **Epic:** 7 - JWT Infrastructure  
 **FR Coverage:** FR126 (token validation for refresh/introspection)  
 **Story Key:** 7-4-token-verification-service
@@ -89,7 +89,7 @@ So that **token refresh and introspection work** and only valid tokens are accep
 - Use 7.3 signing to produce tokens; verify with verifyToken. Test success and each failure mode (expired, wrong iss, tampered, bad format). Assert error code/reason.
 
 ### Story Completion Status
-- **Status:** review
+- **Status:** done
 - **Completion note:** All 4 tasks implemented and tested. 15 unit tests covering success, expired, wrong issuer, wrong audience, tampered signature, different key, malformed, empty string, uninitialized key, round-trip with 7.3 signAccessToken, and error class properties. Full suite: 204 tests pass, 0 regressions.
 
 ---

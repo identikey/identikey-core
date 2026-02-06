@@ -94,7 +94,7 @@ development_status:
   7-1-key-generation-storage: done
   7-2-jwks-endpoint: done
   7-3-token-signing-service: done
-  7-4-token-verification-service: review
+  7-4-token-verification-service: done
   7-5-oidc-discovery-endpoint: ready-for-dev
   epic-7-retrospective: optional
 
