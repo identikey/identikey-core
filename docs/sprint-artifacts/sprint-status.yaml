@@ -27,7 +27,7 @@ tracking_system: file-system
 story_location: docs/sprint-artifacts
 
 # ============================================================================
-# PHASE 1: ADMIN TOOLING (Complete)
+# ADMIN TOOLING ✅ Complete
 # ============================================================================
 
 development_status:
@@ -86,7 +86,7 @@ development_status:
   epic-6-retrospective: optional
 
 # ============================================================================
-# PHASE 2: NATIVE MOBILE AUTH (New - Current Focus)
+# NATIVE MOBILE AUTH 🔥 ACTIVE
 # ============================================================================
 
   # Epic 7: JWT Infrastructure (5 stories) - FR120-130
@@ -98,30 +98,34 @@ development_status:
   7-5-oidc-discovery-endpoint: backlog
   epic-7-retrospective: optional
 
-  # Epic 8: Apple Verification (3 stories) - FR100-104
+  # Epic 8: Bootstrap Verification (5 stories) - FR100-109
   epic-8: backlog
-  8-1-apple-jwks-fetching: backlog
+  8-1-provider-jwks-service: backlog
   8-2-apple-token-verification: backlog
-  8-3-apple-user-provisioning: backlog
+  8-3-google-token-verification: backlog
+  8-4-bootstrap-user-provisioning: backlog
+  8-5-bootstrap-endpoint-abstraction: backlog
   epic-8-retrospective: optional
 
   # Epic 9: Passkey Management (6 stories) - FR110-118
+  # Note: Passkeys stored in Keycloak credentials, challenges in DB
   epic-9: backlog
-  9-1-registration-challenge-generation: backlog
-  9-2-attestation-validation: backlog
-  9-3-passkey-storage: backlog
+  9-1-challenge-storage: backlog
+  9-2-registration-challenge-generation: backlog
+  9-3-attestation-validation-storage: backlog
   9-4-authentication-challenge-generation: backlog
   9-5-assertion-verification: backlog
   9-6-passkey-management-crud: backlog
   epic-9-retrospective: optional
 
-  # Epic 10: Auth Endpoints (5 stories) - FR150-160
+  # Epic 10: Auth Endpoints (6 stories) - FR150-160
   epic-10: backlog
   10-1-apple-provision-endpoint: backlog
-  10-2-passkey-register-endpoint: backlog
-  10-3-passkey-auth-start-endpoint: backlog
-  10-4-passkey-auth-finish-endpoint: backlog
-  10-5-token-introspection-endpoint: backlog
+  10-2-google-provision-endpoint: backlog
+  10-3-passkey-register-endpoint: backlog
+  10-4-passkey-auth-start-endpoint: backlog
+  10-5-passkey-auth-finish-endpoint: backlog
+  10-6-token-introspection-endpoint: backlog
   epic-10-retrospective: optional
 
   # Epic 11: Device Trust (4 stories) - FR140-148
@@ -141,30 +145,35 @@ development_status:
   epic-12-retrospective: optional
 
 # ============================================================================
-# PHASE 3: PRODUCTION HARDENING (Future)
+# PRODUCTION HARDENING 📋 Planned
 # ============================================================================
 
-  # Epic 13: Production Hardening (5 stories)
+  # Epic 13: Production Hardening (7 stories)
   epic-13: backlog
   13-1-key-rotation: backlog
-  13-2-temporary-device-qr-flow: backlog
-  13-3-email-magic-link-recovery: backlog
-  13-4-apple-re-verification-recovery: backlog
-  13-5-security-audit: backlog
+  13-2-security-audit: backlog
+  13-3-email-magic-link-bootstrap: backlog
+  13-4-sms-otp-bootstrap: backlog
+  13-5-social-re-verification-recovery: backlog
+  13-6-email-magic-link-recovery: backlog
+  13-7-temporary-device-qr-flow: backlog
   epic-13-retrospective: optional
 
 # ============================================================================
 # RECOMMENDED ORDER
 # ============================================================================
 # 
-# Sprint 1: Epic 7 + Epic 8 (JWT + Apple)
+# Sprint 1: Epic 7 + Epic 8 (JWT + Bootstrap)
 #   - Get token infrastructure working
-#   - Apple verification done
-#   - Deliverable: Can verify Apple tokens and sign JWTs
+#   - Apple + Google verification done
+#   - Deliverable: Can verify social tokens and sign JWTs
+#   - Key Risk: Research Keycloak credential API for passkey storage
 #
 # Sprint 2: Epic 9 (Passkeys)
 #   - WebAuthn registration and authentication
+#   - Passkeys stored in Keycloak via Admin API
 #   - Deliverable: Can register and auth with passkeys
+#   - Key Risk: WebAuthn edge cases, Keycloak credential format
 #
 # Sprint 3: Epic 10 + Epic 11 (Endpoints + Devices)
 #   - Wire up REST endpoints
@@ -177,6 +186,7 @@ development_status:
 #
 # Sprint 5+: Epic 13 (Hardening)
 #   - Key rotation, recovery flows
+#   - Additional bootstrap methods (email, SMS)
 #   - Security review
 #
 # ============================================================================

@@ -1,8 +1,8 @@
 # IdentiKey Core — Product Requirements Document
 
-**Author:** Master Dorje
-**Date:** 2025-11-30 (Updated: 2026-02-05)
-**Version:** 2.0
+**Author:** Master Dorje  
+**Date:** 2025-11-30 (Updated: 2026-02-05)  
+**Version:** 2.0 — Native Auth Pivot
 
 ---
 
@@ -15,15 +15,17 @@ IdentiKey Core is the **identity platform backend** for IdentiKey. It provides:
 3. **Admin Tooling** — CLI and MCP for user management and debugging
 4. **Keycloak Integration** — User storage, permissions, and standard OIDC for web apps
 
-### What Changed (v2.0)
+### What Changed (v2.0 — The Pivot)
 
-The original scope was a Keycloak admin wrapper (CLI + MCP + future Web UI). The new scope expands IdentiKey into a **token-issuing identity layer** that:
+The original scope was a Keycloak admin wrapper (CLI + MCP + future Web UI). **v2.0 pivots IdentiKey into a token-issuing identity layer** that:
 
 - Uses Apple Sign In as one-time identity verification
-- Enrolls passkeys for ongoing authentication
-- Issues its own JWTs (not relying on Keycloak's token issuance for mobile)
-- Supports device trust levels (master vs temporary)
-- Keeps Keycloak for user storage and standard OIDC
+- Enrolls passkeys for ongoing authentication  
+- Signs its own JWTs (bypassing Keycloak token issuance for mobile)
+- Implements device trust levels (master vs temporary devices)
+- Retains Keycloak for user storage and standard OIDC (web apps)
+
+**Why the pivot?** Apple Sign In requires native SDK integration; Keycloak's token exchange requires preview features we don't want to depend on. See `docs/identikey-apple-auth-architecture-analysis.md` for the full analysis.
 
 This positions IdentiKey as a true identity platform, not just a Keycloak wrapper.
 
@@ -40,25 +42,25 @@ This positions IdentiKey as a true identity platform, not just a Keycloak wrappe
 
 ## Success Criteria
 
-### Phase 1: Admin Tooling (✅ Complete)
+### Admin Tooling ✅ Complete
 1. ✅ MCP server works for user management
 2. ✅ CLI covers user and auth flow operations
 3. ✅ Foundation is solid (services, error handling, logging)
 
-### Phase 2: Native Mobile Auth (Current Focus)
+### Native Mobile Auth — ACTIVE
 1. Apple Sign In verification works
 2. Passkey registration and authentication work
 3. IdentiKey issues valid JWTs
 4. Tokens are validated by resource servers
 5. Device trust model implemented
 
-### Phase 3: Production Hardening
+### Production Hardening — Planned
 1. Key rotation implemented
 2. Token revocation works
 3. Temporary device authorization flow works
 4. Recovery flows implemented
 
-### Phase 4: Web UI & Delegated Admin (Future)
+### Web UI & Delegated Admin — Future Backlog
 1. Guild admins can self-serve via web UI
 2. Standard OIDC flow works for web apps via Keycloak
 
@@ -66,7 +68,7 @@ This positions IdentiKey as a true identity platform, not just a Keycloak wrappe
 
 ## Product Scope
 
-### Phase 1 — Admin Tooling (Complete)
+### Admin Tooling ✅ Complete
 
 | Domain | Capabilities | Status |
 |--------|--------------|--------|
@@ -75,7 +77,7 @@ This positions IdentiKey as a true identity platform, not just a Keycloak wrappe
 | **MCP Server** | All user/auth-flow operations exposed | ✅ Done |
 | **CLI** | All user/auth-flow operations | ✅ Done |
 
-### Phase 2 — Native Mobile Auth (New)
+### Native Mobile Auth — ACTIVE
 
 | Domain | Capabilities |
 |--------|--------------|
@@ -86,7 +88,7 @@ This positions IdentiKey as a true identity platform, not just a Keycloak wrappe
 | **Token Refresh** | Validate refresh tokens, issue new access tokens |
 | **Device Trust** | Track master vs temporary devices, scope tokens accordingly |
 
-### Phase 3 — Production Hardening
+### Production Hardening — Planned
 
 | Domain | Capabilities |
 |--------|--------------|
@@ -95,7 +97,7 @@ This positions IdentiKey as a true identity platform, not just a Keycloak wrappe
 | **Temporary Devices** | QR-based authorization, time-limited tokens |
 | **Recovery Flows** | Apple re-verification, email magic links |
 
-### Phase 4 — Web UI & Extended Admin
+### Web UI & Extended Admin — Future Backlog
 
 | Domain | Capabilities |
 |--------|--------------|
@@ -255,20 +257,21 @@ This positions IdentiKey as a true identity platform, not just a Keycloak wrappe
 - Multi-realm support
 - Keycloak deployment/operations
 - User self-service (Keycloak account console)
-- Guardian-based recovery (future phase)
+- Guardian-based recovery (future backlog)
 - Cross-platform passkey sync (platform limitation)
 
 ---
 
 ## Document Status
 
-**Status:** ✅ Updated
-**Updated By:** AI Assistant
-**Updated Date:** 2026-02-05
-**PRD Version:** 2.0
-**FR Count:** 68 (13 original complete + 55 new)
-**NFR Count:** 15
+| Field | Value |
+|-------|-------|
+| **Status** | ✅ Reviewed |
+| **Version** | 2.0 — Native Auth Pivot |
+| **Last Updated** | 2026-02-05 |
+| **FR Count** | 68 (13 admin tooling + 55 native auth) |
+| **NFR Count** | 15 |
 
 ---
 
-_This PRD captures IdentiKey Core — the identity platform backend for native mobile auth and Keycloak integration._
+_This PRD defines IdentiKey Core — the identity platform backend for native mobile auth and Keycloak integration._

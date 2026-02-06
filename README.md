@@ -9,14 +9,15 @@ IdentiKey Core serves as the **identity layer** for the IdentiKey platform:
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Mobile/Native Apps                          │
-│                 (Apple Sign In, Passkeys)                       │
+│               (Apple/Google Sign In, Passkeys)                  │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    IdentiKey Core                               │
 │  ┌─────────────────────────────────────────────────────────────┐│
-│  │ Auth Endpoints: /apple-provision, /passkey-*, /token/*     ││
+│  │ Auth Endpoints: /apple-provision, /google-provision,       ││
+│  │                 /passkey-*, /token/*                        ││
 │  │ JWT Signing: ES256, JWKS, Token Introspection              ││
 │  │ WebAuthn: Passkey Registration & Authentication            ││
 │  │ Device Trust: Master vs Temporary Devices                  ││
@@ -29,16 +30,16 @@ IdentiKey Core serves as the **identity layer** for the IdentiKey platform:
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   Keycloak (User Store)                         │
-│  User CRUD, Groups/Guilds, Roles, Standard OIDC for Web Apps   │
+│                   Keycloak (User Store + Credentials)           │
+│  Users, Passkeys, Groups/Guilds, Roles, Standard OIDC for Web  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Design Decisions
 
 1. **IdentiKey issues its own JWTs** for mobile/native auth (no Keycloak preview features needed)
-2. **Apple Sign In as bootstrap** — one-time identity verification, then passkey enrollment
-3. **Passkeys for ongoing auth** — FIDO2/WebAuthn, device-bound credentials
+2. **Social login as bootstrap** — Apple/Google for one-time identity verification, then passkey enrollment
+3. **Passkeys for ongoing auth** — FIDO2/WebAuthn, stored in Keycloak credentials (works for mobile & web)
 4. **Keycloak for user storage** — Admin API for CRUD, standard OIDC still works for web apps
 5. **Device trust model** — Master devices (with passkeys) vs temporary devices (short-lived tokens)
 
@@ -46,7 +47,7 @@ IdentiKey Core serves as the **identity layer** for the IdentiKey platform:
 
 - [Bun](https://bun.sh/) runtime
 - Access to a Keycloak instance with admin credentials
-- PostgreSQL database (for passkeys, devices, tokens)
+- PostgreSQL database (for devices, challenges, refresh tokens)
 
 ## Installation
 
@@ -71,8 +72,9 @@ IDENTIKEY_SIGNING_KEY_PATH=/path/to/private-key.pem
 # Or use environment variable for the key itself
 IDENTIKEY_SIGNING_KEY=-----BEGIN EC PRIVATE KEY-----...
 
-# Apple Sign In Verification
+# Bootstrap Verification (Social Login)
 APPLE_SERVICES_ID=ai.morphist.app
+GOOGLE_CLIENT_ID=your-google-oauth-client-id
 
 # Database
 DATABASE_URL=postgresql://user:pass@localhost:5432/identikey
@@ -143,10 +145,12 @@ Native mobile authentication endpoints:
 | Endpoint | Purpose |
 |----------|---------|
 | `POST /apple-provision` | Verify Apple token, create user, return WebAuthn challenge |
-| `POST /passkey-register` | Store passkey, issue tokens |
+| `POST /google-provision` | Verify Google token, create user, return WebAuthn challenge |
+| `POST /passkey-register` | Store passkey in Keycloak, issue tokens |
 | `POST /passkey-auth/start` | Return authentication challenge |
 | `POST /passkey-auth/finish` | Verify assertion, issue tokens |
 | `POST /token/refresh` | Refresh access token |
+| `POST /token/revoke` | Revoke refresh token(s) |
 | `POST /device-authorize` | QR-based temporary device auth |
 | `GET /.well-known/jwks.json` | Public keys for token validation |
 | `GET /.well-known/openid-configuration` | OIDC discovery |

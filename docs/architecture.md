@@ -1,8 +1,8 @@
 # Architecture — IdentiKey Core
 
-**Author:** Master Dorje
-**Date:** 2025-11-30 (Updated: 2026-02-05)
-**Version:** 2.0
+**Author:** Master Dorje  
+**Date:** 2025-11-30 (Updated: 2026-02-05)  
+**Version:** 2.0 — Native Auth Pivot
 
 ---
 
@@ -20,6 +20,20 @@ This architecture enables fully native mobile UX without browser redirects while
 
 ---
 
+## What This Is / What This Is Not
+
+| This IS | This is NOT |
+|---------|-------------|
+| A token-issuing identity layer | A Keycloak wrapper/proxy |
+| Native mobile auth (passkeys, Apple) | Browser-based OIDC for mobile |
+| User storage via Keycloak Admin API | Keycloak auth flows for mobile |
+| Direct JWT signing (ES256) | Keycloak token exchange (preview features) |
+| Device trust model (master/temp) | Session management via Keycloak |
+
+**Key Insight:** Mobile apps talk to IdentiKey directly. Web apps can still use Keycloak's standard OIDC. Two paths, one user store.
+
+---
+
 ## System Architecture
 
 ```
@@ -31,8 +45,8 @@ This architecture enables fully native mobile UX without browser redirects while
 │  │   Mobile Apps        │              │     Web Apps         │         │
 │  │   (iOS/Android)      │              │     (Browser)        │         │
 │  │                      │              │                      │         │
-│  │  • Apple Sign In SDK │              │  • Standard OIDC     │         │
-│  │  • Native Passkeys   │              │  • Browser redirect  │         │
+│  │  • Apple/Google SDK  │              │  • Standard OIDC     │         │
+│  │  • Native Passkeys   │              │  • Browser passkeys  │         │
 │  │  • Direct HTTP calls │              │  • Keycloak login    │         │
 │  └──────────┬───────────┘              └──────────┬───────────┘         │
 │             │                                     │                      │
@@ -41,32 +55,36 @@ This architecture enables fully native mobile UX without browser redirects while
               ▼                                     ▼
 ┌─────────────────────────────────────┐  ┌─────────────────────────────────┐
 │       IDENTIKEY CORE                │  │         KEYCLOAK                │
-│       (This Repo)                   │  │         (User Store + OIDC)     │
+│       (This Repo)                   │  │         (User Store + Credentials)
 ├─────────────────────────────────────┤  ├─────────────────────────────────┤
 │                                     │  │                                 │
-│  Auth Endpoints:                    │  │  • User storage (Admin API)    │
-│  • POST /apple-provision            │  │  • Groups/Guilds               │
+│  Auth Endpoints:                    │  │  User Storage (Admin API):     │
+│  • POST /apple-provision            │  │  • Users, attributes           │
+│  • POST /google-provision           │  │  • WebAuthn credentials ←──────┼── Passkeys stored here!
+│  • POST /email-provision            │  │  • Groups/Guilds               │
 │  • POST /passkey-register           │  │  • Roles & Permissions         │
-│  • POST /passkey-auth/*             │  │  • Standard OIDC flows         │
-│  • POST /token/refresh              │  │  • Session management          │
-│  • GET /.well-known/jwks.json       │  │  • Event logging               │
-│                                     │  │                                 │
-│  Admin Layer:                       │  │                                 │
+│  • POST /passkey-auth/*             │  │                                 │
+│  • POST /token/refresh              │  │  Standard OIDC (Web):          │
+│  • GET /.well-known/jwks.json       │  │  • Browser-based login         │
+│                                     │  │  • WebAuthn authenticator      │
+│  Admin Layer:                       │  │  • Same passkeys work here!    │
 │  • CLI (kc users, kc auth-flows)    │◄─┼─► Admin REST API               │
 │  • MCP Server (AI agents)           │  │                                 │
 │                                     │  │                                 │
 │  Data (PostgreSQL):                 │  │                                 │
-│  • Passkeys                         │  │                                 │
 │  • Devices                          │  │                                 │
 │  • Refresh Tokens                   │  │                                 │
+│  • Challenges (temp)                │  │                                 │
 │                                     │  │                                 │
 └─────────────────────────────────────┘  └─────────────────────────────────┘
               │                                     ▲
               │                                     │
               └─────────────────────────────────────┘
                         Keycloak Admin API
-                        (User CRUD, Groups, Roles)
+                        (User CRUD, Credentials, Groups, Roles)
 ```
+
+**Key Insight:** Passkeys are stored in Keycloak's user credential store (not a separate IdentiKey DB). This means the same passkey works for both mobile (via IdentiKey endpoints) and web (via Keycloak's standard OIDC with WebAuthn authenticator).
 
 ---
 
@@ -98,8 +116,8 @@ This architecture enables fully native mobile UX without browser redirects while
 │     Request: { user_id, attestation }                          │
 │     IdentiKey:                                                  │
 │       - Validates attestation                                   │
-│       - Stores passkey (credentialId, publicKey, signCount)    │
-│       - Registers device as "master"                            │
+│       - Stores passkey in Keycloak (Admin API credentials)     │
+│       - Registers device as "master" (IdentiKey DB)            │
 │       - Signs and issues tokens                                 │
 │     Response: { access_token, refresh_token, id_token }        │
 │                                                                 │
@@ -122,9 +140,9 @@ This architecture enables fully native mobile UX without browser redirects while
 │  3. App calls: POST /passkey-auth/finish                        │
 │     Request: { credential_id, authenticator_data, signature }  │
 │     IdentiKey:                                                  │
-│       - Looks up passkey by credential_id                      │
+│       - Looks up passkey in Keycloak by credential_id          │
 │       - Verifies signature against stored public key           │
-│       - Updates sign count                                      │
+│       - Updates sign count in Keycloak                         │
 │       - Issues tokens                                           │
 │     Response: { access_token, refresh_token, id_token }        │
 │                                                                 │
@@ -159,6 +177,90 @@ This architecture enables fully native mobile UX without browser redirects while
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Bootstrap Methods (Identity Verification)
+
+The core pattern is: **verify identity once → enroll passkey → use passkey ongoing**.
+
+Different bootstrap methods serve different user populations:
+
+| Bootstrap Method | Platform | Use Case | Implementation |
+|------------------|----------|----------|----------------|
+| **Apple Sign In** | iOS, macOS | iOS App Store compliance, Apple users | Native SDK → verify server-side |
+| **Google Sign In** | Android, Web | Android users, Google account holders | Native SDK → verify server-side |
+| **Email Magic Link** | All | Privacy-focused, no social login | Send link → verify click → passkey |
+| **SMS OTP** | All | Quick onboarding, phone-first users | Send code → verify → passkey |
+
+### Bootstrap Flow Pattern
+
+All bootstrap methods follow the same pattern:
+
+```
+1. Verify identity via bootstrap method (Apple/Google/Email/SMS)
+2. Create or find user in Keycloak
+3. Return WebAuthn registration challenge
+4. User creates passkey (biometric prompt)
+5. Store passkey in Keycloak user credentials
+6. Issue tokens
+7. Subsequent logins: passkey only
+```
+
+### Keycloak IDP Configuration
+
+**Important:** Apple and Google are used as *bootstrap mechanisms*, not as ongoing Keycloak Identity Providers.
+
+- **Do NOT configure** Apple/Google as Keycloak IDPs (removes complexity, avoids preview features)
+- IdentiKey verifies social tokens directly via provider JWKS
+- Users created via Admin API, not IDP linking
+
+This keeps Keycloak's role simple: user storage + standard OIDC for web.
+
+---
+
+## Failure Handling
+
+### Provision Success, Passkey Registration Failure
+
+If bootstrap verification succeeds but passkey registration fails (network error, user cancels, etc.):
+
+```
+State: User exists in Keycloak with apple_sub/google_sub attribute
+       No passkey credential stored
+       No tokens issued
+```
+
+**Recovery path:**
+1. User retries "Sign in with Apple/Google"
+2. IdentiKey finds existing user by `apple_sub`/`google_sub`
+3. Returns fresh WebAuthn challenge
+4. User completes passkey registration
+5. Tokens issued
+
+**Implementation:** The `/apple-provision` and `/google-provision` endpoints are idempotent for the same social identity. No cleanup needed on partial failure.
+
+### Passkey Registration Success, Token Issuance Failure
+
+Extremely unlikely (token signing is local), but if it happens:
+
+```
+State: User exists, passkey stored
+       No tokens returned to client
+```
+
+**Recovery path:** User can immediately use passkey auth flow (`/passkey-auth/start` → `/passkey-auth/finish`). The passkey is valid; only token issuance failed.
+
+### Challenge Expiry
+
+WebAuthn challenges expire after 5 minutes. If user takes too long:
+
+```
+State: Challenge expired
+       Passkey creation fails client-side or server rejects
+```
+
+**Recovery path:** Client requests new challenge, user retries passkey creation.
 
 ---
 
@@ -273,23 +375,23 @@ identikey-core/
 
 ## Database Schema
 
+IdentiKey uses PostgreSQL for transient/operational data. Passkeys are stored in Keycloak.
+
 ```sql
--- Passkey credentials (WebAuthn)
-CREATE TABLE passkeys (
+-- WebAuthn challenges (short-lived, for registration/auth flows)
+CREATE TABLE challenges (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL,           -- Keycloak user ID
-  credential_id TEXT NOT NULL UNIQUE,
-  public_key BYTEA NOT NULL,       -- COSE format
-  sign_count INTEGER NOT NULL DEFAULT 0,
-  transports TEXT[],               -- ['internal', 'hybrid', etc.]
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  last_used_at TIMESTAMPTZ
+  user_id UUID,                    -- NULL for auth start (discoverable credentials)
+  challenge TEXT NOT NULL UNIQUE,  -- Base64-encoded challenge
+  type TEXT NOT NULL,              -- 'registration' or 'authentication'
+  expires_at TIMESTAMPTZ NOT NULL, -- 5 min TTL
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Device registry
 CREATE TABLE devices (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL,
+  user_id UUID NOT NULL,           -- Keycloak user ID
   device_fingerprint TEXT,
   device_name TEXT,
   is_master BOOLEAN NOT NULL DEFAULT false,
@@ -309,12 +411,13 @@ CREATE TABLE refresh_tokens (
 );
 
 -- Indexes
-CREATE INDEX idx_passkeys_user_id ON passkeys(user_id);
-CREATE INDEX idx_passkeys_credential_id ON passkeys(credential_id);
+CREATE INDEX idx_challenges_expires_at ON challenges(expires_at);
 CREATE INDEX idx_devices_user_id ON devices(user_id);
 CREATE INDEX idx_refresh_tokens_user_id ON refresh_tokens(user_id);
 CREATE INDEX idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
 ```
+
+**Note:** Passkey credentials (credentialId, publicKey, signCount) are stored in Keycloak's user credential store via Admin API, not in this database. This enables both mobile and web passkey auth.
 
 ---
 
@@ -340,10 +443,28 @@ CREATE INDEX idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
 
 ### Key Management
 
-- **Signing Keys:** ES256 (ECDSA with P-256 curve)
-- **Storage:** Environment variable (dev) or secret manager (prod)
-- **Rotation:** Add new key to JWKS, sign with new key, retire old after expiry
+- **Signing Algorithm:** ES256 (ECDSA with P-256 curve)
 - **Key ID (kid):** SHA-256 thumbprint of public key
+
+**Phased Approach:**
+
+| Phase | Storage | When |
+|-------|---------|------|
+| **Phase 1** | `IDENTIKEY_SIGNING_KEY` env var | Initial prod, MVP |
+| **Phase 2** | AWS Secrets Manager or HashiCorp Vault | When ops capacity allows |
+| **Phase 3** | HSM | Enterprise/financial identity (if ever) |
+
+Phase 1 is acceptable if:
+- Env var is encrypted at rest (Fly.io secrets, Railway, etc.)
+- Key is not in git or logs
+- Rotation is manual but documented
+
+**Key Rotation Process:**
+1. Generate new key pair
+2. Add new public key to JWKS (both keys published)
+3. Start signing new tokens with new key
+4. Wait for old tokens to expire (30 days for refresh)
+5. Remove old public key from JWKS
 
 ### Token Security
 
@@ -351,12 +472,30 @@ CREATE INDEX idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
 - **Refresh Tokens:** Device-bound, stored hash for revocation check
 - **Token Binding:** `device_id` claim ties token to specific device
 
+### Token Revocation Strategy
+
+| Token Type | Revocation Approach | Latency |
+|------------|---------------------|---------|
+| **Access Token** | Not revoked | Max 15 min exposure |
+| **Refresh Token** | Check `revoked_at` on use | Immediate on next refresh |
+
+**Rationale:** Access tokens are validated statelessly via JWKS (no DB hit). Revocation takes effect when:
+1. Access token expires (15 min max)
+2. Client attempts refresh
+3. Refresh fails with "token revoked" error
+
+For emergency revocation (compromised account):
+- Revoke all refresh tokens for user
+- User loses access within 15 minutes
+- For faster response, resource servers can check `/introspect` (but adds latency)
+
 ### API Security
 
-- **Rate Limiting:** All auth endpoints rate-limited
-- **Apple Verification:** Always server-side, never trust client claims
+- **Rate Limiting:** All auth endpoints rate-limited (configurable per-endpoint)
+- **Bootstrap Verification:** Apple/Google tokens verified server-side via JWKS
 - **Passkey Attestation:** Validate attestation format and signature
 - **HTTPS Only:** All endpoints require TLS
+- **Challenge Expiry:** WebAuthn challenges expire after 5 minutes
 
 ---
 
@@ -365,15 +504,21 @@ CREATE INDEX idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
 ### Keycloak Admin API
 
 Used for:
-- User CRUD (create on Apple provision, lookup, update)
-- Storing `apple_sub` as user attribute
+- User CRUD (create on bootstrap, lookup, update)
+- Storing bootstrap identifiers (`apple_sub`, `google_sub`) as user attributes
+- **WebAuthn credentials** (passkey storage via Admin API)
 - Group/guild membership
 - Role assignments
 
 Not used for:
-- Token issuance (mobile)
-- Session management (mobile)
-- Auth flow execution (mobile)
+- Token issuance (mobile) — IdentiKey signs tokens
+- Session management (mobile) — IdentiKey manages refresh tokens
+- Auth flow execution (mobile) — IdentiKey handles passkey flows
+
+**Keycloak Configuration Notes:**
+- Enable WebAuthn authenticator for browser-based passkey login
+- Do NOT configure Apple/Google as Identity Providers (we verify directly)
+- Standard OIDC clients for web apps
 
 ### Apple Identity Services
 
@@ -381,25 +526,31 @@ Not used for:
 - Token issuer: `https://appleid.apple.com`
 - Audience: Your Services ID (e.g., `ai.morphist.app`)
 
+### Google Identity Services
+
+- JWKS endpoint: `https://www.googleapis.com/oauth2/v3/certs`
+- Token issuer: `https://accounts.google.com`
+- Audience: Your OAuth client ID
+
 ### Resource Servers (Morphist API, etc.)
 
-- Validate tokens via JWKS at `/.well-known/jwks.json`
-- Or use introspection endpoint at `/introspect`
+- Validate tokens via JWKS at `/.well-known/jwks.json` (preferred, stateless)
+- Or use introspection endpoint at `/introspect` (checks revocation, adds latency)
 - Check `device_trust` claim for authorization decisions
 
 ---
 
 ## Architecture Decision Records
 
-### ADR-001: Service-First Architecture ✅ (Existing)
+### ADR-001: Service-First Architecture ✅
 
-Core service layer independent of interfaces — enables code reuse.
+Core service layer independent of interfaces — enables code reuse across CLI, MCP, and API routes.
 
-### ADR-002: IdentiKey Abstraction Over Keycloak ✅ (Existing)
+### ADR-002: IdentiKey Abstraction Over Keycloak ✅
 
-Hide Keycloak terminology, expose IdentiKey domain concepts.
+Hide Keycloak terminology, expose IdentiKey domain concepts. Users never see "realm" or "representation."
 
-### ADR-003: IdentiKey as Token Issuer (NEW)
+### ADR-003: IdentiKey as Token Issuer ✅
 
 **Decision:** IdentiKey signs its own JWTs rather than using Keycloak token issuance.
 
@@ -411,7 +562,9 @@ Hide Keycloak terminology, expose IdentiKey domain concepts.
 
 **Trade-off:** Must manage signing keys (table stakes for identity platform).
 
-### ADR-004: Apple as Bootstrap Mechanism (NEW)
+**Reference:** See `docs/identikey-apple-auth-architecture-analysis.md` for the full evaluation of alternatives.
+
+### ADR-004: Apple as Bootstrap Mechanism ✅
 
 **Decision:** Use Apple Sign In only for initial identity verification, immediately enroll passkey.
 
@@ -423,7 +576,7 @@ Hide Keycloak terminology, expose IdentiKey domain concepts.
 
 **Trade-off:** Two biometric prompts on first login (both feel natural).
 
-### ADR-005: Keycloak as User Store (NEW)
+### ADR-005: Keycloak as User Store ✅
 
 **Decision:** Keep Keycloak for user storage via Admin API, bypass auth flows for mobile.
 
@@ -433,7 +586,7 @@ Hide Keycloak terminology, expose IdentiKey domain concepts.
 3. Standard OIDC still works for web apps
 4. Gradual migration path if needed
 
-### ADR-006: Device Trust Model (NEW)
+### ADR-006: Device Trust Model ✅
 
 **Decision:** Implement master vs temporary device distinction from the start.
 
@@ -442,13 +595,57 @@ Hide Keycloak terminology, expose IdentiKey domain concepts.
 2. UX: users can safely use friend's phone
 3. Architecture: foundation for device management
 
+### ADR-007: Passkeys in Keycloak Credentials ✅
+
+**Decision:** Store passkey credentials in Keycloak's user credential store (via Admin API), not in a separate IdentiKey database.
+
+**Rationale:**
+1. **Unified credential store:** One source of truth for user credentials
+2. **Web compatibility:** Keycloak's WebAuthn authenticator can use the same passkeys for browser login
+3. **No sync issues:** Mobile and web auth use the same passkey data
+4. **Admin visibility:** Passkeys visible in Keycloak admin console
+
+**Trade-off:** Requires Keycloak Admin API calls for passkey CRUD (not direct DB access). Acceptable.
+
+**Implementation:** Use Keycloak Admin API credential endpoints to store/retrieve WebAuthn credentials.
+
+### ADR-008: Social Login as Bootstrap Only ✅
+
+**Decision:** Use Apple/Google Sign In as one-time bootstrap mechanisms, not as ongoing Keycloak Identity Providers.
+
+**Rationale:**
+1. **Simplicity:** No Keycloak IDP configuration, no preview features
+2. **Direct verification:** IdentiKey verifies social tokens via provider JWKS
+3. **No vendor lock-in:** After passkey enrollment, user is independent of social provider
+4. **Consistent pattern:** All bootstrap methods (Apple, Google, email, SMS) follow same flow
+
+**Configuration:**
+- Do NOT add Apple/Google as Keycloak Identity Providers
+- If previously configured, remove them
+- IdentiKey handles social token verification directly
+
+### ADR-009: Revocation on Refresh ✅
+
+**Decision:** Access tokens are not revoked; refresh tokens are checked for revocation on use.
+
+**Rationale:**
+1. **Performance:** Access token validation is stateless (JWKS only, no DB)
+2. **Acceptable latency:** Max 15 min exposure for revoked user
+3. **Scalability:** No per-request revocation check
+4. **Simplicity:** Standard pattern used by major identity providers
+
+**Trade-off:** Compromised accounts have up to 15 min of access. For faster revocation, resource servers can optionally use `/introspect` endpoint.
+
 ---
 
 ## Document Status
 
-**Status:** ✅ Updated
-**Version:** 2.0
-**Updated:** 2026-02-05
+| Field | Value |
+|-------|-------|
+| **Status** | ✅ Reviewed |
+| **Version** | 2.1 — Architecture Deep Review |
+| **Last Updated** | 2026-02-05 |
+| **ADR Count** | 9 |
 
 ---
 
