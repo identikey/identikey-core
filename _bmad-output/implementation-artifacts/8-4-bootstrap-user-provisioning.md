@@ -1,6 +1,6 @@
 # Story 8.4: Bootstrap User Provisioning
 
-**Status:** ready-for-dev
+**Status:** done
 **Epic:** 8 - Bootstrap Verification
 **FR Coverage:** FR100, FR104, FR105, FR109
 **Story Key:** 8-4-bootstrap-user-provisioning
@@ -53,45 +53,45 @@ So that **I can use the app** and proceed to passkey enrollment (Epic 9) via pro
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: BootstrapService module** (AC: 1-6)
-  - [ ] Create `src/lib/auth/bootstrap/provision.ts`.
-  - [ ] Define `ProvisionResult` interface: `{ userId: string; isNewUser: boolean; email?: string; provider: 'apple' | 'google' }`.
-  - [ ] Define `BootstrapProvisionError` class extending `Error` with a `code` field (e.g., `PROVISION_FAILED`, `USER_LOOKUP_FAILED`, `USER_CREATE_FAILED`).
-  - [ ] Implement `provisionUser(provider: 'apple' | 'google', payload: AppleTokenPayload | GoogleTokenPayload): Promise<ProvisionResult>`.
-  - [ ] Get the Keycloak Admin Client via `getKeycloakClient()` from `src/lib/keycloak/client.ts`.
+- [x] **Task 1: BootstrapService module** (AC: 1-6)
+  - [x] Create `src/lib/auth/bootstrap/provision.ts`.
+  - [x] Define `ProvisionResult` interface: `{ userId: string; isNewUser: boolean; email?: string; provider: 'apple' | 'google' }`.
+  - [x] Define `BootstrapProvisionError` class extending `Error` with a `code` field (e.g., `PROVISION_FAILED`, `USER_LOOKUP_FAILED`, `USER_CREATE_FAILED`).
+  - [x] Implement `provisionUser(provider: 'apple' | 'google', payload: AppleTokenPayload | GoogleTokenPayload): Promise<ProvisionResult>`.
+  - [x] Get the Keycloak Admin Client via `getKeycloakClient()` from `src/lib/keycloak/client.ts`.
 
-- [ ] **Task 2: User lookup by attribute** (AC: 1, 4)
-  - [ ] Implement `findUserByProviderSub(client: KcAdminClient, provider: 'apple' | 'google', sub: string): Promise<UserRepresentation | null>`.
-  - [ ] Use `client.users.find({ q: '${attributeKey}:${sub}', exact: true })` where `attributeKey` is `apple_sub` or `google_sub`.
-  - [ ] If multiple users returned (should not happen), log a warning and use the first result.
-  - [ ] Return `null` if no user found.
+- [x] **Task 2: User lookup by attribute** (AC: 1, 4)
+  - [x] Implement `findUserByProviderSub(client: KcAdminClient, provider: 'apple' | 'google', sub: string): Promise<UserRepresentation | null>`.
+  - [x] Use `client.users.find({ q: '${attributeKey}:${sub}', exact: true })` where `attributeKey` is `apple_sub` or `google_sub`.
+  - [x] If multiple users returned (should not happen), log a warning and use the first result.
+  - [x] Return `null` if no user found.
 
-- [ ] **Task 3: User creation with attributes** (AC: 2, 3)
-  - [ ] Implement `createProvisionedUser(client: KcAdminClient, provider: 'apple' | 'google', payload: AppleTokenPayload | GoogleTokenPayload): Promise<string>` (returns user ID).
-  - [ ] Generate username: `${provider}_${payload.sub.substring(0, 20)}` (provider prefix ensures uniqueness across providers; truncate sub for readability).
-  - [ ] Call `client.users.create({ username, email, firstName, enabled: true, emailVerified, attributes: { [attributeKey]: [payload.sub] } })`.
-  - [ ] Extract user ID from create response (Keycloak returns it in the `Location` header, parsed by the admin client).
-  - [ ] On 409 conflict: retry `findUserByProviderSub` (race condition — another request created the user first). If found, return that user's ID. If still not found, throw `BootstrapProvisionError`.
+- [x] **Task 3: User creation with attributes** (AC: 2, 3)
+  - [x] Implement `createProvisionedUser(client: KcAdminClient, provider: 'apple' | 'google', payload: AppleTokenPayload | GoogleTokenPayload): Promise<string>` (returns user ID).
+  - [x] Generate username: `${provider}_${payload.sub.substring(0, 20)}` (provider prefix ensures uniqueness across providers; truncate sub for readability).
+  - [x] Call `client.users.create({ username, email, firstName, enabled: true, emailVerified, attributes: { [attributeKey]: [payload.sub] } })`.
+  - [x] Extract user ID from create response (Keycloak returns it in the `Location` header, parsed by the admin client).
+  - [x] On 409 conflict: retry `findUserByProviderSub` (race condition — another request created the user first). If found, return that user's ID. If still not found, throw `BootstrapProvisionError`.
 
-- [ ] **Task 4: Profile update for existing users** (AC: 3, 4)
-  - [ ] If existing user found and payload has email but user doesn't → update email via `client.users.update()`.
-  - [ ] If existing user found and payload has name but user doesn't → update firstName.
-  - [ ] Do NOT overwrite existing email/name with empty/undefined values.
-  - [ ] If existing user was provisioned via Apple and now provisions via Google (different provider), add the new provider's `sub` as an additional attribute.
+- [x] **Task 4: Profile update for existing users** (AC: 3, 4)
+  - [x] If existing user found and payload has email but user doesn't → update email via `client.users.update()`.
+  - [x] If existing user found and payload has name but user doesn't → update firstName.
+  - [x] Do NOT overwrite existing email/name with empty/undefined values.
+  - [x] If existing user was provisioned via Apple and now provisions via Google (different provider), add the new provider's `sub` as an additional attribute.
 
-- [ ] **Task 5: Barrel exports** (AC: all)
-  - [ ] Create `src/lib/auth/bootstrap/index.ts` — export `provisionUser`, `ProvisionResult`, `BootstrapProvisionError`.
-  - [ ] Update `src/lib/auth/index.ts` — add re-exports for bootstrap provisioning.
+- [x] **Task 5: Barrel exports** (AC: all)
+  - [x] Create `src/lib/auth/bootstrap/index.ts` — export `provisionUser`, `ProvisionResult`, `BootstrapProvisionError`.
+  - [x] Update `src/lib/auth/index.ts` — add re-exports for bootstrap provisioning.
 
-- [ ] **Task 6: Tests** (AC: all)
-  - [ ] Create `src/lib/auth/bootstrap/provision.spec.ts`.
-  - [ ] Mock `getKeycloakClient()` to return a mock `KcAdminClient` with `users.find`, `users.create`, `users.update`, `users.findOne` mocks.
-  - [ ] **New user tests:** (1) Apple new user creates with `apple_sub` attribute. (2) Google new user creates with `google_sub` attribute and name. (3) Verify `isNewUser: true` returned. (4) Verify username format.
-  - [ ] **Existing user tests:** (5) Apple returning user found by attribute, returns same ID. (6) Google returning user found, returns same ID. (7) Verify `isNewUser: false` returned.
-  - [ ] **Profile update tests:** (8) Existing user missing email gets updated. (9) Existing user WITH email is NOT overwritten. (10) Apple user who also has Google adds `google_sub` attribute.
-  - [ ] **Apple private relay tests:** (11) Private relay email stored as-is. (12) Missing email on subsequent auth doesn't clear existing email.
-  - [ ] **Error tests:** (13) Keycloak connection failure throws appropriate error. (14) 409 conflict triggers retry and succeeds. (15) Missing `sub` in payload throws error.
-  - [ ] **Idempotency tests:** (16) Multiple provisions with same sub return same user ID.
+- [x] **Task 6: Tests** (AC: all)
+  - [x] Create `src/lib/auth/bootstrap/provision.spec.ts`.
+  - [x] Mock `getKeycloakClient()` to return a mock `KcAdminClient` with `users.find`, `users.create`, `users.update`, `users.findOne` mocks.
+  - [x] **New user tests:** (1) Apple new user creates with `apple_sub` attribute. (2) Google new user creates with `google_sub` attribute and name. (3) Verify `isNewUser: true` returned. (4) Verify username format.
+  - [x] **Existing user tests:** (5) Apple returning user found by attribute, returns same ID. (6) Google returning user found, returns same ID. (7) Verify `isNewUser: false` returned.
+  - [x] **Profile update tests:** (8) Existing user missing email gets updated. (9) Existing user WITH email is NOT overwritten. (10) Apple user who also has Google adds `google_sub` attribute.
+  - [x] **Apple private relay tests:** (11) Private relay email stored as-is. (12) Missing email on subsequent auth doesn't clear existing email.
+  - [x] **Error tests:** (13) Keycloak connection failure throws appropriate error. (14) 409 conflict triggers retry and succeeds. (15) Missing `sub` in payload throws error.
+  - [x] **Idempotency tests:** (16) Multiple provisions with same sub return same user ID.
 
 ---
 
@@ -119,7 +119,7 @@ So that **I can use the app** and proceed to passkey enrollment (Epic 9) via pro
 - `is_private_email` indicates Apple private relay
 - Import from `src/lib/auth/apple`
 
-#### Story 8.3 (Google Token Verification) — ready-for-dev
+#### Story 8.3 (Google Token Verification) — done
 - Delivers: `verifyGoogleToken()` returning `GoogleTokenPayload { sub, email?, email_verified?, name?, picture? }`
 - Google `sub` is stable, unique per user
 - Google provides profile claims on EVERY token (unlike Apple)
@@ -217,4 +217,13 @@ So that **I can use the app** and proceed to passkey enrollment (Epic 9) via pro
 
 ### Completion Notes List
 
+- Implemented bootstrap provisioning in `src/lib/auth/bootstrap/provision.ts`: `provisionUser(provider, payload)` uses `getKeycloakClient()`, finds by `apple_sub`/`google_sub` via `client.users.find({ q, exact: true })`, creates with username `provider_sub(0,20)` and attributes array; on 409 retries find and returns existing id; profile update fills missing email/firstName and merges attributes (full UserRepresentation) for Keycloak PUT.
+- `BootstrapProvisionError` with codes PROVISION_FAILED, USER_LOOKUP_FAILED, USER_CREATE_FAILED, MISSING_SUB; connection errors wrapped in `IdentiKeyError` CONNECTION_FAILED.
+- Barrel `bootstrap/index.ts` and re-exports in `auth/index.ts`. 20 tests in `provision.spec.ts`: new user (Apple/Google, isNewUser, username format), existing user (same ID, isNewUser false), profile update (missing email, no overwrite, attributes preserved), private relay (store as-is, subsequent auth no clear), errors (connection, missing sub), 409 retry, idempotency, findUserByProviderSub, createProvisionedUser 409.
+
 ### File List
+
+- `src/lib/auth/bootstrap/provision.ts` (new)
+- `src/lib/auth/bootstrap/provision.spec.ts` (new)
+- `src/lib/auth/bootstrap/index.ts` (new)
+- `src/lib/auth/index.ts` (modified)

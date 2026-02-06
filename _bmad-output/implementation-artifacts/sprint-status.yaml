@@ -103,8 +103,8 @@ development_status:
   8-1-provider-jwks-service: done
   8-2-apple-token-verification: done
   8-3-google-token-verification: done
-  8-4-bootstrap-user-provisioning: backlog
-  8-5-bootstrap-endpoint-abstraction: backlog
+  8-4-bootstrap-user-provisioning: done
+  8-5-bootstrap-endpoint-abstraction: ready-for-dev
   epic-8-retrospective: optional
 
   # Epic 9: Passkey Management (6 stories) - FR110-118

@@ -3,6 +3,10 @@ export { verifyAppleToken } from './apple';
 export type { AppleTokenPayload, VerifyAppleTokenOptions } from './apple';
 export { verifyGoogleToken } from './google';
 export type { GoogleTokenPayload, VerifyGoogleTokenOptions } from './google';
+export { provisionUser } from './bootstrap';
+export type { ProvisionResult } from './bootstrap';
+export { BootstrapProvisionError, BootstrapProvisionCodes } from './bootstrap';
+export type { BootstrapProvisionCode } from './bootstrap';
 export {
 	generateSigningKeyPair,
 	computeKeyId,
