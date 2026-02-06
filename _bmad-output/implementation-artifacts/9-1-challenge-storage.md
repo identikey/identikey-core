@@ -1,6 +1,6 @@
 # Story 9.1: Challenge Storage
 
-**Status:** review
+**Status:** done
 **Epic:** 9 - Passkey Management
 **FR Coverage:** FR110–118 (WebAuthn flow foundation)
 **Story Key:** 9-1-challenge-storage
@@ -109,7 +109,7 @@ So that **I can validate registration and authentication responses** in Epic 9.2
 - Tests for create, getByValue (hit and miss), expired challenge not returned, delete, unique constraint. Use test DB or in-memory SQLite if project supports it; otherwise mock db. No WebAuthn or Keycloak.
 
 ### Story Completion Status
-- **Status:** review
+- **Status:** done
 - **Completion note:** Challenge storage for WebAuthn: Drizzle schema, 5-min TTL, create/get/delete and on-read expiry handling. Foundation for 9.2–9.5 and Epic 10 passkey endpoints.
 
 ---

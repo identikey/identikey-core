@@ -110,8 +110,8 @@ development_status:
   # Epic 9: Passkey Management (6 stories) - FR110-118
   # Note: Passkeys stored in Keycloak credentials, challenges in DB
   epic-9: in-progress
-  9-1-challenge-storage: review
-  9-2-registration-challenge-generation: backlog
+  9-1-challenge-storage: done
+  9-2-registration-challenge-generation: ready-for-dev
   9-3-attestation-validation-storage: backlog
   9-4-authentication-challenge-generation: backlog
   9-5-assertion-verification: backlog
