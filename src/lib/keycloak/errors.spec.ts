@@ -9,6 +9,9 @@ describe('ErrorCodes', () => {
 			ErrorCodes.APP_NOT_FOUND,
 			ErrorCodes.GUILD_NOT_FOUND,
 			ErrorCodes.AUTH_FLOW_NOT_FOUND,
+			ErrorCodes.EXECUTION_NOT_FOUND,
+			ErrorCodes.FLOW_IS_BUILTIN,
+			ErrorCodes.INVALID_PROVIDER,
 			ErrorCodes.UNAUTHORIZED,
 			ErrorCodes.CONNECTION_FAILED,
 			ErrorCodes.INVALID_INPUT
