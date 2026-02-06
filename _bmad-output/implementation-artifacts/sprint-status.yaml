@@ -93,8 +93,8 @@ development_status:
   epic-7: in-progress
   7-1-key-generation-storage: done
   7-2-jwks-endpoint: done
-  7-3-token-signing-service: ready-for-dev
-  7-4-token-verification-service: backlog
+  7-3-token-signing-service: done
+  7-4-token-verification-service: ready-for-dev
   7-5-oidc-discovery-endpoint: backlog
   epic-7-retrospective: optional
 

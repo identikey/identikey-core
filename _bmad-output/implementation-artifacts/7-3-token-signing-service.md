@@ -1,6 +1,6 @@
 # Story 7.3: Token Signing Service
 
-**Status:** ready-for-dev  
+**Status:** done
 **Epic:** 7 - JWT Infrastructure  
 **FR Coverage:** FR123, FR124, FR125, FR126, FR127, FR128  
 **Story Key:** 7-3-token-signing-service
@@ -47,24 +47,24 @@ So that **tokens can be issued for access, refresh, and ID** and validated by re
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Signing module** (AC: 1–4)
-  - [ ] Create `src/lib/auth/jwt/signing.ts`
-  - [ ] Implement `signAccessToken(claims)`, `signRefreshToken(claims)`, `signIdToken(claims)` using `jose.SignJWT`
-  - [ ] Use `getSigningKey()` to obtain private key and kid; set header `{ alg: 'EdDSA', kid }`
-  - [ ] Set exp from iat + lifetime (15m / 30d / 1h). Generate `jti` (e.g. `crypto.randomUUID()`)
-  - [ ] Define claims types (e.g. `AccessTokenClaims`, `RefreshTokenClaims`, `IdTokenClaims`) with required vs optional fields
+- [x] **Task 1: Signing module** (AC: 1–4)
+  - [x] Create `src/lib/auth/jwt/signing.ts`
+  - [x] Implement `signAccessToken(claims)`, `signRefreshToken(claims)`, `signIdToken(claims)` using `jose.SignJWT`
+  - [x] Use `getSigningKey()` to obtain private key and kid; set header `{ alg: 'EdDSA', kid }`
+  - [x] Set exp from iat + lifetime (15m / 30d / 1h). Generate `jti` (e.g. `crypto.randomUUID()`)
+  - [x] Define claims types (e.g. `AccessTokenClaims`, `RefreshTokenClaims`, `IdTokenClaims`) with required vs optional fields
 
-- [ ] **Task 2: Issuer and audience** (AC: 4)
-  - [ ] Read issuer/audience from env (e.g. `IDENTIKEY_ISSUER`, `IDENTIKEY_AUDIENCE`) or accept as optional params with env fallback
-  - [ ] Document in README or story; default/example values per architecture
+- [x] **Task 2: Issuer and audience** (AC: 4)
+  - [x] Read issuer/audience from env (e.g. `IDENTIKEY_ISSUER`, `IDENTIKEY_AUDIENCE`) or accept as optional params with env fallback
+  - [x] Document in README or story; default/example values per architecture
 
-- [ ] **Task 3: Exports and integration** (AC: all)
-  - [ ] Export signing functions (and claim types if public) from `src/lib/auth/jwt/index.ts`
-  - [ ] No change to init or keys; signing uses existing `getSigningKey()`
+- [x] **Task 3: Exports and integration** (AC: all)
+  - [x] Export signing functions (and claim types if public) from `src/lib/auth/jwt/index.ts`
+  - [x] No change to init or keys; signing uses existing `getSigningKey()`
 
-- [ ] **Task 4: Tests** (AC: all)
-  - [ ] Unit tests in `src/lib/auth/jwt/signing.spec.ts`: mock or initialize key, call each sign function, decode with jose (no verify) and assert claims (iss, sub, aud, exp, iat, jti, device_id, device_trust, auth_method for access). Assert exp delta (15m, 30d, 1h). Assert header alg and kid.
-  - [ ] Test: uninitialized key throws when signing
+- [x] **Task 4: Tests** (AC: all)
+  - [x] Unit tests in `src/lib/auth/jwt/signing.spec.ts`: mock or initialize key, call each sign function, decode with jose (no verify) and assert claims (iss, sub, aud, exp, iat, jti, device_id, device_trust, auth_method for access). Assert exp delta (15m, 30d, 1h). Assert header alg and kid.
+  - [x] Test: uninitialized key throws when signing
 
 ---
 
@@ -106,8 +106,8 @@ So that **tokens can be issued for access, refresh, and ID** and validated by re
 - Unit tests with real or mocked signing key. Decode signed JWT (e.g. `jose.decodeJwt` or split and base64decode payload) and assert claim presence and exp/iat deltas. Optionally verify with `jose.jwtVerify` and getPublicKeyJwk to ensure round-trip.
 
 ### Story Completion Status
-- **Status:** ready-for-dev  
-- **Completion note:** Ultimate context engine analysis completed. Builds on 7.1 (key) and 7.2 (JWKS); 7.4 (verification) will consume these tokens.
+- **Status:** done
+- **Completion note:** All tasks implemented and tested. 22 unit tests covering all ACs. Builds on 7.1 (key) and 7.2 (JWKS); 7.4 (verification) will consume these tokens.
 
 ---
 
@@ -115,10 +115,23 @@ So that **tokens can be issued for access, refresh, and ID** and validated by re
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.6
 
 ### Debug Log References
 
+None — clean implementation, all tests passed first run.
+
 ### Completion Notes List
 
+- Task 1: Created `src/lib/auth/jwt/signing.ts` with `signAccessToken`, `signRefreshToken`, `signIdToken` using `jose.SignJWT`. Each function calls `getSigningKey()` at sign time, sets `{ alg: 'EdDSA', kid }` header, generates unique `jti` via `crypto.randomUUID()`, and enforces architecture lifetimes (15m/30d/1h). Typed claim interfaces (`AccessTokenClaims`, `RefreshTokenClaims`, `IdTokenClaims`) with required vs optional fields.
+- Task 2: Issuer/audience read from `IDENTIKEY_ISSUER` / `IDENTIKEY_AUDIENCE` env vars with per-call override via optional `iss`/`aud` in claims. Throws descriptive error if neither is set. Added `IDENTIKEY_AUDIENCE` to `.env.example`.
+- Task 3: Exported `signAccessToken`, `signRefreshToken`, `signIdToken` and claim types from `src/lib/auth/jwt/index.ts`. No changes to init or keys modules.
+- Task 4: 22 unit tests in `signing.spec.ts` covering: standard claims presence (iss, sub, aud, exp, iat, jti), custom claims (device_id, device_trust, auth_method, scope, email, email_verified, name), optional claim omission, exp deltas (15m, 30d, 1h), header alg/kid, jti uniqueness, round-trip verification with public key, per-call issuer/audience overrides, uninitialized key throws, missing issuer/audience throws.
+- Full regression suite: 189 tests, 16 files, all passing.
+
 ### File List
+
+- `src/lib/auth/jwt/signing.ts` (new) — Token signing service with three sign functions and claim types
+- `src/lib/auth/jwt/signing.spec.ts` (new) — 22 unit tests for signing service
+- `src/lib/auth/jwt/index.ts` (modified) — Added signing exports
+- `.env.example` (modified) — Added IDENTIKEY_AUDIENCE documentation
