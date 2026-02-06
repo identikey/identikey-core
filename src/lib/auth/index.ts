@@ -1,6 +1,8 @@
 export { InvalidSigningKeyError, ProviderJwksError } from './errors';
 export { verifyAppleToken } from './apple';
 export type { AppleTokenPayload, VerifyAppleTokenOptions } from './apple';
+export { verifyGoogleToken } from './google';
+export type { GoogleTokenPayload, VerifyGoogleTokenOptions } from './google';
 export {
 	generateSigningKeyPair,
 	computeKeyId,

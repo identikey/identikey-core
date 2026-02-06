@@ -102,7 +102,7 @@ development_status:
   epic-8: in-progress
   8-1-provider-jwks-service: done
   8-2-apple-token-verification: done
-  8-3-google-token-verification: backlog
+  8-3-google-token-verification: done
   8-4-bootstrap-user-provisioning: backlog
   8-5-bootstrap-endpoint-abstraction: backlog
   epic-8-retrospective: optional
