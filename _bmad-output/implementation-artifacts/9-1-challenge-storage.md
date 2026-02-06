@@ -1,6 +1,6 @@
 # Story 9.1: Challenge Storage
 
-**Status:** ready-for-dev
+**Status:** review
 **Epic:** 9 - Passkey Management
 **FR Coverage:** FR110–118 (WebAuthn flow foundation)
 **Story Key:** 9-1-challenge-storage
@@ -43,24 +43,24 @@ So that **I can validate registration and authentication responses** in Epic 9.2
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Drizzle schema** (AC: 1, 2)
-  - [ ] In `src/lib/server/db/schema.ts`, add `challenges` table with columns above. Use `pgTable`, `uuid`, `text`, `timestamp` from `drizzle-orm/pg-core`. Export inferred type, e.g. `Challenge`.
-  - [ ] Ensure `challenge` has unique constraint; set `expires_at` in application code on insert (now + 5 min).
+- [x] **Task 1: Drizzle schema** (AC: 1, 2)
+  - [x] In `src/lib/server/db/schema.ts`, add `challenges` table with columns above. Use `pgTable`, `uuid`, `text`, `timestamp` from `drizzle-orm/pg-core`. Export inferred type, e.g. `Challenge`.
+  - [x] Ensure `challenge` has unique constraint; set `expires_at` in application code on insert (now + 5 min).
 
-- [ ] **Task 2: Challenge service / repository** (AC: 3, 4, 5)
-  - [ ] Create `src/lib/server/challenges.ts` (or `src/lib/server/db/challenges.ts`) with: `createChallenge({ userId, challenge, type })`, `getChallengeByValue(challenge)`, `deleteChallenge(id)` and/or `deleteChallengeByValue(challenge)`.
-  - [ ] In `getChallengeByValue`: only return row where `expires_at > now()`. If row exists but expired, optionally delete it and return null (on-read cleanup).
-  - [ ] In `createChallenge`: compute `expires_at` as `new Date(Date.now() + 5 * 60 * 1000)`.
+- [x] **Task 2: Challenge service / repository** (AC: 3, 4, 5)
+  - [x] Create `src/lib/server/challenges.ts` (or `src/lib/server/db/challenges.ts`) with: `createChallenge({ userId, challenge, type })`, `getChallengeByValue(challenge)`, `deleteChallenge(id)` and/or `deleteChallengeByValue(challenge)`.
+  - [x] In `getChallengeByValue`: only return row where `expires_at > now()`. If row exists but expired, optionally delete it and return null (on-read cleanup).
+  - [x] In `createChallenge`: compute `expires_at` as `new Date(Date.now() + 5 * 60 * 1000)`.
 
-- [ ] **Task 3: Index for cleanup** (AC: 5)
-  - [ ] Add index on `challenges.expires_at` in schema (Drizzle index definition) so future scheduled deletes are efficient. Include in same migration as table.
+- [x] **Task 3: Index for cleanup** (AC: 5)
+  - [x] Add index on `challenges.expires_at` in schema (Drizzle index definition) so future scheduled deletes are efficient. Include in same migration as table.
 
-- [ ] **Task 4: Migration** (AC: 6)
-  - [ ] Run `bun run db:generate` to generate migration for `challenges` table and index.
-  - [ ] Run `bun run db:migrate` (or apply migration) and verify table exists. Document in story/completion that migration was generated and applied.
+- [x] **Task 4: Migration** (AC: 6)
+  - [x] Run `bun run db:generate` to generate migration for `challenges` table and index.
+  - [x] Run `bun run db:migrate` (or apply migration) and verify table exists. Document in story/completion that migration was generated and applied.
 
-- [ ] **Task 5: Tests** (AC: all)
-  - [ ] Unit tests for challenge service: create then getByValue returns same row; getByValue returns null for unknown challenge; getByValue returns null for expired challenge (create with expires_at in past, or mock time); deleteByValue removes row; create enforces unique challenge (duplicate insert fails or is handled).
+- [x] **Task 5: Tests** (AC: all)
+  - [x] Unit tests for challenge service: create then getByValue returns same row; getByValue returns null for unknown challenge; getByValue returns null for expired challenge (create with expires_at in past, or mock time); deleteByValue removes row; create enforces unique challenge (duplicate insert fails or is handled).
 
 ---
 
@@ -109,7 +109,7 @@ So that **I can validate registration and authentication responses** in Epic 9.2
 - Tests for create, getByValue (hit and miss), expired challenge not returned, delete, unique constraint. Use test DB or in-memory SQLite if project supports it; otherwise mock db. No WebAuthn or Keycloak.
 
 ### Story Completion Status
-- **Status:** ready-for-dev
+- **Status:** review
 - **Completion note:** Challenge storage for WebAuthn: Drizzle schema, 5-min TTL, create/get/delete and on-read expiry handling. Foundation for 9.2–9.5 and Epic 10 passkey endpoints.
 
 ---
@@ -118,10 +118,26 @@ So that **I can validate registration and authentication responses** in Epic 9.2
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.5
 
 ### Debug Log References
 
+- Test DB required manual migration: `bun run db:test:migrate` was broken; fixed script to use `export $(grep -v '^#' .env | xargs) && DATABASE_URL=$DATABASE_URL_TEST drizzle-kit migrate`
+
 ### Completion Notes List
 
+- Schema already implemented in `src/lib/server/db/schema.ts`: `challenges` table with UUID id, nullable userId, unique challenge text, type, expiresAt (timestamptz), createdAt with `idx_challenges_expires_at` index
+- Challenge service implemented in `src/lib/server/challenges.ts`: `createChallenge()` with 5-min TTL, `getChallengeByValue()` with expiry filter and on-read cleanup, `deleteChallenge()`, `deleteChallengeByValue()`
+- Migration generated in `drizzle/0000_brown_donald_blake.sql` includes challenges table, unique constraint, and expires_at index
+- Fixed `src/lib/server/db/test-utils.ts` to use drizzle transaction pattern instead of deprecated reserve() API
+- 10 unit tests in `challenges.spec.ts`: create returns row, 5-min TTL verified, null userId allowed, unique constraint enforced, getByValue hit/miss, expired cleanup, delete by id/value, graceful handling of non-existent
+- All 292 server tests pass (10 new + 282 existing)
+
 ### File List
+
+- `src/lib/server/db/schema.ts` (modified - challenges table added)
+- `src/lib/server/challenges.ts` (new - challenge service)
+- `src/lib/server/challenges.spec.ts` (new - 10 unit tests)
+- `src/lib/server/db/test-utils.ts` (modified - fixed drizzle transaction pattern)
+- `drizzle/0000_brown_donald_blake.sql` (existing - includes challenges table)
+- `package.json` (modified - fixed db:test:migrate script)

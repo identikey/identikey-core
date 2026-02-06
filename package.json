@@ -20,7 +20,7 @@
 		"test:e2e": "playwright test",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
-		"db:test:migrate": "bun -e \"process.env.DATABASE_URL = process.env.DATABASE_URL_TEST; require('child_process').execSync('bunx drizzle-kit migrate', {stdio: 'inherit'})\"",
+		"db:test:migrate": "export $(grep -v '^#' .env | xargs) && DATABASE_URL=$DATABASE_URL_TEST drizzle-kit migrate",
 		"db:studio": "drizzle-kit studio",
 		"storybook": "storybook dev -p 6006",
 		"build-storybook": "storybook build",
