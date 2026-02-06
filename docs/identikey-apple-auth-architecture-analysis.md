@@ -268,7 +268,7 @@ Keycloak Admin API is for **management**, not authentication. It cannot issue us
 │ IDENTIKEY (New Responsibilities)                                │
 ├─────────────────────────────────────────────────────────────────┤
 │ JWT Signing & Validation                                        │
-│ ├── Generate/rotate signing keys (ES256)                        │
+│ ├── Generate/rotate signing keys (EdDSA Ed25519)                 │
 │ ├── Publish JWKS at /.well-known/jwks.json                      │
 │ ├── Sign access_token, refresh_token, id_token                  │
 │ └── Token introspection endpoint                                │
@@ -582,7 +582,7 @@ Apple Sign In returns an identity token (JWT) with:
 | `POST /introspect` | Token validation for resource servers |
 
 **Key Management**:
-- Generate EC key pair (ES256 recommended)
+- Generate EdDSA Ed25519 key pair
 - Store private key in secure vault (AWS Secrets Manager, HashiCorp Vault)
 - Implement key rotation (add new key, sign with new, remove old after expiry)
 - Cache Apple JWKS with TTL

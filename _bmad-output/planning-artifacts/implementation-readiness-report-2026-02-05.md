@@ -86,7 +86,7 @@ documentsIncluded:
 - Keycloak 26.x, realm `identikey`
 - Bun/Node.js/TypeScript runtime
 - PostgreSQL database
-- ES256 signing algorithm
+- EdDSA Ed25519 signing algorithm
 
 ### PRD Completeness Assessment
 - **Clarity:** Excellent — well-numbered, grouped FRs

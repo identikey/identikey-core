@@ -158,7 +158,7 @@ Mobile App → IdentiKey Core → Keycloak (user store)
 - **Framework:** SvelteKit (API routes + future web UI)
 - **Language:** TypeScript
 - **Database:** PostgreSQL + Drizzle ORM
-- **JWT:** ES256 (ECDSA P-256)
+- **JWT:** EdDSA with Ed25519 (~128-bit security)
 - **WebAuthn:** `@simplewebauthn/server`
 - **Keycloak:** Admin API for user storage
 

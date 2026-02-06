@@ -114,19 +114,19 @@ App management, guilds/roles, and sessions/events are in backlog. They will be p
 #### 7.1: Key Generation & Storage
 
 As a **developer**,
-I want **to generate and store ES256 signing keys**,
+I want **to generate and store EdDSA Ed25519 signing keys**,
 So that **IdentiKey can sign JWTs**.
 
 **Acceptance Criteria:**
-- Generate ECDSA P-256 key pair
+- Generate EdDSA Ed25519 key pair
 - Store private key in environment or secret manager
 - Load key on startup, validate format
 - Export public key in JWK format
 
 **Technical Notes:**
-- Use Node `crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' })`
+- Use `jose.generateKeyPair('EdDSA', { crv: 'Ed25519' })`
 - Or use `jose` library's `generateKeyPair`
-- Private key as PEM in `IDENTIKEY_SIGNING_KEY` env var
+- Private key as JWK JSON in `IDENTIKEY_SIGNING_KEY` env var
 
 ---
 
@@ -138,7 +138,7 @@ So that **I can validate access tokens**.
 
 **Acceptance Criteria:**
 - `GET /.well-known/jwks.json` returns JWKS
-- Keys include `kid`, `kty`, `crv`, `x`, `y`, `use: "sig"`, `alg: "ES256"`
+- Keys include `kid`, `kty: "OKP"`, `crv: "Ed25519"`, `x`, `use: "sig"`, `alg: "EdDSA"`
 - Response is cacheable (appropriate headers)
 
 **Technical Notes:**
@@ -346,7 +346,7 @@ So that **my device can create a credential**.
 **Acceptance Criteria:**
 - Generate random challenge (32 bytes)
 - Return: `challenge`, `rp` (id, name), `user` (id, name, displayName)
-- Include: `pubKeyCredParams` (ES256, RS256)
+- Include: `pubKeyCredParams` (EdDSA, ES256, RS256)
 - Include: `authenticatorSelection` (platform, residentKey)
 - Store challenge in DB with 5-minute TTL
 

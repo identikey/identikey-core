@@ -1,6 +1,6 @@
 # Story 7.1: Key Generation & Storage
 
-**Status:** ready-for-dev  
+**Status:** review
 **Epic:** 7 - JWT Infrastructure  
 **FR Coverage:** FR120, FR121  
 **Story Key:** 7-1-key-generation-storage
@@ -10,22 +10,22 @@
 ## Story
 
 As a **developer**,  
-I want **to generate and store ES256 signing keys**,  
+I want **to generate and store EdDSA Ed25519 signing keys**,  
 So that **IdentiKey can sign JWTs**.
 
 ---
 
 ## Acceptance Criteria
 
-### AC1: Generate ECDSA P-256 Key Pair
-- [ ] Function `generateSigningKeyPair()` creates a valid ECDSA P-256 key pair
-- [ ] Private key is exportable in PEM format
+### AC1: Generate EdDSA Ed25519 Key Pair
+- [ ] Function `generateSigningKeyPair()` creates a valid EdDSA Ed25519 key pair
+- [ ] Private key is exportable in JWK format
 - [ ] Public key is exportable in JWK format
 - [ ] Key ID (kid) is computed as SHA-256 thumbprint of public key
 
 ### AC2: Load Key from Environment
-- [ ] `loadSigningKey()` reads private key PEM from `IDENTIKEY_SIGNING_KEY` env var
-- [ ] Function validates the key format (must be EC P-256)
+- [ ] `loadSigningKey()` reads private key JWK from `IDENTIKEY_SIGNING_KEY` env var
+- [ ] Function validates the key format (must be OKP Ed25519)
 - [ ] Throws typed error `InvalidSigningKeyError` if key is malformed or wrong curve
 - [ ] Returns structured key object with `privateKey`, `publicKey`, `kid`
 
@@ -43,35 +43,35 @@ So that **IdentiKey can sign JWTs**.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Add jose dependency** (AC: all)
-  - [ ] `bun add jose`
-  - [ ] Verify no version conflicts with existing deps
+- [x] **Task 1: Add jose dependency** (AC: all)
+  - [x] `bun add jose`
+  - [x] Verify no version conflicts with existing deps
 
-- [ ] **Task 2: Create auth/jwt directory structure** (AC: all)
-  - [ ] Create `src/lib/auth/jwt/` folder
-  - [ ] Create `keys.ts` for key management
-  - [ ] Create `index.ts` for exports
+- [x] **Task 2: Create auth/jwt directory structure** (AC: all)
+  - [x] Create `src/lib/auth/jwt/` folder
+  - [x] Create `keys.ts` for key management
+  - [x] Create `index.ts` for exports
 
-- [ ] **Task 3: Implement key generation** (AC: #1)
-  - [ ] Implement `generateSigningKeyPair()` using `jose.generateKeyPair`
-  - [ ] Implement `computeKeyId()` using SHA-256 thumbprint
-  - [ ] Write unit tests in `keys.spec.ts`
+- [x] **Task 3: Implement key generation** (AC: #1)
+  - [x] Implement `generateSigningKeyPair()` using `jose.generateKeyPair`
+  - [x] Implement `computeKeyId()` using SHA-256 thumbprint
+  - [x] Write unit tests in `keys.spec.ts`
 
-- [ ] **Task 4: Implement key loading from env** (AC: #2)
-  - [ ] Implement `loadSigningKey()` to read from `IDENTIKEY_SIGNING_KEY`
-  - [ ] Parse PEM, validate curve is P-256
-  - [ ] Create `InvalidSigningKeyError` in `src/lib/auth/errors.ts`
-  - [ ] Write unit tests with valid/invalid key fixtures
+- [x] **Task 4: Implement key loading from env** (AC: #2)
+  - [x] Implement `loadSigningKey()` to read from `IDENTIKEY_SIGNING_KEY`
+  - [x] Parse JWK JSON, validate curve is Ed25519
+  - [x] Create `InvalidSigningKeyError` in `src/lib/auth/errors.ts`
+  - [x] Write unit tests with valid/invalid key fixtures
 
-- [ ] **Task 5: Implement JWK export** (AC: #3)
-  - [ ] Implement `getPublicKeyJwk()` using `jose.exportJWK`
-  - [ ] Add required fields: `use: "sig"`, `alg: "ES256"`
-  - [ ] Write unit tests
+- [x] **Task 5: Implement JWK export** (AC: #3)
+  - [x] Implement `getPublicKeyJwk()` using `jose.exportJWK`
+  - [x] Add required fields: `use: "sig"`, `alg: "EdDSA"`
+  - [x] Write unit tests
 
-- [ ] **Task 6: Startup validation** (AC: #4)
-  - [ ] Create initialization function that loads and validates key
-  - [ ] Log success/failure appropriately (use existing pino logger)
-  - [ ] Integration test: app starts with valid key, fails gracefully without
+- [x] **Task 6: Startup validation** (AC: #4)
+  - [x] Create initialization function that loads and validates key
+  - [x] Log success/failure appropriately (use existing pino logger)
+  - [x] Integration test: app starts with valid key, fails gracefully without
 
 ---
 
@@ -81,9 +81,9 @@ So that **IdentiKey can sign JWTs**.
 
 From `docs/architecture.md`:
 
-- **Signing Algorithm:** ES256 (ECDSA with P-256 curve) — **NO EXCEPTIONS**
+- **Signing Algorithm:** EdDSA with Ed25519 curve (~128-bit security) — **NO EXCEPTIONS**
 - **Key ID (kid):** SHA-256 thumbprint of public key JWK
-- **Phase 1 Storage:** Private key as PEM in `IDENTIKEY_SIGNING_KEY` env var
+- **Phase 1 Storage:** Private key as JWK JSON in `IDENTIKEY_SIGNING_KEY` env var
 - **File Location:** `src/lib/auth/jwt/keys.ts`
 
 ### Library Requirements
@@ -93,8 +93,8 @@ From `docs/architecture.md`:
 | `jose` | latest | JWT/JWK operations | Add as new dependency |
 
 **jose API to use:**
-- `generateKeyPair('ES256')` — key generation
-- `importPKCS8(pem, 'ES256')` — import private key from PEM
+- `generateKeyPair('EdDSA', { crv: 'Ed25519' })` — key generation
+- `importJWK(jwk, 'EdDSA')` — import private key from JWK
 - `exportJWK(key)` — export public key as JWK
 - `calculateJwkThumbprint(jwk, 'sha256')` — compute kid
 
@@ -137,19 +137,17 @@ export class InvalidSigningKeyError extends Error {
 
 ```bash
 # Generate a test key (dev only):
-# openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt
+# Generate via: bun run generate-key
 
-IDENTIKEY_SIGNING_KEY="-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg...
------END PRIVATE KEY-----"
+IDENTIKEY_SIGNING_KEY='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","kid":"...","use":"sig","alg":"EdDSA"}'
 ```
 
 ### Security Considerations
 
 - **NEVER log the private key** or any portion of it
 - **DO log** the kid (public key thumbprint) for debugging
-- PEM must be PKCS#8 format (not SEC1)
-- Reject keys with wrong curve (P-384, P-521, etc.)
+- JWK must include `d` (private key) and `x` (public key) fields
+- Reject keys with wrong curve (Ed448, P-256, etc.)
 
 ---
 
@@ -157,7 +155,7 @@ MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg...
 
 - [Source: docs/architecture.md#Key Management] — Phase approach, storage options
 - [Source: docs/architecture.md#Technology Stack] — `jose` library choice
-- [Source: docs/architecture.md#Security Architecture] — ES256, kid computation
+- [Source: docs/architecture.md#Security Architecture] — EdDSA Ed25519, kid computation
 - [Source: docs/epics.md#Story 7.1] — Original story definition
 
 ---
@@ -166,17 +164,27 @@ MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg...
 
 ### Agent Model Used
 
-_To be filled by dev agent_
+Claude Opus 4.6
 
 ### Completion Notes
 
-_To be filled after implementation_
+- Task 1: Added jose@6.1.3 via `bun add jose`. No version conflicts.
+- Task 2: Created `src/lib/auth/jwt/` directory, `keys.ts`, `index.ts`, `errors.ts`, barrel exports.
+- Task 3: Implemented `generateSigningKeyPair()` and `computeKeyId()` using jose EdDSA Ed25519. 7 unit tests passing.
+- Task 4: Implemented `loadSigningKey()` with JWK import, curve validation, and `InvalidSigningKeyError`. Required `{ extractable: true }` for bun WebCrypto compatibility. 6 unit tests passing.
+- Task 5: Implemented `getPublicKeyJwk()` with required JWKS fields (kty, crv, x, kid, use, alg). 3 unit tests passing.
+- Task 6: Created `initializeSigningKey()` in `init.ts` with pino logging and `process.exit(1)` on failure. `getSigningKey()` accessor for singleton. 5 integration tests passing.
+- Added `bun run generate-key` script for key generation.
+- Pre-existing failure in `errors.spec.ts` (stale error code set) unrelated to this story.
 
 ### Files Created/Modified
 
-- [ ] `src/lib/auth/jwt/keys.ts`
-- [ ] `src/lib/auth/jwt/keys.spec.ts`
-- [ ] `src/lib/auth/jwt/index.ts`
-- [ ] `src/lib/auth/errors.ts`
-- [ ] `src/lib/auth/index.ts`
-- [ ] `package.json` (add jose)
+- [x] `src/lib/auth/jwt/keys.ts` — key generation, loading, JWK export
+- [x] `src/lib/auth/jwt/keys.spec.ts` — 16 unit tests
+- [x] `src/lib/auth/jwt/init.ts` — startup validation
+- [x] `src/lib/auth/jwt/init.spec.ts` — 5 integration tests
+- [x] `src/lib/auth/jwt/index.ts` — barrel exports
+- [x] `src/lib/auth/errors.ts` — InvalidSigningKeyError
+- [x] `src/lib/auth/index.ts` — barrel exports
+- [x] `scripts/generate-signing-key.ts` — key generation script
+- [x] `package.json` — added jose dep + generate-key script

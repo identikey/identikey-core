@@ -27,7 +27,7 @@ This architecture enables fully native mobile UX without browser redirects while
 | A token-issuing identity layer | A Keycloak wrapper/proxy |
 | Native mobile auth (passkeys, Apple) | Browser-based OIDC for mobile |
 | User storage via Keycloak Admin API | Keycloak auth flows for mobile |
-| Direct JWT signing (ES256) | Keycloak token exchange (preview features) |
+| Direct JWT signing (EdDSA Ed25519) | Keycloak token exchange (preview features) |
 | Device trust model (master/temp) | Session management via Keycloak |
 
 **Key Insight:** Mobile apps talk to IdentiKey directly. Web apps can still use Keycloak's standard OIDC. Two paths, one user store.
@@ -315,7 +315,7 @@ identikey-core/
 │   │   │
 │   │   ├── auth/                     # NEW: Auth infrastructure
 │   │   │   ├── jwt/
-│   │   │   │   ├── signing.ts        # Token signing (ES256)
+│   │   │   │   ├── signing.ts        # Token signing (EdDSA Ed25519)
 │   │   │   │   ├── verification.ts   # Token verification
 │   │   │   │   ├── jwks.ts           # JWKS generation/serving
 │   │   │   │   └── keys.ts           # Key management
@@ -443,7 +443,7 @@ CREATE INDEX idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
 
 ### Key Management
 
-- **Signing Algorithm:** ES256 (ECDSA with P-256 curve)
+- **Signing Algorithm:** EdDSA with Ed25519 curve (~128-bit security)
 - **Key ID (kid):** SHA-256 thumbprint of public key
 
 **Phased Approach:**

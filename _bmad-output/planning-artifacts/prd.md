@@ -83,7 +83,7 @@ This positions IdentiKey as a true identity platform, not just a Keycloak wrappe
 |--------|--------------|
 | **Apple Verification** | Verify Apple identity tokens, extract claims, handle private relay emails |
 | **Passkey Management** | WebAuthn registration, store credentials, validate assertions |
-| **JWT Issuance** | Sign tokens with ES256, issue access/refresh/id tokens |
+| **JWT Issuance** | Sign tokens with EdDSA (Ed25519), issue access/refresh/id tokens |
 | **JWKS Endpoint** | Publish public keys for token validation |
 | **Token Refresh** | Validate refresh tokens, issue new access tokens |
 | **Device Trust** | Track master vs temporary devices, scope tokens accordingly |
@@ -153,7 +153,7 @@ This positions IdentiKey as a true identity platform, not just a Keycloak wrappe
 
 ### JWT Token Issuance (FR120-130) — NEW
 
-- FR120: Generate ES256 signing key pair
+- FR120: Generate EdDSA Ed25519 signing key pair
 - FR121: Store private key securely (vault or encrypted env)
 - FR122: Publish JWKS at `/.well-known/jwks.json`
 - FR123: Sign access tokens with custom claims (sub, device_id, device_trust)
@@ -247,7 +247,7 @@ This positions IdentiKey as a true identity platform, not just a Keycloak wrappe
 - **Realm:** `identikey` (master reserved for KC admin)
 - **Runtime:** Bun / Node.js / TypeScript
 - **Database:** PostgreSQL (passkeys, devices, tokens)
-- **Signing Algorithm:** ES256 (ECDSA with P-256)
+- **Signing Algorithm:** EdDSA with Ed25519 (~128-bit security)
 
 ---
 

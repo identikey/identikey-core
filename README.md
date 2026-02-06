@@ -18,7 +18,7 @@ IdentiKey Core serves as the **identity layer** for the IdentiKey platform:
 │  ┌─────────────────────────────────────────────────────────────┐│
 │  │ Auth Endpoints: /apple-provision, /google-provision,       ││
 │  │                 /passkey-*, /token/*                        ││
-│  │ JWT Signing: ES256, JWKS, Token Introspection              ││
+│  │ JWT Signing: EdDSA (Ed25519), JWKS, Token Introspection    ││
 │  │ WebAuthn: Passkey Registration & Authentication            ││
 │  │ Device Trust: Master vs Temporary Devices                  ││
 │  └─────────────────────────────────────────────────────────────┘│
@@ -68,9 +68,8 @@ KEYCLOAK_CLIENT_SECRET=your-client-secret
 
 # IdentiKey Token Signing
 IDENTIKEY_ISSUER=https://connect.identikey.io
-IDENTIKEY_SIGNING_KEY_PATH=/path/to/private-key.pem
-# Or use environment variable for the key itself
-IDENTIKEY_SIGNING_KEY=-----BEGIN EC PRIVATE KEY-----...
+# Generate via: bun run generate-key
+IDENTIKEY_SIGNING_KEY='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","kid":"...","use":"sig","alg":"EdDSA"}'
 
 # Bootstrap Verification (Social Login)
 APPLE_SERVICES_ID=ai.morphist.app
