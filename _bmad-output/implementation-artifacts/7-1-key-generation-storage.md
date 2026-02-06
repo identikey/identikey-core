@@ -1,6 +1,6 @@
 # Story 7.1: Key Generation & Storage
 
-**Status:** review
+**Status:** done
 **Epic:** 7 - JWT Infrastructure  
 **FR Coverage:** FR120, FR121  
 **Story Key:** 7-1-key-generation-storage

@@ -51,8 +51,8 @@ development_status:
   epic-2-retrospective: optional
 
   # Epic 3: App Management (4 stories) - FR14-19 — DEPRIORITIZED
-  epic-3: backlog
-  3-1-appservice-core-operations: backlog
+  epic-3: in-progress
+  3-1-appservice-core-operations: ready-for-dev
   3-2-app-mcp-tools: backlog
   3-3-app-cli-commands: backlog
   3-4-app-configuration-updates: backlog
@@ -91,8 +91,8 @@ development_status:
 
   # Epic 7: JWT Infrastructure (5 stories) - FR120-130
   epic-7: in-progress
-  7-1-key-generation-storage: review
-  7-2-jwks-endpoint: backlog
+  7-1-key-generation-storage: done
+  7-2-jwks-endpoint: review
   7-3-token-signing-service: backlog
   7-4-token-verification-service: backlog
   7-5-oidc-discovery-endpoint: backlog
