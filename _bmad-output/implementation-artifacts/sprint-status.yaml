@@ -53,7 +53,7 @@ development_status:
   # Epic 3: App Management (4 stories) - FR14-19 — DEPRIORITIZED
   epic-3: in-progress
   3-1-appservice-core-operations: ready-for-dev
-  3-2-app-mcp-tools: backlog
+  3-2-app-mcp-tools: ready-for-dev
   3-3-app-cli-commands: backlog
   3-4-app-configuration-updates: backlog
   epic-3-retrospective: optional
@@ -93,7 +93,7 @@ development_status:
   epic-7: in-progress
   7-1-key-generation-storage: done
   7-2-jwks-endpoint: done
-  7-3-token-signing-service: backlog
+  7-3-token-signing-service: ready-for-dev
   7-4-token-verification-service: backlog
   7-5-oidc-discovery-endpoint: backlog
   epic-7-retrospective: optional
