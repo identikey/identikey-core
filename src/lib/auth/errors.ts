@@ -1,3 +1,13 @@
+export class ProviderJwksError extends Error {
+	constructor(
+		message: string,
+		public readonly cause?: Error
+	) {
+		super(message);
+		this.name = 'ProviderJwksError';
+	}
+}
+
 export class InvalidSigningKeyError extends Error {
 	constructor(
 		message: string,

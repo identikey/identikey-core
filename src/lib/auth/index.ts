@@ -1,4 +1,4 @@
-export { InvalidSigningKeyError } from './errors';
+export { InvalidSigningKeyError, ProviderJwksError } from './errors';
 export {
 	generateSigningKeyPair,
 	computeKeyId,
@@ -9,3 +9,11 @@ export {
 	getSigningKey
 } from './jwt';
 export type { SigningKeyPair, SigningKeyJwk } from './jwt';
+export {
+	getAppleJwkSet,
+	getGoogleJwkSet,
+	getProviderJwkSet,
+	APPLE_JWKS_URI,
+	GOOGLE_JWKS_URI,
+} from './provider-jwks';
+export type { JwkSetKeyFunction } from './provider-jwks';

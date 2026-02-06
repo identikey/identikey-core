@@ -1,6 +1,6 @@
 # Story 7.5: OIDC Discovery Endpoint
 
-**Status:** review
+**Status:** done
 **Epic:** 7 - JWT Infrastructure  
 **FR Coverage:** FR129  
 **Story Key:** 7-5-oidc-discovery-endpoint
@@ -82,7 +82,7 @@ So that **I can auto-configure token validation** (JWKS URI, introspection, etc.
 - Call GET /.well-known/openid-configuration (e.g. fetch in test or SvelteKit test utils). Assert JSON shape and Cache-Control. Mock or omit env to test request-origin fallback if implemented.
 
 ### Story Completion Status
-- **Status:** review
+- **Status:** done
 - **Completion note:** Ultimate context engine analysis completed. Final story in Epic 7 (JWT Infrastructure). Enables clients to discover JWKS and endpoints for token validation.
 
 ---
