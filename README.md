@@ -1,11 +1,52 @@
-# Keycloak Commander
+# IdentiKey Core
 
-A multi-interface administration tool for Keycloak, providing CLI, MCP (Model Context Protocol), and Web UI access to manage users, authentication flows, roles, and more.
+The identity platform core for IdentiKey — providing native mobile authentication, JWT token issuance, passkey management, and Keycloak integration for user storage.
+
+## Architecture Overview
+
+IdentiKey Core serves as the **identity layer** for the IdentiKey platform:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Mobile/Native Apps                          │
+│                 (Apple Sign In, Passkeys)                       │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    IdentiKey Core                               │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ Auth Endpoints: /apple-provision, /passkey-*, /token/*     ││
+│  │ JWT Signing: ES256, JWKS, Token Introspection              ││
+│  │ WebAuthn: Passkey Registration & Authentication            ││
+│  │ Device Trust: Master vs Temporary Devices                  ││
+│  └─────────────────────────────────────────────────────────────┘│
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ Admin Layer (CLI + MCP)                                    ││
+│  │ User management, debugging, configuration                  ││
+│  └─────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   Keycloak (User Store)                         │
+│  User CRUD, Groups/Guilds, Roles, Standard OIDC for Web Apps   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key Design Decisions
+
+1. **IdentiKey issues its own JWTs** for mobile/native auth (no Keycloak preview features needed)
+2. **Apple Sign In as bootstrap** — one-time identity verification, then passkey enrollment
+3. **Passkeys for ongoing auth** — FIDO2/WebAuthn, device-bound credentials
+4. **Keycloak for user storage** — Admin API for CRUD, standard OIDC still works for web apps
+5. **Device trust model** — Master devices (with passkeys) vs temporary devices (short-lived tokens)
 
 ## Prerequisites
 
 - [Bun](https://bun.sh/) runtime
 - Access to a Keycloak instance with admin credentials
+- PostgreSQL database (for passkeys, devices, tokens)
 
 ## Installation
 
@@ -15,35 +56,43 @@ bun install
 
 ## Configuration
 
-Create a `.env` file with your Keycloak connection details:
+Create a `.env` file:
 
 ```env
-KEYCLOAK_BASE_URL=http://localhost:8080
-KEYCLOAK_REALM=master
+# Keycloak Admin API
+KEYCLOAK_URL=https://auth.identikey.io
+KEYCLOAK_REALM=identikey
 KEYCLOAK_CLIENT_ID=admin-cli
 KEYCLOAK_CLIENT_SECRET=your-client-secret
+
+# IdentiKey Token Signing
+IDENTIKEY_ISSUER=https://connect.identikey.io
+IDENTIKEY_SIGNING_KEY_PATH=/path/to/private-key.pem
+# Or use environment variable for the key itself
+IDENTIKEY_SIGNING_KEY=-----BEGIN EC PRIVATE KEY-----...
+
+# Apple Sign In Verification
+APPLE_SERVICES_ID=ai.morphist.app
+
+# Database
+DATABASE_URL=postgresql://user:pass@localhost:5432/identikey
+
+LOG_LEVEL=info
 ```
 
-## CLI Usage
+## Admin CLI
 
-### Run via npm script
+The CLI provides administrative access to IdentiKey:
 
 ```bash
+# Run via npm script
 bun run cli users list
 bun run cli users --help
-```
 
-### Install globally as `kc`
-
-Link the package to make `kc` available system-wide:
-
-```bash
+# Or install globally as `kc`
 bun link
-```
 
-Then use from anywhere:
-
-```bash
+# User management
 kc users list
 kc users list --search "john"
 kc users get <user-id>
@@ -52,17 +101,13 @@ kc users update <user-id> --firstName John
 kc users delete <user-id>
 kc users reset-password <user-id> --password "newpass" --temporary
 kc users credentials <user-id>
-kc users credentials <user-id> --delete <credential-id>
+
+# Auth flow inspection (for debugging)
+kc auth-flows list
+kc auth-flows executions <flow-alias>
 ```
 
-### Output formats
-
-All list/get commands support `--json` for machine-readable output:
-
-```bash
-kc users list --json
-kc users get <user-id> --json
-```
+All commands support `--json` for machine-readable output.
 
 ## MCP Server
 
@@ -77,53 +122,85 @@ Add to your MCP client config (e.g., Cursor):
 ```json
 {
 	"mcpServers": {
-		"keycloak-commander": {
+		"identikey": {
 			"command": "bun",
 			"args": ["run", "mcp"],
-			"cwd": "/path/to/keycloak-commander"
+			"cwd": "/path/to/identikey-core"
 		}
 	}
 }
 ```
 
 Available MCP tools:
+- `list_users`, `get_user`, `create_user`, `update_user`, `delete_user`
+- `reset_user_password`, `get_user_credentials`, `delete_user_credential`
+- `list_login_flows`, `get_login_flow`, `list_flow_executions`
 
-- `list_users` - List users with optional search/pagination
-- `get_user` - Get user details by ID
-- `create_user` - Create a new user
-- `update_user` - Update user attributes
-- `delete_user` - Delete a user
-- `reset_user_password` - Set user password
-- `get_user_credentials` - List user credentials
-- `delete_user_credential` - Remove a credential
+## Auth Endpoints (Coming Soon)
 
-## Web UI
+Native mobile authentication endpoints:
 
-```bash
-bun run dev
-```
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /apple-provision` | Verify Apple token, create user, return WebAuthn challenge |
+| `POST /passkey-register` | Store passkey, issue tokens |
+| `POST /passkey-auth/start` | Return authentication challenge |
+| `POST /passkey-auth/finish` | Verify assertion, issue tokens |
+| `POST /token/refresh` | Refresh access token |
+| `POST /device-authorize` | QR-based temporary device auth |
+| `GET /.well-known/jwks.json` | Public keys for token validation |
+| `GET /.well-known/openid-configuration` | OIDC discovery |
+| `POST /introspect` | Token validation for resource servers |
 
 ## Development
 
-### Testing
-
 ```bash
-bun run test:unit      # Unit tests
-bun run test:e2e       # E2E tests
-bun run test           # All tests
+bun run dev          # SvelteKit dev server
+bun run test:unit    # Unit tests
+bun run test:e2e     # E2E tests
+bun run test         # All tests
+bun run lint         # Linting
+bun run format       # Formatting
 ```
 
-### Linting & Formatting
+## Project Structure
 
-```bash
-bun run lint
-bun run format
+```
+identikey-core/
+├── src/
+│   ├── lib/
+│   │   ├── keycloak/           # Keycloak Admin API wrapper
+│   │   │   ├── client.ts       # Authenticated client
+│   │   │   ├── config.ts       # Configuration
+│   │   │   ├── errors.ts       # Error types
+│   │   │   ├── services/       # Domain services (users, auth-flows)
+│   │   │   └── mappers/        # Keycloak → IdentiKey type mapping
+│   │   ├── auth/               # (New) Auth endpoints
+│   │   │   ├── jwt.ts          # Token signing/verification
+│   │   │   ├── apple.ts        # Apple token verification
+│   │   │   ├── webauthn.ts     # Passkey registration/auth
+│   │   │   └── device.ts       # Device trust management
+│   │   └── server/
+│   │       ├── auth.ts
+│   │       └── db/
+│   ├── mcp/                    # MCP server for AI agents
+│   ├── cli/                    # CLI commands
+│   └── routes/                 # SvelteKit routes (future web UI)
+├── docs/
+│   ├── prd.md
+│   ├── architecture.md
+│   ├── epics.md
+│   └── identikey-apple-auth-architecture-analysis.md
+└── ...
 ```
 
-## Architecture
+## Documentation
 
-- `src/lib/keycloak/` - Core Keycloak client, services, types, and error handling
-- `src/cli/` - CLI commands using citty
-- `src/mcp/` - MCP server and tools
-- `src/routes/` - SvelteKit web UI
-- `docs/` - Project documentation and sprint artifacts
+- [PRD](docs/prd.md) — Product requirements
+- [Architecture](docs/architecture.md) — Technical design
+- [Epics](docs/epics.md) — Implementation breakdown
+- [Apple Auth Analysis](docs/identikey-apple-auth-architecture-analysis.md) — Native auth architecture
+
+## License
+
+Private — IdentiKey Platform

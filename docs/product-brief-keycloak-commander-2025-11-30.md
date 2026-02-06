@@ -1,18 +1,24 @@
-# Product Brief: keycloak-commander
+# Product Brief: IdentiKey Core
 
-**Date:** 2025-11-30
+**Date:** 2025-11-30 (Updated: 2026-02-05)
 **Author:** Master Dorje
-**Context:** Internal Developer Tooling → IdentiKey Platform Admin Interface
+**Context:** Identity Platform Backend
 
 ---
 
 ## Executive Summary
 
-_keycloak-commander_ is **the administrative interface for IdentiKey's identity platform**. While powered by Keycloak under the hood, users interact with IdentiKey concepts—not Keycloak terminology. The system abstracts the underlying IAM complexity into a clean, purpose-built admin experience.
+**IdentiKey Core** is the identity platform backend for IdentiKey. Originally scoped as a Keycloak admin wrapper, it has evolved into a **full identity layer** that:
 
-The architecture is **MCP-first**: a local MCP server enables AI agents (in Cursor, etc.) to directly execute admin operations. A CLI provides human-accessible testing and debugging. Future phases add a web UI for self-service administration by guild/group admins.
+1. **Issues its own JWTs** for native mobile authentication
+2. **Manages passkeys** (WebAuthn/FIDO2) as the primary credential
+3. **Verifies Apple Sign In** as a bootstrap mechanism
+4. **Uses Keycloak** for user storage and standard OIDC (web apps)
+5. **Provides admin tooling** via CLI and MCP
 
-**Key Insight:** This isn't "a Keycloak admin tool"—it's THE admin app for IdentiKey. Users will never know they're interacting with Keycloak. The interface speaks IdentiKey's language and grows into the full administrative experience for the platform.
+### Key Insight
+
+Mobile apps can't use browser-based OIDC redirects elegantly. Apple Sign In requires native SDK. Keycloak's token exchange for external IDPs requires preview features. Solution: **IdentiKey becomes the token issuer** for mobile, using Keycloak only as a user store.
 
 ---
 
@@ -20,194 +26,216 @@ The architecture is **MCP-first**: a local MCP server enables AI agents (in Curs
 
 ### Problem Statement
 
-IdentiKey needs a dedicated administrative interface that:
+IdentiKey needs to support native mobile authentication with:
 
-- Speaks IdentiKey's language, not Keycloak's
-- Enables AI-assisted debugging of complex auth flows (WebAuthn, conditional authentication)
-- Provides self-service capabilities for guild admins without exposing IAM complexity
-- Supports developer workflows (MCP for agents, CLI for testing)
+- Apple Sign In (required for iOS App Store)
+- No browser redirects or WebViews
+- Passkey-based ongoing auth (phishing-resistant)
+- Device trust levels (master vs temporary)
+- Foundation for guardian-based recovery (future)
 
-The raw Keycloak admin console is click-heavy, Keycloak-terminology-heavy, and impossible for AI agents to assist with effectively.
+Keycloak alone can't provide this without preview features or custom SPIs.
 
-### Proposed Solution
+### Solution
 
-**IdentiKey Admin** — A purpose-built interface that abstracts Keycloak into IdentiKey concepts:
+**Hybrid Architecture:**
 
-| Keycloak Term       | IdentiKey Term                |
-| ------------------- | ----------------------------- |
-| Realm               | _(hidden — always identikey)_ |
-| Client              | App                           |
-| Group               | Guild                         |
-| Authentication Flow | Login Flow                    |
-| Protocol Mapper     | Token Claims                  |
+```
+Mobile App → IdentiKey Core → Keycloak (user store)
+                ↓
+         Issues JWTs directly
+```
 
-Three interfaces expose these abstractions:
-
-1. **MCP Server** (primary) — AI agents call IdentiKey operations directly. Enables conversational debugging: "show me the current login flow," "what failed for user X," "list all apps."
-
-2. **CLI** — Human-accessible commands for testing each operation, debugging, and quick one-off tasks.
-
-3. **Web UI** (future) — SvelteKit dashboard for visual administration. Self-service for guild admins to manage their own users without seeing Keycloak complexity.
+- Apple Sign In verifies identity once
+- Passkey enrolled immediately for ongoing auth
+- IdentiKey signs tokens with its own keys
+- Keycloak stores users, groups, roles
+- Standard OIDC via Keycloak still works for web apps
 
 ---
 
 ## Target Users
 
-### Primary User (Now)
+### Primary Users (Now)
 
-**Master Dorje** — Building and debugging IdentiKey's authentication system. Uses MCP via Cursor agents to investigate issues, configure flows, and manage the Keycloak instance.
+**Master Dorje** — Building the IdentiKey platform. Uses:
+- CLI + MCP for debugging and user management
+- Auth endpoints for Morphist mobile app
+
+**Morphist Mobile App** — First client application. Uses:
+- Apple Sign In → Passkey flow
+- IdentiKey-issued JWTs for API access
 
 ### Future Users
 
-**Guild/Group Administrators** — Non-technical admins who manage users within their organizational unit. They'll use the web UI to:
+**Guild Administrators** — Will use web UI for delegated user management.
 
-- Add/remove users in their group
-- Reset passwords, manage credentials
-- View their group's user list
-- Assign group-specific roles
-
-**Permissions Model:** Scoped access—admins can only see and manage what they have permissions for. Global user search may be available for adding users, but administration is locked to your own group/role scope.
+**Resource Servers** — Will validate IdentiKey JWTs via JWKS.
 
 ---
 
-## IdentiKey Architecture Context
+## Architecture Overview
 
-- **Dedicated `identikey` Realm** — All IdentiKey users, apps, guilds live here (master realm is reserved for Keycloak administration only)
-- **Multi-tenant via Clients** — Multiple applications connect via OIDC
-- **Shared User Database** — Users can authenticate to any client they're authorized for
-- **Groups = "Guilds"** — Organizational units with delegated admin capabilities
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     MOBILE APPS                                  │
+│  • Apple Sign In SDK       • Native Passkeys                    │
+│  • Direct HTTP calls       • IdentiKey JWTs                     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    IDENTIKEY CORE                                │
+├─────────────────────────────────────────────────────────────────┤
+│  Auth Endpoints:                                                 │
+│  • POST /apple-provision    → Verify Apple, create user         │
+│  • POST /passkey-register   → Enroll passkey, issue tokens      │
+│  • POST /passkey-auth/*     → Authenticate with passkey         │
+│  • POST /token/refresh      → Refresh access token              │
+│  • GET /.well-known/jwks    → Public keys for validation        │
+│                                                                  │
+│  Admin Layer:                                                    │
+│  • CLI (kc users, kc auth-flows)                                │
+│  • MCP Server (AI agents)                                       │
+│                                                                  │
+│  Data (PostgreSQL):                                             │
+│  • Passkeys, Devices, Refresh Tokens                            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       KEYCLOAK                                   │
+│  • User storage (Admin API)    • Groups/Guilds                  │
+│  • Roles & Permissions         • Standard OIDC (web apps)       │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## MVP Scope — Core Features
+## Scope
 
-### Tier 1: Essential (MCP + CLI)
+### Phase 1: Admin Tooling ✅ Complete
 
-| Domain         | Operations                                                                                                   |
-| -------------- | ------------------------------------------------------------------------------------------------------------ |
-| **Auth Flows** | List flows, get flow details, list executions, add/remove/reorder executions, copy flow, set flow as default |
-| **Users**      | List, search, get details, create, update, delete, reset password, get credentials, delete credentials       |
-| **Clients**    | List, get details, create, update, get client secret, regenerate secret                                      |
-| **Groups**     | List, get details, create, update, delete, list members, add/remove members                                  |
-| **Roles**      | List realm roles, list client roles, assign/unassign roles to users/groups                                   |
-| **Sessions**   | List user sessions, force logout user, force logout all                                                      |
+| Feature | Status |
+|---------|--------|
+| Keycloak connection, config, errors | ✅ Done |
+| User CRUD (list, get, create, update, delete) | ✅ Done |
+| Password reset, credential management | ✅ Done |
+| Auth flow inspection | ✅ Done |
+| MCP server for AI agents | ✅ Done |
+| CLI for human testing | ✅ Done |
 
-### Tier 1.5: High Priority (Enable Events First!)
+### Phase 2: Native Mobile Auth (Current)
 
-| Domain           | Operations                       | Why                                                      |
-| ---------------- | -------------------------------- | -------------------------------------------------------- |
-| **Events/Audit** | Query login events, admin events | Debug auth failures, see "why did login fail for user X" |
+| Feature | Status |
+|---------|--------|
+| JWT signing infrastructure | 🔲 New |
+| JWKS + OIDC discovery endpoints | 🔲 New |
+| Apple token verification | 🔲 New |
+| Passkey registration (WebAuthn) | 🔲 New |
+| Passkey authentication | 🔲 New |
+| Auth REST endpoints | 🔲 New |
+| Device trust model | 🔲 New |
+| Token refresh + revocation | 🔲 New |
 
-> ⚠️ **Action Required:** Enable event logging in Keycloak (Realm Settings → Events → Save events: ON). This unlocks conversational debugging like "show me failed logins for user X in the last hour."
+### Phase 3: Production Hardening (Future)
 
-### Tier 2: Valuable Additions
+- Key rotation
+- Temporary device authorization (QR flow)
+- Recovery flows (Apple re-verification, email magic link)
+- Security audit
 
-| **Identity Providers** | List, create, update, delete IDPs | Add social logins, SAML federation |
-| **Protocol Mappers** | List, create, update mappers per client | Control what claims appear in tokens |
-| **Client Scopes** | Manage scopes, assign to clients | OAuth scope management |
-| **Required Actions** | List, configure (verify email, update password, etc.) | Onboarding flows |
+### Phase 4: Web UI (Future)
 
-### Tier 3: Nice-to-Have
-
-| Domain              | Operations                            | Why                                    |
-| ------------------- | ------------------------------------- | -------------------------------------- |
-| **Realm Settings**  | Get/update realm config               | Adjust timeouts, token lifetimes, etc. |
-| **Brute Force**     | Check blocked users/IPs, clear blocks | Security debugging                     |
-| **User Federation** | Manage LDAP/AD connections            | If external user sources needed        |
-| **Credentials**     | Password policies, WebAuthn config    | Credential management at realm level   |
+- SvelteKit admin dashboard
+- Delegated administration for guild admins
 
 ---
 
 ## Technical Preferences
 
-- **Framework:** SvelteKit (scaffolded)
-- **MCP:** Local MCP server (Node/TypeScript)
-- **CLI:** TypeScript, potentially using a framework like Commander.js or similar
-- **Target:** Keycloak Admin REST API
-- **Realm:** Always `identikey` (master realm reserved for Keycloak admin operations only)
+- **Runtime:** Bun
+- **Framework:** SvelteKit (API routes + future web UI)
+- **Language:** TypeScript
+- **Database:** PostgreSQL + Drizzle ORM
+- **JWT:** ES256 (ECDSA P-256)
+- **WebAuthn:** `@simplewebauthn/server`
+- **Keycloak:** Admin API for user storage
 
-### Architecture Pattern
+### IdentiKey Terminology
 
-```
-┌─────────────────────────────────────────────────────┐
-│                  Keycloak Admin API                 │
-└─────────────────────────────────────────────────────┘
-                          ▲
-                          │
-┌─────────────────────────────────────────────────────┐
-│              Core Service Layer                     │
-│  (TypeScript classes encapsulating API operations)  │
-└─────────────────────────────────────────────────────┘
-          ▲                ▲                ▲
-          │                │                │
-    ┌─────┴─────┐    ┌─────┴─────┐    ┌─────┴─────┐
-    │ MCP Server│    │    CLI    │    │  Web UI   │
-    │  (Agent)  │    │  (Human)  │    │ (SvelteKit)│
-    └───────────┘    └───────────┘    └───────────┘
-```
-
----
-
-## Out of Scope (MVP)
-
-- Realm creation/deletion (using existing master realm)
-- Full import/export functionality
-- Multi-realm support
-- High-availability / clustering concerns
-- Keycloak deployment/operations (it's already deployed)
-
----
-
-## Keycloak Features Worth Investigating
-
-Given your multi-tenant shared-user-database setup, these Keycloak features might be clutch:
-
-### Token & Claims
-
-- **Group Membership Mappers** — Include `groups` claim in tokens → apps know which guilds user belongs to
-- **Client Scopes** — Control which claims each client receives
-- **Offline Tokens** — Long-lived refresh tokens for apps that need them
-
-### User Organization
-
-- **Group Hierarchies** — Nested groups (parent guild → sub-guilds)
-- **Default Groups** — Auto-assign new users to specific groups on registration
-- **Auto-Group-on-Login** — Custom authenticator or first-broker-login flow to add user to group based on which client they're authenticating through (more advanced)
-
-### Security & Policy
-
-- **Fine-Grained Authorization (UMA/Policies)** — Complex permission models beyond basic roles
-- **Client Policies** — Enforce security standards (require PKCE, etc.) across all OIDC clients
-
-### Self-Service
-
-- **Account Console Theming** — Users self-manage credentials, MFA, sessions via Keycloak's built-in account UI
-
-> **Clarification on Mappers vs Auto-Assignment:**
->
-> - **Mappers** = outbound, tell the app about the user (token includes group info)
-> - **Auto-assignment** = inbound, put user in group on registration/login (requires flow customization or API call)
+| Keycloak Term | IdentiKey Term |
+|---------------|----------------|
+| Realm | _(hidden — always identikey)_ |
+| Client | App |
+| Group | Guild |
+| Authentication Flow | Login Flow |
 
 ---
 
 ## Success Metrics
 
-- **MCP works locally** — Agent can list users, describe auth flows, make changes
-- **CLI covers Tier 1 operations** — Every MCP operation is testable via CLI
-- **Auth flow debugging is conversational** — Can ask agent "why is WebAuthn failing" and get actionable answers
-- **Foundation for web UI** — Service layer is clean enough to expose via SvelteKit routes
+### Phase 1 ✅
+- [x] CLI can list/create/update users
+- [x] MCP tools work in Cursor
+- [x] Auth flows can be inspected
+
+### Phase 2 (Target)
+- [ ] Morphist app can Sign In with Apple → Passkey → Get tokens
+- [ ] Tokens validate via JWKS
+- [ ] Device trust reflected in token claims
+- [ ] Refresh flow works
+
+### Phase 3 (Target)
+- [ ] Keys can be rotated without downtime
+- [ ] Temporary device authorization works
+- [ ] At least one recovery flow implemented
+
+---
+
+## Difficulty Assessment
+
+| Epic | Difficulty | Estimate |
+|------|------------|----------|
+| JWT Infrastructure | Medium | 2-3 days |
+| Apple Verification | Easy | 1 day |
+| Passkey Management | Medium-Hard | 4-5 days |
+| Auth Endpoints | Medium | 2-3 days |
+| Device Trust | Medium | 2-3 days |
+| Token Refresh | Medium | 2 days |
+
+**Total:** ~13-17 days of focused work
+
+This is achievable bc:
+1. Good libraries exist (`jose`, `@simplewebauthn/server`)
+2. Keycloak user storage layer already works
+3. Architecture is well-documented
+4. Incremental — each epic delivers testable value
+
+---
+
+## Out of Scope (Current)
+
+- Multi-realm support
+- Guardian-based recovery (future phase)
+- Cross-platform passkey sync (platform limitation)
+- Keycloak deployment/operations
+- Web UI (future phase)
 
 ---
 
 ## Document Status
 
-**Status:** ✅ Approved
-**Approved By:** Master Dorje
-**Approved Date:** 2025-11-30
+**Status:** ✅ Updated
+**Updated By:** AI Assistant
+**Updated Date:** 2026-02-05
 
 ---
 
-_This Product Brief captures the vision for keycloak-commander — IdentiKey's identity platform admin interface._
+_This Product Brief captures IdentiKey Core — the identity platform backend for native mobile auth and Keycloak integration._
 
-_Related: [PRD](./prd.md) details the specific requirements (55 FRs, 13 NFRs)._
-_Next: Architecture workflow for technical design, then epic breakdown for implementation._
+_Related:_
+- [PRD](./prd.md) — Detailed requirements
+- [Architecture](./architecture.md) — Technical design
+- [Epics](./epics.md) — Implementation breakdown
+- [Apple Auth Analysis](./identikey-apple-auth-architecture-analysis.md) — Native auth deep dive

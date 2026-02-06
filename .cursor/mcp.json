@@ -4,7 +4,7 @@
 			"command": "npx",
 			"args": ["-y", "@sveltejs/mcp"]
 		},
-		"keycloak-commander": {
+		"identikey-core": {
 			"command": "bun",
 			"args": ["run", "src/mcp/index.ts"]
 		}

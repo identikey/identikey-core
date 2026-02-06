@@ -3,7 +3,7 @@
 # Version: 6.0.0-Beta.6
 # Date: 2026-02-05T22:09:34.182Z
 
-project_name: keycloak-commander
+project_name: identikey-core
 user_skill_level: intermediate
 planning_artifacts: "{project-root}/_bmad-output/planning-artifacts"
 implementation_artifacts: "{project-root}/_bmad-output/implementation-artifacts"
