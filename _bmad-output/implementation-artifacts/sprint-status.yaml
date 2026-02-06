@@ -92,7 +92,7 @@ development_status:
   # Epic 7: JWT Infrastructure (5 stories) - FR120-130
   epic-7: in-progress
   7-1-key-generation-storage: done
-  7-2-jwks-endpoint: review
+  7-2-jwks-endpoint: done
   7-3-token-signing-service: backlog
   7-4-token-verification-service: backlog
   7-5-oidc-discovery-endpoint: backlog

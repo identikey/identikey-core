@@ -1,6 +1,6 @@
 # Story 7.2: JWKS Endpoint
 
-**Status:** review
+**Status:** done
 **Epic:** 7 - JWT Infrastructure  
 **FR Coverage:** FR122  
 **Story Key:** 7-2-jwks-endpoint
@@ -89,7 +89,7 @@ So that **I can validate access tokens** issued by IdentiKey.
 - Validate response body shape: `keys` is an array, first element has `kid`, `kty`, `crv`, `x`, `use`, `alg`.
 
 ### Story Completion Status
-- **Status:** review
+- **Status:** done
 - **Completion note:** All tasks complete. Route-only change using existing jwt module exports. 7 tests covering all 3 ACs.
 
 ---
