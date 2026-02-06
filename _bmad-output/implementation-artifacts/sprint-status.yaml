@@ -101,7 +101,7 @@ development_status:
   # Epic 8: Bootstrap Verification (5 stories) - FR100-109
   epic-8: in-progress
   8-1-provider-jwks-service: done
-  8-2-apple-token-verification: backlog
+  8-2-apple-token-verification: done
   8-3-google-token-verification: backlog
   8-4-bootstrap-user-provisioning: backlog
   8-5-bootstrap-endpoint-abstraction: backlog
