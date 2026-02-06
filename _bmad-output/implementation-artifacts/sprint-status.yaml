@@ -2,7 +2,7 @@
 # project: identikey-core (formerly keycloak-commander)
 # project_key: ik
 # tracking_system: file-system
-# story_location: docs/sprint-artifacts
+# story_location: _bmad-output/implementation-artifacts
 
 # STATUS DEFINITIONS:
 # ==================
@@ -24,7 +24,7 @@ generated: 2026-02-05
 project: identikey-core
 project_key: ik
 tracking_system: file-system
-story_location: docs/sprint-artifacts
+story_location: _bmad-output/implementation-artifacts
 
 # ============================================================================
 # ADMIN TOOLING ✅ Complete
@@ -90,8 +90,8 @@ development_status:
 # ============================================================================
 
   # Epic 7: JWT Infrastructure (5 stories) - FR120-130
-  epic-7: backlog
-  7-1-key-generation-storage: backlog
+  epic-7: in-progress
+  7-1-key-generation-storage: ready-for-dev
   7-2-jwks-endpoint: backlog
   7-3-token-signing-service: backlog
   7-4-token-verification-service: backlog
