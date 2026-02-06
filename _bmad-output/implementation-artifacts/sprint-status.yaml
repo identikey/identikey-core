@@ -104,7 +104,7 @@ development_status:
   8-2-apple-token-verification: done
   8-3-google-token-verification: done
   8-4-bootstrap-user-provisioning: done
-  8-5-bootstrap-endpoint-abstraction: ready-for-dev
+  8-5-bootstrap-endpoint-abstraction: done
   epic-8-retrospective: optional
 
   # Epic 9: Passkey Management (6 stories) - FR110-118

@@ -1,6 +1,6 @@
 # Story 8.5: Bootstrap Endpoint Abstraction
 
-**Status:** ready-for-dev
+**Status:** done
 **Epic:** 8 - Bootstrap Verification
 **FR Coverage:** FR100–109 (bootstrap flow consistency); prepares Epic 10 provision endpoints and Epic 13 expansion
 **Story Key:** 8-5-bootstrap-endpoint-abstraction
@@ -45,31 +45,31 @@ So that **adding new providers (e.g. email/SMS in Epic 13) is straightforward** 
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Define bootstrap handler interface** (AC: 1, 4)
-  - [ ] Create `src/lib/auth/bootstrap/handler.ts` (or under `src/lib/auth/bootstrap/` in a file that holds interface + factory).
-  - [ ] Define interface, e.g. `BootstrapHandler`: single method `verifyAndProvision(token: string): Promise<ProvisionResult>`.
-  - [ ] Document that new providers (email/SMS) will implement this interface and register; verify step may differ (e.g. magic link), but result shape stays compatible.
+- [x] **Task 1: Define bootstrap handler interface** (AC: 1, 4)
+  - [x] Create `src/lib/auth/bootstrap/handler.ts` (or under `src/lib/auth/bootstrap/` in a file that holds interface + factory).
+  - [x] Define interface, e.g. `BootstrapHandler`: single method `verifyAndProvision(token: string): Promise<ProvisionResult>`.
+  - [x] Document that new providers (email/SMS) will implement this interface and register; verify step may differ (e.g. magic link), but result shape stays compatible.
 
-- [ ] **Task 2: Apple handler** (AC: 2, 3)
-  - [ ] Implement Apple handler: verify with `verifyAppleToken(token)`, then `provisionUser('apple', payload)`. Return `ProvisionResult` (already has `provider: 'apple'`).
-  - [ ] Do not catch and rewrap token or provision errors unless needed for a unified error type; prefer propagating `TokenVerificationError` and `BootstrapProvisionError` so callers can map to 401/400.
+- [x] **Task 2: Apple handler** (AC: 2, 3)
+  - [x] Implement Apple handler: verify with `verifyAppleToken(token)`, then `provisionUser('apple', payload)`. Return `ProvisionResult` (already has `provider: 'apple'`).
+  - [x] Do not catch and rewrap token or provision errors unless needed for a unified error type; prefer propagating `TokenVerificationError` and `BootstrapProvisionError` so callers can map to 401/400.
 
-- [ ] **Task 3: Google handler** (AC: 2, 3)
-  - [ ] Implement Google handler: verify with `verifyGoogleToken(token)`, then `provisionUser('google', payload)`. Same error propagation as Apple.
+- [x] **Task 3: Google handler** (AC: 2, 3)
+  - [x] Implement Google handler: verify with `verifyGoogleToken(token)`, then `provisionUser('google', payload)`. Same error propagation as Apple.
 
-- [ ] **Task 4: Factory / registry** (AC: 5)
-  - [ ] Export `getBootstrapHandler(provider: 'apple' | 'google'): BootstrapHandler`. Return the appropriate implementation. Document extension: future `provider` values (e.g. `'email' | 'sms'`) to be added in Epic 13.
-  - [ ] Keep provider set as a type alias, e.g. `BootstrapProviderId = 'apple' | 'google'`, so adding new ids later is a single change.
+- [x] **Task 4: Factory / registry** (AC: 5)
+  - [x] Export `getBootstrapHandler(provider: 'apple' | 'google'): BootstrapHandler`. Return the appropriate implementation. Document extension: future `provider` values (e.g. `'email' | 'sms'`) to be added in Epic 13.
+  - [x] Keep provider set as a type alias, e.g. `BootstrapProviderId = 'apple' | 'google'`, so adding new ids later is a single change.
 
-- [ ] **Task 5: Barrel and auth index** (AC: all)
-  - [ ] Export from `src/lib/auth/bootstrap/index.ts`: `BootstrapHandler` (type/interface), `getBootstrapHandler`, and any new types (e.g. `BootstrapProviderId`).
-  - [ ] Update `src/lib/auth/index.ts` to re-export the new public API (getBootstrapHandler, BootstrapHandler, BootstrapProviderId).
+- [x] **Task 5: Barrel and auth index** (AC: all)
+  - [x] Export from `src/lib/auth/bootstrap/index.ts`: `BootstrapHandler` (type/interface), `getBootstrapHandler`, and any new types (e.g. `BootstrapProviderId`).
+  - [x] Update `src/lib/auth/index.ts` to re-export the new public API (getBootstrapHandler, BootstrapHandler, BootstrapProviderId).
 
-- [ ] **Task 6: Tests** (AC: all)
-  - [ ] Create `src/lib/auth/bootstrap/handler.spec.ts` (or equivalent). Mock `verifyAppleToken`, `verifyGoogleToken`, `provisionUser`.
-  - [ ] **Apple path:** Token valid → verifyAppleToken and provisionUser called in order; result matches ProvisionResult with provider 'apple'. Invalid token → verifyAppleToken throws → no provisionUser call.
-  - [ ] **Google path:** Same for Google. Verify factory returns correct handler for 'apple' and 'google'.
-  - [ ] **Error propagation:** Provision failure (provisionUser throws) propagates to caller; no swallowing of errors.
+- [x] **Task 6: Tests** (AC: all)
+  - [x] Create `src/lib/auth/bootstrap/handler.spec.ts` (or equivalent). Mock `verifyAppleToken`, `verifyGoogleToken`, `provisionUser`.
+  - [x] **Apple path:** Token valid → verifyAppleToken and provisionUser called in order; result matches ProvisionResult with provider 'apple'. Invalid token → verifyAppleToken throws → no provisionUser call.
+  - [x] **Google path:** Same for Google. Verify factory returns correct handler for 'apple' and 'google'.
+  - [x] **Error propagation:** Provision failure (provisionUser throws) propagates to caller; no swallowing of errors.
 
 ---
 
@@ -131,4 +131,11 @@ So that **adding new providers (e.g. email/SMS in Epic 13) is straightforward** 
 
 ### Completion Notes List
 
+- Added `BootstrapHandler` interface (verifyAndProvision(token) → Promise<ProvisionResult>) and `getBootstrapHandler(provider)` in `src/lib/auth/bootstrap/handler.ts`. Apple/Google handlers compose verifyAppleToken/verifyGoogleToken + provisionUser; errors propagated. `BootstrapProviderId = 'apple' | 'google'` with JSDoc for Epic 13 extension. Barrel and auth index re-exports. 10 tests in handler.spec.ts (factory, Apple/Google paths, call order, no provision on verify throw, error propagation). 30 bootstrap tests pass.
+
 ### File List
+
+- `src/lib/auth/bootstrap/handler.ts` (new)
+- `src/lib/auth/bootstrap/handler.spec.ts` (new)
+- `src/lib/auth/bootstrap/index.ts` (modified)
+- `src/lib/auth/index.ts` (modified)

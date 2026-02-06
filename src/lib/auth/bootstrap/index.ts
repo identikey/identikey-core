@@ -5,3 +5,8 @@ export {
 	BootstrapProvisionCodes,
 	type BootstrapProvisionCode
 } from './provision';
+export {
+	getBootstrapHandler,
+	type BootstrapHandler,
+	type BootstrapProviderId
+} from './handler';

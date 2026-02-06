@@ -7,6 +7,8 @@ export { provisionUser } from './bootstrap';
 export type { ProvisionResult } from './bootstrap';
 export { BootstrapProvisionError, BootstrapProvisionCodes } from './bootstrap';
 export type { BootstrapProvisionCode } from './bootstrap';
+export { getBootstrapHandler } from './bootstrap';
+export type { BootstrapHandler, BootstrapProviderId } from './bootstrap';
 export {
 	generateSigningKeyPair,
 	computeKeyId,
