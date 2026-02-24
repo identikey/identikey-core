@@ -8,6 +8,8 @@
 import { runMain, defineCommand } from 'citty';
 import { usersCommand } from './commands/users';
 import { authFlowsCommand } from './commands/auth-flows';
+import { clientsCommand } from './commands/clients';
+import { eventsCommand } from './commands/events';
 
 const main = defineCommand({
 	meta: {
@@ -16,7 +18,9 @@ const main = defineCommand({
 	},
 	subCommands: {
 		users: usersCommand,
-		'auth-flows': authFlowsCommand
+		'auth-flows': authFlowsCommand,
+		clients: clientsCommand,
+		events: eventsCommand
 	}
 });
 

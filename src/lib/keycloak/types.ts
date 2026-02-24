@@ -91,3 +91,44 @@ export type FlowBindingType =
 	| 'registration'
 	| 'reset-credentials'
 	| 'docker-auth';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Client Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** OIDC client (Keycloak ClientRepresentation, trimmed to what matters) */
+export interface OidcClient {
+	id: string;
+	clientId: string;
+	name?: string;
+	description?: string;
+	enabled: boolean;
+	protocol: string;
+	publicClient: boolean;
+	rootUrl?: string;
+	baseUrl?: string;
+	adminUrl?: string;
+	redirectUris: string[];
+	webOrigins: string[];
+	standardFlowEnabled: boolean;
+	implicitFlowEnabled: boolean;
+	directAccessGrantsEnabled: boolean;
+	serviceAccountsEnabled: boolean;
+}
+
+/** Mutable fields when updating a client */
+export interface UpdateClientInput {
+	name?: string;
+	description?: string;
+	enabled?: boolean;
+	publicClient?: boolean;
+	rootUrl?: string;
+	baseUrl?: string;
+	adminUrl?: string;
+	redirectUris?: string[];
+	webOrigins?: string[];
+	standardFlowEnabled?: boolean;
+	implicitFlowEnabled?: boolean;
+	directAccessGrantsEnabled?: boolean;
+	serviceAccountsEnabled?: boolean;
+}

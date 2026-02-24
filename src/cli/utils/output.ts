@@ -4,7 +4,14 @@
  * Formatters for table and JSON output in CLI commands.
  */
 
-import type { User, Credential, LoginFlow, FlowExecution } from '../../lib/keycloak/types';
+import type {
+	User,
+	Credential,
+	LoginFlow,
+	FlowExecution,
+	OidcClient
+} from '../../lib/keycloak/types';
+import type { IdentiKeyEvent } from '../../lib/events/types';
 import { IdentiKeyError } from '../../lib/keycloak/errors';
 
 /**
@@ -261,4 +268,137 @@ export function printExecutionsTable(flowAlias: string, executions: FlowExecutio
 
 	// eslint-disable-next-line no-console
 	console.log(`\n${executions.length} execution(s).`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Client Output
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function printClientsTable(clients: OidcClient[]): void {
+	if (clients.length === 0) {
+		// eslint-disable-next-line no-console
+		console.log('No clients found.');
+		return;
+	}
+
+	const idWidth = Math.max(9, ...clients.map((c) => c.clientId.length));
+	const nameWidth = Math.max(4, ...clients.map((c) => (c.name ?? '').length));
+	const protocolWidth = Math.max(8, ...clients.map((c) => c.protocol.length));
+
+	const header = [
+		'CLIENT_ID'.padEnd(idWidth),
+		'NAME'.padEnd(nameWidth),
+		'PROTOCOL'.padEnd(protocolWidth),
+		'ENABLED',
+		'PUBLIC'
+	].join('  ');
+
+	const separator = '-'.repeat(header.length);
+
+	// eslint-disable-next-line no-console
+	console.log(header);
+	// eslint-disable-next-line no-console
+	console.log(separator);
+
+	for (const c of clients) {
+		const row = [
+			c.clientId.padEnd(idWidth),
+			(c.name ?? '').padEnd(nameWidth),
+			c.protocol.padEnd(protocolWidth),
+			(c.enabled ? 'yes' : 'no').padEnd(7),
+			c.publicClient ? 'yes' : 'no'
+		].join('  ');
+		// eslint-disable-next-line no-console
+		console.log(row);
+	}
+
+	// eslint-disable-next-line no-console
+	console.log(`\n${clients.length} client(s) found.`);
+}
+
+export function printClientDetails(c: OidcClient): void {
+	// eslint-disable-next-line no-console
+	console.log(`Client: ${c.clientId}`);
+	// eslint-disable-next-line no-console
+	console.log(`  ID:              ${c.id}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Name:            ${c.name ?? '(not set)'}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Protocol:        ${c.protocol}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Enabled:         ${c.enabled ? 'yes' : 'no'}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Public:          ${c.publicClient ? 'yes' : 'no'}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Root URL:        ${c.rootUrl || '(not set)'}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Base URL:        ${c.baseUrl || '(not set)'}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Redirect URIs:   ${c.redirectUris.length ? c.redirectUris.join(', ') : '(none)'}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Web Origins:     ${c.webOrigins.length ? c.webOrigins.join(', ') : '(none)'}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Standard Flow:   ${c.standardFlowEnabled ? 'yes' : 'no'}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Implicit Flow:   ${c.implicitFlowEnabled ? 'yes' : 'no'}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Direct Access:   ${c.directAccessGrantsEnabled ? 'yes' : 'no'}`);
+	// eslint-disable-next-line no-console
+	console.log(`  Service Account: ${c.serviceAccountsEnabled ? 'yes' : 'no'}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Event Output
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SEVERITY_LABELS: Record<string, string> = {
+	info: 'INFO ',
+	warn: 'WARN ',
+	error: 'ERROR'
+};
+
+function fmtTime(ts: number): string {
+	return new Date(ts).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
+}
+
+export function printEventLine(e: IdentiKeyEvent): void {
+	const time = fmtTime(e.timestamp);
+	const sev = SEVERITY_LABELS[e.severity] ?? e.severity;
+	const type = e.type.padEnd(20);
+	const client = (e.clientId ?? '--').padEnd(20);
+	const user = (e.userId ?? e.details?.username ?? '--').substring(0, 24);
+	const ip = e.ipAddress ?? '';
+	const err = e.error ? `  ${e.error}` : '';
+
+	// eslint-disable-next-line no-console
+	console.log(`${time}  ${sev}  ${type}  ${client}  ${user.padEnd(24)}  ${ip}${err}`);
+}
+
+export function printEventsTable(events: IdentiKeyEvent[]): void {
+	if (events.length === 0) {
+		// eslint-disable-next-line no-console
+		console.log('No events found.');
+		return;
+	}
+
+	const header = [
+		'TIME'.padEnd(24),
+		'SEV'.padEnd(5),
+		'TYPE'.padEnd(20),
+		'CLIENT'.padEnd(20),
+		'USER'.padEnd(24),
+		'IP'
+	].join('  ');
+
+	// eslint-disable-next-line no-console
+	console.log(header);
+	// eslint-disable-next-line no-console
+	console.log('-'.repeat(header.length + 10));
+
+	for (const e of events) {
+		printEventLine(e);
+	}
+
+	// eslint-disable-next-line no-console
+	console.log(`\n${events.length} event(s).`);
 }

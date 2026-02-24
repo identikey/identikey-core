@@ -7,9 +7,11 @@
 import { getKeycloakClient } from '../client';
 import { UserService } from './users';
 import { AuthFlowService } from './auth-flows';
+import { ClientService } from './clients';
 
 export { UserService } from './users';
 export { AuthFlowService } from './auth-flows';
+export { ClientService } from './clients';
 
 /**
  * Get an authenticated UserService instance.
@@ -27,4 +29,9 @@ export async function getUserService(): Promise<UserService> {
 export async function getAuthFlowService(): Promise<AuthFlowService> {
 	const client = await getKeycloakClient();
 	return new AuthFlowService(client);
+}
+
+export async function getClientService(): Promise<ClientService> {
+	const client = await getKeycloakClient();
+	return new ClientService(client);
 }

@@ -25,6 +25,7 @@
 		"storybook": "storybook dev -p 6006",
 		"build-storybook": "storybook build",
 		"cli": "bun run src/cli/index.ts",
+		"kc": "bun run src/cli/index.ts",
 		"mcp": "bun run src/mcp/index.ts",
 		"generate-key": "bun run scripts/generate-signing-key.ts"
 	},
