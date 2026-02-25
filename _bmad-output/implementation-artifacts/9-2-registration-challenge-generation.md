@@ -1,6 +1,6 @@
 # Story 9.2: Registration Challenge Generation
 
-**Status:** ready-for-dev
+**Status:** done
 **Epic:** 9 - Passkey Management
 **FR Coverage:** FR110–118 (WebAuthn registration flow)
 **Story Key:** 9-2-registration-challenge-generation
@@ -47,28 +47,28 @@ So that **my device can create a credential** and Epic 10’s POST /passkey-regi
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Add @simplewebauthn/server** (AC: 1, 7)
-  - [ ] Add `@simplewebauthn/server` to package.json (bun add @simplewebauthn/server). Check for peer deps (e.g. @simplewebauthn/browser not needed for server-only).
-  - [ ] Confirm `generateRegistrationOptions` exists and signature (e.g. rp, user, challenge length, etc.). Use library types for options and response.
+- [x] **Task 1: Add @simplewebauthn/server** (AC: 1, 7)
+  - [x] Add `@simplewebauthn/server` to package.json (bun add @simplewebauthn/server). Check for peer deps (e.g. @simplewebauthn/browser not needed for server-only).
+  - [x] Confirm `generateRegistrationOptions` exists and signature (e.g. rp, user, challenge length, etc.). Use library types for options and response.
 
-- [ ] **Task 2: Relying party config** (AC: 2)
-  - [ ] Add `WEBAUTHN_RP_ID` (and optionally `WEBAUTHN_RP_NAME`) to `.env.example`. Default rpId for dev (e.g. `localhost`) if not set.
-  - [ ] Create a small config helper or pass rp into the generation function so rpId/rpName come from env.
+- [x] **Task 2: Relying party config** (AC: 2)
+  - [x] Add `WEBAUTHN_RP_ID` (and optionally `WEBAUTHN_RP_NAME`) to `.env.example`. Default rpId for dev (e.g. `localhost`) if not set.
+  - [x] Create a small config helper or pass rp into the generation function so rpId/rpName come from env.
 
-- [ ] **Task 3: Registration options function** (AC: 1, 3, 4, 5, 6)
-  - [ ] Create `src/lib/passkey/registration-options.ts` (or under `src/lib/server/passkey/`). Implement e.g. `generateRegistrationChallenge(params: { userId: string; userName?: string; displayName?: string })` or similar.
-  - [ ] Call `generateRegistrationOptions` with: rp (id from env, name from env), user (id = userId or encoded userId, name, displayName), and any library-required fields. Use 32-byte challenge if the lib allows configuring length.
-  - [ ] After getting options, call `createChallenge({ userId, challenge: options.challenge, type: 'registration' })`. Ensure stored challenge string matches what the client will receive (same encoding).
-  - [ ] Return the full options object. If the library returns challenge as Buffer, convert to base64url string for storage and for the client (the lib often returns options already with a string challenge).
+- [x] **Task 3: Registration options function** (AC: 1, 3, 4, 5, 6)
+  - [x] Create `src/lib/passkey/registration-options.ts` (or under `src/lib/server/passkey/`). Implement e.g. `generateRegistrationChallenge(params: { userId: string; userName?: string; displayName?: string })` or similar.
+  - [x] Call `generateRegistrationOptions` with: rp (id from env, name from env), user (id = userId or encoded userId, name, displayName), and any library-required fields. Use 32-byte challenge if the lib allows configuring length.
+  - [x] After getting options, call `createChallenge({ userId, challenge: options.challenge, type: 'registration' })`. Ensure stored challenge string matches what the client will receive (same encoding).
+  - [x] Return the full options object. If the library returns challenge as Buffer, convert to base64url string for storage and for the client (the lib often returns options already with a string challenge).
 
-- [ ] **Task 4: pubKeyCredParams and authenticatorSelection** (AC: 4)
-  - [ ] Pass through or set `pubKeyCredParams` (EdDSA, ES256, RS256) and `authenticatorSelection` (platform, residentKey) per library API. Prefer platform and resident key for mobile-first flows; document in code or dev notes.
+- [x] **Task 4: pubKeyCredParams and authenticatorSelection** (AC: 4)
+  - [x] Pass through or set `pubKeyCredParams` (EdDSA, ES256, RS256) and `authenticatorSelection` (platform, residentKey) per library API. Prefer platform and resident key for mobile-first flows; document in code or dev notes.
 
-- [ ] **Task 5: Barrel / exports** (AC: all)
-  - [ ] Export the generation function (and any types) from a passkey module (e.g. `src/lib/passkey/index.ts` or `src/lib/server/passkey/index.ts`). Do not add HTTP routes in this story.
+- [x] **Task 5: Barrel / exports** (AC: all)
+  - [x] Export the generation function (and any types) from a passkey module (e.g. `src/lib/passkey/index.ts` or `src/lib/server/passkey/index.ts`). Do not add HTTP routes in this story.
 
-- [ ] **Task 6: Tests** (AC: all)
-  - [ ] Unit tests: mock or do not call real DB; test that returned options contain challenge, rp, user; test that createChallenge is called with the same challenge and type 'registration'. Optionally integration test with in-memory/test DB: generate options, then getChallengeByValue(returned challenge) returns the row with correct userId.
+- [x] **Task 6: Tests** (AC: all)
+  - [x] Unit tests: mock or do not call real DB; test that returned options contain challenge, rp, user; test that createChallenge is called with the same challenge and type 'registration'. Optionally integration test with in-memory/test DB: generate options, then getChallengeByValue(returned challenge) returns the row with correct userId.
 
 ---
 
@@ -110,8 +110,8 @@ So that **my device can create a credential** and Epic 10’s POST /passkey-regi
 - Unit tests: options contain challenge, rp, user; createChallenge called with correct challenge and type. Optional: integration test with test DB to confirm challenge is retrievable by value.
 
 ### Story Completion Status
-- **Status:** ready-for-dev
-- **Completion note:** Registration challenge generation via @simplewebauthn/server; store challenge with 9.1; return full options for client; rp and user config; ready for 9.3 attestation verification and Epic 10 endpoints.
+- **Status:** done
+- **Completion note:** Registration challenge generation via @simplewebauthn/server; store challenge with 9.1; return full options for client; rp and user config; ready for 9.3 attestation verification and Epic 10 endpoints. Code review fixes applied: stable userID, error handling, test coverage, type safety.
 
 ---
 
@@ -119,10 +119,37 @@ So that **my device can create a credential** and Epic 10’s POST /passkey-regi
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude claude-4.6-opus (via Cursor)
 
 ### Debug Log References
 
+No debug issues encountered.
+
 ### Completion Notes List
 
+- Added `@simplewebauthn/server@13.2.3` dependency — no peer deps needed for server-only usage.
+- Created `getWebAuthnConfig()` helper reading `WEBAUTHN_RP_ID` and `WEBAUTHN_RP_NAME` from env with sensible defaults (`localhost` / `IdentiKey`).
+- Implemented `generateRegistrationChallenge({ userId, userName?, displayName?, excludeCredentials? }, db?)` which:
+  - Validates userId is non-empty.
+  - Calls `@simplewebauthn/server`'s `generateRegistrationOptions` with RP config, stable userID (TextEncoder-encoded Keycloak ID as Uint8Array), user info, platform authenticator preference, discoverable credential preference, explicit `supportedAlgorithmIDs: [-8, -7, -257]` (EdDSA, ES256, RS256), and `attestationType: 'none'`.
+  - Persists the challenge string (base64url from library) via `createChallenge` from 9.1, with error wrapping.
+  - Returns the full `PublicKeyCredentialCreationOptionsJSON` for the client.
+  - Accepts optional `db` parameter for testability (passed through to createChallenge).
+- Uses library's `AuthenticatorTransportFuture` type instead of local redefinition.
+- Barrel export at `src/lib/passkey/index.ts`.
+- 15 unit tests (mocked DB) + 1 integration test (real generateRegistrationChallenge → DB round-trip). All 308 project tests pass, zero regressions.
+
+### Change Log
+
+- 2026-02-25: Story 9.2 implemented — registration challenge generation via @simplewebauthn/server with DB persistence and env-configurable RP.
+- 2026-02-25: Code review fixes — C1: pass stable userID (Uint8Array-encoded Keycloak ID) to generateRegistrationOptions; H1: tests now verify user.id stability; H2: integration test calls actual generateRegistrationChallenge with test DB; M1: error handling for challenge persistence; M2: use library AuthenticatorTransportFuture type; L1: userId validation; L2: explicit supportedAlgorithmIDs; added optional db param for testability. 308 tests pass, zero regressions.
+
 ### File List
+
+- `package.json` (modified — added @simplewebauthn/server dependency)
+- `bun.lock` (modified — lockfile update)
+- `.env.example` (modified — added WEBAUTHN_RP_ID, WEBAUTHN_RP_NAME)
+- `src/lib/passkey/registration-options.ts` (new — core generation function + config helper)
+- `src/lib/passkey/index.ts` (new — barrel exports)
+- `src/lib/passkey/registration-options.spec.ts` (new — 15 unit tests)
+- `src/lib/passkey/registration-options.integration.spec.ts` (new — 1 integration test)

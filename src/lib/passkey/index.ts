@@ -1,0 +1,23 @@
+export {
+	generateRegistrationChallenge,
+	getWebAuthnConfig,
+	type RegistrationChallengeParams,
+	type WebAuthnConfig
+} from './registration-options';
+
+export {
+	verifyAndStorePasskey,
+	type VerifyAndStoreParams,
+	type StoredPasskeyResult
+} from './verify-registration';
+
+export {
+	storePasskeyCredential,
+	getPasskeyByCredentialId,
+	getPasskeysByUserId,
+	updatePasskeyCounter,
+	deletePasskeyCredential,
+	type StorePasskeyParams
+} from './credential-store';
+
+export { PasskeyError, PasskeyErrorCode } from './errors';
