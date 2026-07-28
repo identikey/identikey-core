@@ -1,6 +1,6 @@
 # Licensing & Commons Doctrine
 
-**Status:** Draft doctrine — needs a decision on §5 before the protocol split lands
+**Status:** §5c decided (2026-07-28). §5 (a/b/c/d) still open — needed before the protocol split lands
 **Date:** 2026-07-28
 **Requirement being served:** *"I'd like our system to be usable by future generations even
 if IdentiKey gets bought & buried (as happened when I worked at PGP)."*
@@ -59,7 +59,7 @@ applies the same rule to identity.
 | Tier | What it is | License | Rationale |
 |---|---|---|---|
 | **Specs** — `identikey-auth-challenge-v1`, the URN grant, wire formats | The thing that must outlive everything | **Permissive spec license + explicit patent non-assert.** OWFa 1.0 (what OpenID Foundation uses) or CC-BY-4.0 plus a separate patent grant. | Maximum reimplementability. This is the PGP lesson applied. |
-| **Protocol code** — `identikey-protocol` workspace (`identikey-auth`) | Reference implementation of the specs | **BSD-2-Clause-Patent** (see §5c) | Mandatory patent grant, permissive, *and* GPLv2-compatible. Embeddable anywhere, including by people who compete with us. That is the point. |
+| **Protocol code** — `identikey-protocol` workspace (`identikey-auth`) | Reference implementation of the specs | **`Apache-2.0 OR BSD-2-Clause-Patent`** — decided, see §5c | Both options carry a mandatory patent grant, so the disjunction is safe. Apache for familiarity, BSD+Patent for GPLv2 reach. Embeddable anywhere, including by people who compete with us. That is the point. |
 | **Products** — `identikey-core` (hosted OP), recrypt server, native app | Things worth selling | **AGPL-3.0-or-later + commercial exception** | Network copyleft protects against SaaS free-riding; the commercial exception funds the work. Burial matters less here because a product is replaceable once the protocol survives. |
 
 **Why permissive rather than AGPL for the protocol tier:** an AGPL protocol library cannot be
@@ -195,7 +195,10 @@ grant closes that hole. So this is a choice between two correct answers, not a f
 | Inbound-contribution default clause | Yes (§5) | No |
 | OSI approved | ✅ | ✅ |
 
-**Recommendation: `BSD-2-Clause-Patent` for `identikey-protocol`.**
+**Decided 2026-07-28: `Apache-2.0 OR BSD-2-Clause-Patent` for `identikey-protocol`.**
+
+Rationale for taking both is at the end of this section. The single-licence analysis below is
+retained because it explains *why these two* and not some other pair.
 
 The deciding factor is GPLv2. Apache-2.0's patent-termination and indemnity provisions count as
 "further restrictions" under GPLv2 and make the two incompatible — the FSF and Apache both say
@@ -225,12 +228,46 @@ BSD-2-Clause-Patent will trigger a fresh legal review at some enterprises. Mitig
 in the README that it is OSI-approved, SPDX-recognised (`BSD-2-Clause-Patent`), FSF-listed as
 GPL-compatible, and permissive — that is usually enough to convert a review into a rubber stamp.
 
-**If you would rather not spend that goodwill:** `Apache-2.0 OR BSD-2-Clause-Patent` is a
-legitimate third option. Because *both* carry mandatory patent grants, the disjunction does not
-reintroduce the escape hatch that `MIT OR Apache-2.0` had — the licensee picks their preferred
-compliance regime, not their preferred level of patent protection. It costs a paragraph of
-explanation and buys back full familiarity. Prefer it only if enterprise adoption turns out to
-be a real near-term channel; otherwise the single licence is cleaner.
+### The decision: take both
+
+`Apache-2.0 OR BSD-2-Clause-Patent`.
+
+**Why the disjunction is safe here and was not safe before.** The defect in
+`MIT OR Apache-2.0` was never that it offered a choice — it was that the two options differed
+in *how much protection they carried*, so a licensee acting against our interests would elect
+the weaker one. MIT has no patent grant at all. Here, **both options carry a mandatory patent
+grant with defensive termination**, so the licensee elects a compliance regime, not a level of
+patent protection. There is no weaker branch to escape into. The anti-burial property holds
+under either election.
+
+**What each branch buys:**
+
+- **Apache-2.0** — the allowlist path. Enterprises, OS vendors and password-manager vendors
+  approve it without a fresh legal review. Also brings the NOTICE requirement, the
+  change-statement requirement, an explicit trademark disclaimer, and the §5
+  inbound-contribution default.
+- **BSD-2-Clause-Patent** — the GPLv2 path, and the low-friction path. Lets the identity layer
+  be linked into OpenWrt/Freifunk-class GPLv2 firmware, and lets an embedder ship with no
+  NOTICE or change-statement obligations at all.
+
+Taken together the tier reaches both the corporate world and the copyleft world, which is
+precisely what "spreads beyond our control" requires. The cost is one paragraph of README
+explaining it — cheaper than either exclusion.
+
+### Implementation notes
+
+- **Cargo metadata:** `license = "Apache-2.0 OR BSD-2-Clause-Patent"` on the workspace, inherited
+  via `license.workspace = true`.
+- **Files at the repo root:** `LICENSE-APACHE`, `LICENSE-BSD-PATENT`, and a short `LICENSE`
+  explaining that the recipient elects either. Follow recrypt's existing `LICENSE`-as-map pattern.
+- **Inbound must match outbound.** Contributions to `identikey-protocol` come in under the same
+  disjunctive expression. Do not accept Apache-only or BSD-only contributions into this tier —
+  a single-licensed file silently collapses the choice for the whole crate.
+- **Per-file SPDX headers** (`// SPDX-License-Identifier: Apache-2.0 OR BSD-2-Clause-Patent`)
+  are worth the noise here: this tier is meant to be copied, vendored and excerpted, and the
+  header is what survives being pasted into someone else's tree.
+- **README:** state OSI-approved, SPDX-recognised, FSF-listed GPL-compatible, mandatory patent
+  grant under both. That sentence is what converts a legal review into a rubber stamp.
 
 **Unaffected:** the product tier stays AGPL-3.0-or-later + commercial, and recrypt's existing
 permissive core crates can stay `MIT OR Apache-2.0` — they are not the anti-burial artefact and
@@ -242,7 +279,7 @@ churning them buys nothing.
    or CC-BY + patent non-assert. Not inside a product repo.
 2. **Write test vectors for `identikey-auth`.** Highest-leverage single artifact in this
    document. A spec without test vectors gets read; a spec with test vectors gets implemented.
-3. **Set `identikey-protocol` to `BSD-2-Clause-Patent`** (§5c) and keep it free
+3. **Set `identikey-protocol` to `Apache-2.0 OR BSD-2-Clause-Patent`** (§5c, decided) and keep it free
    of any AGPL dependency — this is why `identikey-storage-auth` (AGPL-3.0-or-later, depends
    on `recrypt-core`/`recrypt-wire`) must not move into the protocol workspace.
 4. **Publish a trademark policy** that explicitly permits forks to state their origin.
