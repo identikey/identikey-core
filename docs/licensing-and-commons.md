@@ -41,7 +41,7 @@ Ranked by how much they matter, most first:
 | **A published, versioned, implementable spec** | An acquirer can stop publishing code; they cannot un-publish a spec. It's what lets a GnuPG exist. | Partial — `identikey-auth-challenge-v1.md` exists inside recrypt. Not independently published. |
 | **Test vectors + a conformance suite** | Turns "implementable in principle" into "implementable on a weekend." This is the difference between a spec that gets reimplemented and one that doesn't. | **Missing.** Highest-leverage gap. |
 | **An explicit patent grant** | Apache-2.0 §3 grants patent rights and terminates them for anyone who sues. MIT grants *no* patent rights at all. This is the specific instrument that stops an acquirer weaponizing a patent portfolio against reimplementers. | Partial — recrypt workspace is `MIT OR Apache-2.0`, so the Apache option is available. |
-| **Copyright not concentrated in one acquirable entity** | An assignment-style CLA is *precisely* the mechanism that lets a buyer stop releasing. | **Risk.** `recrypt/CLA.md` exists. See §4. |
+| **Copyright not concentrated in one acquirable entity** | An *assignment* CLA is precisely the mechanism that lets a buyer stop releasing. A *licensing* CLA is much weaker medicine. | **Better than assumed.** `recrypt/CLA.md` is an explicit non-assignment CLA — "You keep the copyright to your contribution." See §4. |
 | **Trademark policy permitting forks to name their origin** | The most common quiet capture: the acquirer keeps the name, the fork can't say what it is. | **Missing.** |
 | **More than one implementation, ideally more than one org** | Redundancy of the thing itself. | Missing, but a natural consequence of the first two rows. |
 | **Foundation stewardship** | Structural, but slow and not sufficient alone. | Precedent exists — lightning-mesh is Foundation-owned under AGPL (per `Mirror/roadmap.md`). |
@@ -72,12 +72,30 @@ explicitly said we do not want.
 
 ## 4. The trade-off to decide consciously
 
-**Dual-licensing requires copyright concentration.** You can only sell a commercial exception
-if you own, or have been assigned, all the rights. That means a CLA with assignment — which
-is the *same instrument* that lets an acquirer stop releasing.
+**Dual-licensing requires sufficient rights in all the code.** You can only sell a commercial
+exception if you hold, or have been granted, the right to relicense every contribution.
 
-The revenue model and the burial risk share a mechanism. This cannot be engineered away; it
-can only be chosen deliberately.
+There are two ways to get that, and they differ enormously for burial resistance:
+
+- **Assignment CLA** — contributors transfer copyright. Maximum flexibility for the steward,
+  and precisely the instrument that lets an acquirer stop releasing.
+- **Licensing CLA** — contributors keep copyright and grant a perpetual, irrevocable,
+  non-exclusive licence including the right to include the work in commercially-licensed
+  releases. The steward can dual-license; the contributor retains independent rights.
+
+**`recrypt/CLA.md` is the second kind** — "You keep the copyright to your contribution — this
+is a license, not an assignment." That is the right choice and it substantially reduces the
+burial risk described in §1, because no single entity can ever become the sole rights holder.
+
+Two residual exposures remain, and they are inherent rather than fixable:
+
+1. The grants run to "Identikey Inc. **and its successors and assigns**" — an acquirer
+   inherits the commercial licensing right. Unavoidable if the right is to be sellable at all.
+2. An acquirer can stop publishing *future* work. They cannot retract past releases: every
+   shipped version's AGPL/permissive grant is irrevocable, and contributors keep their own
+   copyright. So the fork always starts from the last public release.
+
+That is materially the shape of option (b) below, already in place.
 
 Worth noting from `Mirror/roadmap.md`: of the four stated revenue lines —
 
@@ -86,9 +104,7 @@ Worth noting from `Mirror/roadmap.md`: of the four stated revenue lines —
 3. Paid convenience with a door (managed gateway, hosted onboarding)
 4. Commercial dual-licensing
 
-**only #4 requires copyright concentration.** Three of four are unaffected. That reframes the
-question from "how do we protect the dual-license business?" to "is line #4 worth the structural
-risk it introduces?"
+**only #4 needs the CLA at all.** Three of four are unaffected by any of this.
 
 ---
 
@@ -118,6 +134,53 @@ auto-relicense. Unusual but not unheard of. Ask a lawyer whether it survives an 
 the answer determines whether it's worth the drafting cost.
 
 ---
+
+## 5b. Audit against the current business model (2026-07-28)
+
+Checked the actual state rather than assuming it. **The structure works for all four revenue
+lines.** Findings:
+
+**Recrypt's per-crate split is sound.**
+
+| Tier | Crates | Licence |
+|---|---|---|
+| Permissive core | `recrypt-core`, `-ffi`, `-openfhe-sys`, `-wire`, `-storage`, `-client`, `identikey-auth` | MIT OR Apache-2.0 |
+| Deployable stack | `recrypt-server`, `recrypt-cli`, `identikey-storage-auth` | AGPL-3.0-or-later **or** commercial |
+
+Permissive crates feed copyleft crates, which is the legal direction. `LICENSE`,
+`LICENSE-COMMERCIAL.md` and `CLA.md` are consistent with each other and with the Cargo metadata.
+
+**No third-party licence blocks the commercial tier.** Scanned all 660 lockfile entries against
+the local registry cache (396 resolved). Nothing GPL/AGPL/SSPL/BUSL. Three near-misses, all fine:
+
+- `self_cell` — `Apache-2.0 OR GPL-2.0-only`; take Apache-2.0.
+- `r-efi` — `MIT OR Apache-2.0 OR LGPL-2.1-or-later`; take MIT.
+- `option-ext` — **MPL-2.0**, transitive via `dirs`. File-level copyleft: no obligation unless
+  those files are modified. Not a blocker; belongs in NOTICE.
+
+Native deps are clean: OpenFHE BSD-2-Clause, liboqs MIT, `tss-esapi` Apache-2.0,
+`fips204` MIT/Apache-2.0, `bc-envelope`/`bc-components` **BSD-2-Clause-Patent**.
+
+**Gap 1 — `identikey-core` has no licence at all.** No LICENSE file, no `license` field in
+`package.json`. Default is all-rights-reserved. This is now the repo that will hold the OIDC
+provider and the hosted login UI, so it needs the product-tier licence (AGPL + commercial)
+declared explicitly.
+
+**Gap 2 — `MIT OR Apache-2.0` undercuts the patent argument.** §2 claims Apache-2.0's patent
+grant as the anti-burial instrument, but a disjunctive licence lets the *licensee* choose MIT,
+which has no patent grant and no retaliation clause — so a hostile actor simply takes the MIT
+option and the protection never attaches.
+
+**`BSD-2-Clause-Patent` is the better fit for the protocol tier**: as permissive as MIT, but the
+patent grant is mandatory rather than escapable. It is already in the dependency tree
+(Blockchain Commons use it for exactly this reason). Recommended for `identikey-protocol`,
+noting the cost — it is less familiar to corporate legal teams than MIT/Apache, which can slow
+enterprise adoption.
+
+**Gap 3 — only one contributor file** (`contributors/individual.md`, a template). Today Duke
+holds essentially all rights, so the dual-licence is unambiguous. The CLA starts mattering the
+moment a second contributor lands; make signing it part of the contribution flow before that,
+not after.
 
 ## 6. Actions implied
 
