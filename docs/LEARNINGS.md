@@ -17,3 +17,11 @@ See morphist-tools `CONVENTIONS.md`.
 - 2026-07-28 — `src/lib/server/db/schema.ts` `user` table is still the SvelteKit scaffold
   (`id`, `age`). Real user storage is in Keycloak, so leaving Keycloak means *building* a user
   store, not migrating one. This is the largest unbudgeted item in the pivot.
+- 2026-07-28 — `aws-lc-sys` 0.36.0 declared `... AND OpenSSL`, a GPL-incompatible license, and
+  reached both AGPL binaries via `recrypt-storage -> aws-sdk-s3 -> rustls -> aws-lc-rs`. Fixed by
+  bumping `aws-lc-rs` (not `aws-lc-sys` — its 0.x releases are semver-incompatible so
+  `cargo update -p aws-lc-sys` reports zero changes). Transitive crypto deps are the usual way
+  copyleft-incompatible licenses enter an AGPL project. (recrypt/Cargo.lock)
+- 2026-07-28 — `cargo metadata --format-version 1 --all-features` gives license fields for
+  *every* package including ones absent from the local registry src cache; scanning
+  `~/.cargo/registry/src` directly only resolved 396 of 659 and would have missed this.
