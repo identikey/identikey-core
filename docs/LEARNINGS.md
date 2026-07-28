@@ -25,3 +25,9 @@ See morphist-tools `CONVENTIONS.md`.
 - 2026-07-28 — `cargo metadata --format-version 1 --all-features` gives license fields for
   *every* package including ones absent from the local registry src cache; scanning
   `~/.cargo/registry/src` directly only resolved 396 of 659 and would have missed this.
+- 2026-07-28 — `sub` must be a XID (hash of an *inception* key), not the current key's
+  fingerprint. Fingerprint-as-subject makes key rotation an identity break, and PQ migration is
+  a *scheduled* rotation — so it would have had a known future date on which every identity
+  broke. `bc-components` 0.31.1 already ships `XID`, and `bc-xid` (BSD-2-Clause-Patent, matching
+  our protocol tier) has the full document + rotation model. `bc-components` also ships SSKR,
+  relevant to guardian recovery. (docs/ARCHITECTURE.md ADR-001)

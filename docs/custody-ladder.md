@@ -81,12 +81,23 @@ can hold a key in an enclave and participate in a guardian ceremony.
 
 These are non-negotiable and every design decision is checked against them.
 
-### I1. `sub` is the key fingerprint, at every rung
+### I1. `sub` is a XID — stable across both custody *and* key changes
 
-The subject of every token, capability, and record is the Ed25519 public-key fingerprint.
-It does not change when a user moves up the ladder. Moving from C2 to C3 is a **change of
-custody, not a change of identity** — same key, different holder. If climbing the ladder
-required a new identifier, nobody would climb it.
+The subject of every token, capability, and record is a **XID**: the SHA-256 of the CBOR
+encoding of the user's inception public signing key (see `ARCHITECTURE.md` ADR-001).
+
+It survives two different kinds of change:
+
+- **Custody change.** Moving C2 → C3 is a change of *holder*, not of identity. Same subject,
+  different party holding the key. If climbing the ladder required a new identifier, nobody
+  would climb it.
+- **Key change.** Operational keys rotate underneath the XID — for device loss, compromise,
+  or the post-quantum migration that `identikey-auth`'s hybrid support makes inevitable.
+  Rotation is a signed event, not an identity break.
+
+The earlier formulation used the current key's fingerprint directly. That got custody right
+and key rotation catastrophically wrong: it would have put a scheduled expiry on every
+identity in the system, on the day PQ migration landed.
 
 ### I2. Access recovery and key recovery are different systems
 

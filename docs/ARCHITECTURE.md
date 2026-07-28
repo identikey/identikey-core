@@ -34,31 +34,64 @@ Companion documents: [`custody-ladder.md`](./custody-ladder.md) (the normative r
 
 ---
 
-## ADR-001: `sub` is the key fingerprint at every custody rung ✅ Decided
+## ADR-001: `sub` is a XID — a stable identifier derived from an inception key ✅ Decided (revised 2026-07-28)
 
-**Context.** A user's identity must survive moving between custody rungs. If climbing from
-managed custody (C2) to self-custody (C3) issued a new identifier, every downstream relying
-party, capability chain and stored record would break — and nobody would climb.
+**Context.** Identity must survive both *custody* changes and *key* changes.
 
-**Decision.** The subject of every token, capability and record is the **Ed25519 public-key
-fingerprint**. It does not change when custody changes. Moving C2 → C3 is a change of *holder*,
-not of *identity*.
+The first draft of this ADR set `sub` to the fingerprint of the user's current key. That gets
+custody right — climbing C2 → C3 keeps the same subject — but it makes **key rotation change
+the user's identity**, which is not a corner case:
+
+- **Post-quantum migration is a scheduled rotation.** `identikey-auth` already supports hybrid
+  Ed25519 + ML-DSA. Moving to PQ-only rotates every key in the system. A fingerprint-based
+  `sub` therefore has a *known future date* on which every identity breaks.
+- Key compromise would force a new identity — the worst possible time to lose continuity.
+- Device loss, algorithm deprecation, and enclave migration are all ordinary events.
+
+A stable identifier is required. The naive fix — a random opaque ID in our database — is worse:
+it makes *us* the authority that says which key belongs to which subject, so a departing user's
+`sub` becomes meaningless without our server. That is precisely the capture the project exists
+to avoid.
+
+**Decision.** `sub` is a **XID** (eXtensible IDentifier): the SHA-256 of the CBOR encoding of
+the user's **inception** public signing key.
+
+- **Self-certifying** — derived from a key, not assigned by us. No authority mints it.
+- **Stable for life** — keys rotate beneath it; the XID never changes.
+- **Verifiable** — the XID document carries keys, endpoints, permissions and delegations, and
+  is signed by the subject's own keys.
+
+This implies a **two-tier key model**: a long-lived *inception key* whose hash is the identity,
+and *operational/device keys* that rotate freely underneath it. Rotation becomes a normal,
+signed event rather than an identity break. Signal, SSH CAs and the DID family all converge on
+this shape for the same reason.
+
+**Implementation.** Adopt `bc-xid` (BCR-2024-010). Three reasons it is the obvious choice
+rather than a build:
+
+1. `XID` is already present in `bc-components` 0.31.1, which recrypt depends on today.
+2. `bc-xid` is **BSD-2-Clause-Patent** — one of the two branches chosen in ADR-003, so it drops
+   into `identikey-protocol` with no licence friction and satisfies ADR-002's
+   no-copyleft-dependency rule.
+3. It is Gordian Envelope / dCBOR native, matching `identikey-auth`'s existing wire format.
+
+`bc-components` also ships **SSKR** (Sharded Secret Key Reconstruction), which is directly
+relevant to the guardian-recovery work — worth evaluating there rather than reaching for a
+separate Shamir implementation.
 
 **Consequences.**
 
-- The OP mints tokens *about* a key, never *instead of* one. A C4 sole-custody user has a `sub`
-  the OP has never held the private half of.
-- Key rotation is therefore a genuinely hard problem, not a free one: rotating the key changes
-  the subject. Needs an explicit successor-key mechanism (signed attestation from old to new)
-  before any rotation feature ships. **Open — see Open Questions.**
-- Capability chains in `identikey-storage-auth` already key on fingerprints, so this is
-  consistent with what recrypt does rather than a new convention.
-
-**Why this matters beyond tidiness.** It is what makes the exit test satisfiable. A user who
-leaves takes their key, and everything that referenced them still verifies against a server
-they no longer talk to.
-
----
+- Custody migration (C2 → C3) and key rotation are now *both* non-events for identity. That was
+  the goal.
+- The OP mints tokens *about* a XID, never *instead of* one. A C4 sole-custody user has a `sub`
+  we have never held a private key for.
+- **A resolution story is now required.** A stable identifier is only useful if a relying party
+  can obtain current key state. See Open Questions — this is the real remaining cost of the
+  decision, and it is smaller than it looks: because the XID document is signed by the subject,
+  a resolver can serve it but cannot forge it. Losing our resolver costs *freshness*, not
+  *verifiability* — an availability dependency, not a trust dependency.
+- Supersedes the successor-key-attestation task filed under ADR-001's first draft; XID's
+  rotation model covers it, except for pre-rotation (below).
 
 ## ADR-002: Protocol crates live in a separate repository ✅ Decided
 
@@ -225,13 +258,24 @@ store traits) needs converting.
 
 ## Open questions
 
-1. **Key rotation under ADR-001.** Rotating changes the subject. Needs a signed
-   successor-attestation mechanism, designed before any rotation feature ships.
-2. **Stewardship structure** — `licensing-and-commons.md` §5 (a)/(b)/(c)/(d). Currently
+1. **Pre-rotation.** KERI commits to a *digest of the next key* at each rotation, so a
+   compromised current key cannot rotate to an attacker's key. Whether `bc-xid` supports this,
+   and whether we need it, is unresolved — it matters most at C3/C4 where there is no
+   custodian to appeal to. **Check before the protocol split lands.**
+2. **XID document resolution.** Who serves it, and how does a relying party get fresh key
+   state? Candidates: the OP (availability dependency only — it cannot forge a signed
+   document), a user-controlled endpoint, recrypt storage, or a witness set. A user must be
+   able to self-host or relocate resolution, or the exit test degrades.
+3. **Pairwise subject identifiers.** A global self-certifying `sub` lets every relying party
+   correlate the same user across services. OIDC's `pairwise` subject type exists for exactly
+   this. Likely shape: XID is the canonical internal identity; the `sub` shown to an ordinary
+   RP is derived from (XID, sector_identifier), with the bare XID disclosed only where the user
+   wants to be linkable. Painful to retrofit — decide before the first token is issued.
+4. **Stewardship structure** — `licensing-and-commons.md` §5 (a)/(b)/(c)/(d). Currently
    materially (b).
-3. **C2 consent-record format.** Signed by what, stored where, shown how. Probably a capability
+5. **C2 consent-record format.** Signed by what, stored where, shown how. Probably a capability
    envelope reusing the `identikey-storage-auth` chain machinery.
-4. **Is WebCrypto non-extractable a distinct rung (C2.5)?** Stronger than C2, weaker than C3;
+6. **Is WebCrypto non-extractable a distinct rung (C2.5)?** Stronger than C2, weaker than C3;
    device loss unrecoverable. Deferred.
-5. **Does the OP advertise custody rung to relying parties** via `acr`/`amr`? Useful for
+7. **Does the OP advertise custody rung to relying parties** via `acr`/`amr`? Useful for
    RPs wanting to require C3+, but leaks user posture to every RP. Default: no.
