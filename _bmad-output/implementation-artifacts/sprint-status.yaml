@@ -50,23 +50,26 @@ development_status:
   2-6-credential-management: done
   epic-2-retrospective: optional
 
-  # Epic 3: App Management (4 stories) - FR14-19 — DEPRIORITIZED
-  epic-3: in-progress
-  3-1-appservice-core-operations: ready-for-dev
-  3-2-app-mcp-tools: ready-for-dev
-  3-3-app-cli-commands: backlog
-  3-4-app-configuration-updates: backlog
-  epic-3-retrospective: optional
+  # Epic 3: App Management (4 stories) - FR14-19 — CANCELLED 2026-07-28 (identikey-core-3rx.3)
+  # Keycloak-shaped admin tooling. The Rust pivot drops Keycloak, so this would be
+  # built against an API we are removing. Cancelled rather than replanned.
+  epic-3: cancelled
+  3-1-appservice-core-operations: cancelled
+  3-2-app-mcp-tools: cancelled
+  3-3-app-cli-commands: cancelled
+  3-4-app-configuration-updates: cancelled
+  epic-3-retrospective: cancelled
 
-  # Epic 4: Guild & Role Management (6 stories) - FR20-33 — DEPRIORITIZED
-  epic-4: backlog
-  4-1-guildservice-core-operations: backlog
-  4-2-roleservice-core-operations: backlog
-  4-3-guild-mcp-tools: backlog
-  4-4-role-mcp-tools: backlog
-  4-5-guild-cli-commands: backlog
-  4-6-role-cli-commands: backlog
-  epic-4-retrospective: optional
+  # Epic 4: Guild & Role Management (6 stories) - FR20-33 — CANCELLED 2026-07-28 (identikey-core-3rx.3)
+  # Keycloak-shaped admin tooling. See epic-3 note.
+  epic-4: cancelled
+  4-1-guildservice-core-operations: cancelled
+  4-2-roleservice-core-operations: cancelled
+  4-3-guild-mcp-tools: cancelled
+  4-4-role-mcp-tools: cancelled
+  4-5-guild-cli-commands: cancelled
+  4-6-role-cli-commands: cancelled
+  epic-4-retrospective: cancelled
 
   # Epic 5: Login Flow Administration (5 stories) - FR34-41 — PARTIAL
   epic-5: contexted
@@ -77,13 +80,14 @@ development_status:
   5-5-flow-copy-defaults: backlog      # Deprioritized
   epic-5-retrospective: optional
 
-  # Epic 6: Sessions & Events (4 stories) - FR42-48 — DEPRIORITIZED
-  epic-6: backlog
-  6-1-sessionservice-core-operations: backlog
-  6-2-eventservice-core-operations: backlog
-  6-3-session-event-mcp-tools: backlog
-  6-4-session-event-cli-commands: backlog
-  epic-6-retrospective: optional
+  # Epic 6: Sessions & Events (4 stories) - FR42-48 — CANCELLED 2026-07-28 (identikey-core-3rx.3)
+  # Keycloak-shaped admin tooling. See epic-3 note.
+  epic-6: cancelled
+  6-1-sessionservice-core-operations: cancelled
+  6-2-eventservice-core-operations: cancelled
+  6-3-session-event-mcp-tools: cancelled
+  6-4-session-event-cli-commands: cancelled
+  epic-6-retrospective: cancelled
 
 # ============================================================================
 # NATIVE MOBILE AUTH 🔥 ACTIVE
@@ -114,8 +118,11 @@ development_status:
   9-2-registration-challenge-generation: done
   9-3-attestation-validation-storage: done
   9-4-authentication-challenge-generation: done
-  9-5-assertion-verification: ready-for-dev
-  9-6-passkey-management-crud: backlog
+  9-5-assertion-verification: done
+  # 9-6 CANCELLED 2026-07-28 (identikey-core-3rx.3) — passkey CRUD against the Keycloak-era
+  # schema. Credential management returns in Rust under epic identikey-core-5gh, notably
+  # 5gh.2 (AAGUID, provider name/icon, user nicknames) and 5gh.3 (Signal API hygiene).
+  9-6-passkey-management-crud: cancelled
   epic-9-retrospective: optional
 
   # Epic 10: Auth Endpoints (6 stories) - FR150-160
