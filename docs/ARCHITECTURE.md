@@ -107,42 +107,65 @@ specs. `identikey-storage-auth` stays with recrypt.
 
 ---
 
-## ADR-004: WebAuthn RP ID 🟡 Proposed — needs domain confirmation
+## ADR-004: WebAuthn RP ID is a dedicated auth origin 🟡 Proposed — revised 2026-07-28
 
-**Context.** The RP ID is **effectively permanent**: changing it invalidates every enrolled
-credential and forces every user to re-enrol. It must be equal to, or a registrable suffix of,
-the origin's domain. You can narrow scope later at request time; you can never widen it.
+**Context.** The RP ID is **effectively permanent**: it is baked into every credential at
+registration, and changing it forces every user to re-enrol. It must equal, or be a
+registrable suffix of, the origin's domain. An RP ID of `identikey.io` works for any
+`*.identikey.io` origin; an RP ID of `id.identikey.io` works only at or below that name.
 
-Note the topology: IdentiKey is *itself* the WebAuthn relying party. Users authenticate to
-IdentiKey; IdentiKey then issues OIDC tokens to the actual applications. So one RP ID serves
-every downstream RP — this does not multiply.
+**Proposed decision.**
 
-**Proposed decision.** RP ID = **`identikey.io`** (the registrable domain, not a subdomain),
-and publish `/.well-known/webauthn` (Related Origin Requests) **from day one**.
+| Origin | Purpose | WebAuthn |
+|---|---|---|
+| `identikey.io` | marketing, docs, status | never |
+| `app.identikey.io` | the product UI | never — redirects to the OP |
+| **`id.identikey.io`** | **the OIDC provider: login, consent, account** | **yes — this is the RP ID** |
 
-**Rationale.** An RP ID of `identikey.io` works for origins on any `*.identikey.io`, so
-`auth.`, `app.` and future subdomains all share credentials. Choosing `auth.identikey.io`
-would permanently exclude every other subdomain. Related Origins additionally allows one RP ID
-across *different* registrable domains — required for white-labelled deployments on customer
-domains or a login served from `worldtree.io` — and **cannot be retrofitted** for
-already-enrolled users.
+Publish `/.well-known/webauthn` (Related Origin Requests) on the RP ID from day one.
+
+**Rationale — why not the registrable domain.** The usual advice is "pick the broadest domain,
+because you can never widen later," and that is right for a consumer product with many
+first-party surfaces that each authenticate. **An OIDC provider is not that shape.** Auth is
+centralised by construction: the app never performs WebAuthn, it redirects to the OP and
+receives tokens back. So there is structurally only ever *one* first-party origin doing
+WebAuthn, and the argument for breadth mostly evaporates.
+
+Given that, the narrow choice is strictly better:
+
+- **Tightest blast radius.** A compromise of the marketing site or the app cannot reach
+  passkeys at all — different RP ID, and the origin check fails.
+- **It matches the architecture** rather than hedging against a topology we are not building.
+- Related Origins remains available for white-labelled login on customer domains, with either
+  choice — so the narrow RP ID costs nothing there.
+
+**Correcting the previous draft.** The first version of this ADR recommended `identikey.io`
+and claimed that XSS on any `*.identikey.io` subdomain "can exercise the passkey." That
+overstated it. A script on `evil.identikey.io` could *obtain* an assertion for a broad RP ID,
+but it could not *use* it against us: `clientDataJSON` carries the true origin, and the server
+verifies it against a strict allowlist — the mechanism already exists as
+`WEBAUTHN_EXPECTED_ORIGIN`. The residual risk is real but narrower than stated, and strict
+origin allowlisting is the actual mitigation. The case for a dedicated auth origin rests on
+architectural fit, not on that risk.
 
 **Consequences / accepted risk.**
 
-- **Any XSS on any `*.identikey.io` subdomain can exercise the passkey.** This is the real cost
-  of the broad choice. Mitigation: never host untrusted or user-generated content on a
-  subdomain of the RP ID. That is a standing infrastructure constraint, not a one-time note.
-- Marketing sites, status pages and docs should live on a *different* registrable domain, or be
-  treated as security-relevant.
+- **If we ever want WebAuthn at a second first-party origin, every user re-enrols.** This is
+  the whole cost of the decision. It is acceptable only because an OP centralises auth; if
+  that assumption ever breaks, this ADR breaks with it.
+- Native apps are unaffected — associated-domain files
+  (`apple-app-site-association`, `assetlinks.json`) point at `id.identikey.io`.
+- **Do not later move the OP to `identikey.io/login`.** Some products serve auth from the
+  root; that path is closed once credentials exist under `id.`. Decide now, permanently.
+- `WEBAUTHN_EXPECTED_ORIGIN` must stay a strict allowlist, never a wildcard.
 
-**Alternatives.** `auth.identikey.io` — tighter blast radius, permanently excludes other
-subdomains. Rejected: the isolation is worth less than the flexibility, and the XSS risk is
-addressable by policy.
+**Alternatives.** `identikey.io` (registrable domain) — maximum future flexibility, wider blast
+radius, and hedges against a topology we are not building. `app.identikey.io` — conflates the
+product surface with the auth surface; if the app and the OP ever separate, the RP ID is
+stranded on the wrong one.
 
-**Open.** Confirm `identikey.io` is the durable production domain before this is decided —
-that is the only input this ADR is missing.
-
----
+**Open.** Confirm `identikey.io` is the durable production domain, and pick the auth subdomain
+(`id.` vs `auth.` — cosmetic, but permanent).
 
 ## ADR-005: The URN grant requires an `identikey-auth` Response, not a WebAuthn assertion 🟡 Proposed
 
