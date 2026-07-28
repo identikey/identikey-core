@@ -12,6 +12,12 @@ export {
 } from './verify-registration';
 
 export {
+	verifyAuthenticationAssertion,
+	type VerifyAuthenticationParams,
+	type AuthenticationResult
+} from './verify-authentication';
+
+export {
 	storePasskeyCredential,
 	getPasskeyByCredentialId,
 	getPasskeysByUserId,
