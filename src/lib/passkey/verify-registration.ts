@@ -96,7 +96,12 @@ export async function verifyAndStorePasskey(
 		);
 	}
 
-	await deleteChallengeByValue(challenge);
+	try {
+		await deleteChallengeByValue(challenge);
+	} catch {
+		// Credential is already stored — swallow deletion failure to avoid
+		// surfacing a misleading error. The challenge will expire naturally.
+	}
 
 	return {
 		credentialId: credential.id,

@@ -20,4 +20,9 @@ export {
 	type StorePasskeyParams
 } from './credential-store';
 
+export {
+	generateAuthenticationChallenge,
+	type AuthenticationChallengeParams
+} from './authentication-options';
+
 export { PasskeyError, PasskeyErrorCode } from './errors';

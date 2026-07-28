@@ -5,6 +5,7 @@ import type {
 } from '@simplewebauthn/server';
 import { createChallenge } from '$lib/server/challenges';
 import type { Db } from '$lib/server/db';
+import { PasskeyError, PasskeyErrorCode } from './errors';
 
 export interface WebAuthnConfig {
 	rpId: string;
@@ -35,8 +36,11 @@ export async function generateRegistrationChallenge(
 	params: RegistrationChallengeParams,
 	db?: Db
 ): Promise<PublicKeyCredentialCreationOptionsJSON> {
-	if (!params.userId) {
-		throw new Error('userId is required for registration challenge generation');
+	if (params.userId.trim().length === 0) {
+		throw new PasskeyError(
+			'userId is required for registration challenge generation',
+			PasskeyErrorCode.INVALID_INPUT
+		);
 	}
 
 	const { rpId, rpName } = getWebAuthnConfig();
@@ -71,7 +75,11 @@ export async function generateRegistrationChallenge(
 			db
 		);
 	} catch (cause) {
-		throw new Error('Failed to persist registration challenge', { cause });
+		throw new PasskeyError(
+			'Failed to persist registration challenge',
+			PasskeyErrorCode.STORAGE_FAILED,
+			cause instanceof Error ? cause : undefined
+		);
 	}
 
 	return options;

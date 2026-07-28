@@ -108,13 +108,13 @@ development_status:
   epic-8-retrospective: optional
 
   # Epic 9: Passkey Management (6 stories) - FR110-118
-  # Note: Passkeys stored in Keycloak credentials, challenges in DB
+  # Note: Passkeys stored in PostgreSQL (ADR-007 amended — Keycloak Admin API lacks WebAuthn credential creation), challenges in DB
   epic-9: in-progress
   9-1-challenge-storage: done
   9-2-registration-challenge-generation: done
-  9-3-attestation-validation-storage: review
-  9-4-authentication-challenge-generation: backlog
-  9-5-assertion-verification: backlog
+  9-3-attestation-validation-storage: done
+  9-4-authentication-challenge-generation: done
+  9-5-assertion-verification: ready-for-dev
   9-6-passkey-management-crud: backlog
   epic-9-retrospective: optional
 

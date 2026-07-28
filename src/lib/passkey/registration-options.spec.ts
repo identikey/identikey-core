@@ -13,6 +13,7 @@ vi.mock('$lib/server/challenges', () => ({
 
 import { generateRegistrationChallenge, getWebAuthnConfig } from './registration-options';
 import { createChallenge } from '$lib/server/challenges';
+import { PasskeyErrorCode } from './errors';
 
 beforeEach(() => {
 	vi.clearAllMocks();
@@ -135,17 +136,22 @@ describe('generateRegistrationChallenge', () => {
 	});
 
 	it('throws when userId is empty', async () => {
-		await expect(generateRegistrationChallenge({ userId: '' })).rejects.toThrow(
-			'userId is required'
-		);
+		await expect(generateRegistrationChallenge({ userId: '' })).rejects.toMatchObject({
+			name: 'PasskeyError',
+			code: PasskeyErrorCode.INVALID_INPUT,
+			message: 'userId is required for registration challenge generation'
+		});
 	});
 
 	it('wraps createChallenge errors with descriptive message', async () => {
 		vi.mocked(createChallenge).mockRejectedValueOnce(new Error('connection refused'));
 
-		await expect(generateRegistrationChallenge({ userId: 'user-123' })).rejects.toThrow(
-			'Failed to persist registration challenge'
-		);
+		await expect(generateRegistrationChallenge({ userId: 'user-123' })).rejects.toMatchObject({
+			name: 'PasskeyError',
+			code: PasskeyErrorCode.STORAGE_FAILED,
+			message: 'Failed to persist registration challenge',
+			cause: expect.any(Error)
+		});
 	});
 
 	it('includes supportedAlgorithmIDs (EdDSA, ES256, RS256)', async () => {

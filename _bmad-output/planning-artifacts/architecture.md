@@ -595,9 +595,9 @@ Hide Keycloak terminology, expose IdentiKey domain concepts. Users never see "re
 2. UX: users can safely use friend's phone
 3. Architecture: foundation for device management
 
-### ADR-007: Passkeys in Keycloak Credentials ✅
+### ADR-007: Passkeys in Keycloak Credentials ✅ → Amended
 
-**Decision:** Store passkey credentials in Keycloak's user credential store (via Admin API), not in a separate IdentiKey database.
+**Original Decision:** Store passkey credentials in Keycloak's user credential store (via Admin API), not in a separate IdentiKey database.
 
 **Rationale:**
 1. **Unified credential store:** One source of truth for user credentials
@@ -608,6 +608,8 @@ Hide Keycloak terminology, expose IdentiKey domain concepts. Users never see "re
 **Trade-off:** Requires Keycloak Admin API calls for passkey CRUD (not direct DB access). Acceptable.
 
 **Implementation:** Use Keycloak Admin API credential endpoints to store/retrieve WebAuthn credentials.
+
+**Amendment (2026-02-25, Story 9.3):** The Keycloak Admin API (`@keycloak/keycloak-admin-client`) does not support programmatic creation of WebAuthn credentials — Keycloak only creates them through its own browser-based authentication flow. Passkey credentials are therefore stored in IdentiKey's PostgreSQL database via the `passkey_credentials` table (Drizzle ORM). This sacrifices web-compatibility rationale (points 2-4 above) but is the only viable path. Future work could explore Keycloak SPI plugins or direct Keycloak DB writes to restore unified storage.
 
 ### ADR-008: Social Login as Bootstrap Only ✅
 

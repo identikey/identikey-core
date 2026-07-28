@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db as appDb, type Db } from '$lib/server/db';
 import { passkeyCredentials } from '$lib/server/db/schema';
 import type { PasskeyCredential } from '$lib/server/db/schema';
+import { PasskeyError, PasskeyErrorCode } from './errors';
 
 export type StorePasskeyParams = {
 	userId: string;
@@ -29,7 +30,10 @@ export async function storePasskeyCredential(
 			backedUp: params.backedUp
 		})
 		.returning();
-	return rows[0]!;
+	if (!rows[0]) {
+		throw new PasskeyError('Insert returned no rows', PasskeyErrorCode.STORAGE_FAILED);
+	}
+	return rows[0];
 }
 
 export async function getPasskeyByCredentialId(
