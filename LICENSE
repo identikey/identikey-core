@@ -1,0 +1,56 @@
+# IdentiKey Core — Licensing
+
+Copyright © 2026 Identikey Inc. (https://identikey.io)
+
+IdentiKey Core is the **hosted identity product** — the OIDC provider, the managed-custody
+and recovery services, and the web interface. It sits in the *product tier* of the
+project's licensing doctrine, and is therefore dual-licensed.
+
+See [`docs/licensing-and-commons.md`](docs/licensing-and-commons.md) for why the tiers
+exist and what they are trying to protect.
+
+## This repository — AGPL-3.0-or-later, or commercial
+
+You may use it under **either**:
+
+1. The [GNU Affero General Public License v3.0 or later](LICENSE-AGPL) — free of charge,
+   forever; or
+2. A **commercial license** from Identikey Inc. — see
+   [LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md).
+
+You only need a commercial license if the AGPL's obligations don't work for your product.
+If you're happy to comply with the AGPL, you owe nothing.
+
+The AGPL grant carries **additional permissions** under section 7 — see
+[LICENSE-EXCEPTIONS.md](LICENSE-EXCEPTIONS.md). In short: you may link AGPL-incompatible
+cryptographic libraries, and **re-branding the login and account pages does not by itself
+trigger section 13**.
+
+## What is *not* in this repository — the permissive tier
+
+The protocol lives elsewhere and is permissively licensed, deliberately:
+
+| Component | Where | License |
+|---|---|---|
+| `identikey-auth` — challenge/response, enclave signing | `identikey-protocol` | `Apache-2.0 OR BSD-2-Clause-Patent` |
+| Protocol specs + test vectors | `identikey-protocol` | permissive + patent non-assert |
+| `recrypt-core`, `-wire`, `-storage`, `-client`, `-ffi` | `recrypt` | `MIT OR Apache-2.0` |
+
+**The copyleft boundary is the server, never the protocol.** Speaking the IdentiKey wire
+protocols, implementing them independently, or building a client creates no derivative work
+of anything here and imposes no obligation whatsoever. That is the point of the split: the
+protocol is meant to outlive us and to be implementable by anyone, including competitors.
+
+## Documentation
+
+Files under `docs/` are additionally available under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), so the custody-ladder definitions,
+the licensing doctrine and the passkey requirements can be quoted, translated and built on
+without touching the code licence.
+
+## Contributions
+
+Contributions are accepted under the Contributor License Agreement in the `recrypt`
+repository ([CLA.md](https://github.com/identikey/recrypt/blob/main/CLA.md)), which is what
+makes the dual-licensed portion possible. **You keep the copyright to your contribution** —
+it is a licence, not an assignment.
