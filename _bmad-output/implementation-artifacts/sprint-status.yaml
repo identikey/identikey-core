@@ -71,14 +71,17 @@ development_status:
   4-6-role-cli-commands: cancelled
   epic-4-retrospective: cancelled
 
-  # Epic 5: Login Flow Administration (5 stories) - FR34-41 — PARTIAL
-  epic-5: contexted
+  # Epic 5: Login Flow Administration (5 stories) - FR34-41 — CANCELLED 2026-07-29 (identikey-core-3rx.3)
+  # Keycloak login-flow administration, same shape as epics 3/4/6. 5-1..5-3 shipped and stay
+  # recorded as done — they are history, reachable at tag pre-rust-pivot, not work to redo.
+  # The unbuilt remainder is cancelled.
+  epic-5: cancelled
   5-1-authflowservice-core-operations: done
   5-2-login-flow-mcp-tools: done
   5-3-login-flow-cli-commands: done
-  5-4-execution-modification: backlog  # Deprioritized
-  5-5-flow-copy-defaults: backlog      # Deprioritized
-  epic-5-retrospective: optional
+  5-4-execution-modification: cancelled
+  5-5-flow-copy-defaults: cancelled
+  epic-5-retrospective: cancelled
 
   # Epic 6: Sessions & Events (4 stories) - FR42-48 — CANCELLED 2026-07-28 (identikey-core-3rx.3)
   # Keycloak-shaped admin tooling. See epic-3 note.
