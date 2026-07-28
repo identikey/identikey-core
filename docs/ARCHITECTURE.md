@@ -140,7 +140,7 @@ specs. `identikey-storage-auth` stays with recrypt.
 
 ---
 
-## ADR-004: WebAuthn RP ID is `auth.identikey.me` 🟡 Proposed — revised 2026-07-28
+## ADR-004: WebAuthn RP ID is `auth.identikey.me` ✅ Decided 2026-07-28
 
 **Context.** The RP ID is **permanent** — baked into every credential at registration; changing
 it forces every user to re-enrol. It must equal, or be a registrable suffix of, the serving
@@ -151,7 +151,7 @@ Domains actually held: **`identikey.io`** and **`identikey.me`** (both NameCheap
 "Authentication Servers" product page** — see the trademark note below. The gTLDs are not
 obtainable, so the choice is between two ccTLDs.
 
-**Proposed decision.**
+**Decision.**
 
 | Origin | Purpose | WebAuthn |
 |---|---|---|
@@ -216,8 +216,22 @@ not *use* it, since `clientDataJSON` carries the true origin and the server allo
 (2) The second asserted `identikey.com` was available; that was inferred from DNS resolving
 behind Cloudflare, which proves nothing about ownership. It is OneSpan's.
 
-**Open.** Confirm `.me` for auth is acceptable given marketing sits on `.io`. See also the
-trademark question below, which could moot the whole naming discussion.
+**Confirmed 2026-07-28** by Duke: `.me` for auth, marketing on `.io`.
+
+**Scope of what this decision does and does not settle.** It fixes the *credential namespace*
+— the one string that can never change. It does **not** settle the product name or the
+marketing domain, which remain revisable and are subject to the trademark question below. If
+the name has to change, `auth.identikey.me` can keep serving as the RP ID behind a differently
+branded login page (the RP ID is an identifier, not a user-facing brand); losing the *domain*
+is the only thing that costs re-enrolment. Do not treat this ADR as a reason to consider the
+naming question closed.
+
+**Actions this decision commits us to** (before the first production credential is written):
+
+1. `identikey.me` — registrar lock, multi-year auto-renew, independent expiry monitoring.
+2. Serve `/.well-known/webauthn` from `auth.identikey.me` from the first deploy.
+3. `WEBAUTHN_EXPECTED_ORIGIN = https://auth.identikey.me` — strict allowlist, never a wildcard.
+4. Never add a profile/user-content origin as a Related Origin.
 
 ---
 
