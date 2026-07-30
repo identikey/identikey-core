@@ -296,13 +296,13 @@ you hold the key yourself, at any rung. Different column *and* different row.
 
 ---
 
-## ADR-006: Postgres via `sqlx`; `pglite` only for genuine embedding 🟡 Proposed
+## ADR-006: Postgres via `sqlx`; `pglite` only for genuine embedding ✅ Decided 2026-07-30
 
 **Context.** Standardising on Postgres. recrypt currently uses SQLite via `rusqlite`, behind
 already-abstracted store traits (`OwnershipStore`, `GrantStore`, `KeyspaceStore`,
 `AccountStore`), so a `postgres` feature is mechanical rather than a rewrite.
 
-**Proposed decision.** `sqlx`, with the offline query cache committed. Real Postgres in dev and
+**Decision.** `sqlx`, with the offline query cache committed. Real Postgres in dev and
 CI. `pglite` reserved for in-process embedding (the desktop app), never as the dev default.
 
 **Rationale.** Compile-time-checked SQL is worth the build-time friction in an auth server —
@@ -313,6 +313,17 @@ and `SELECT … FOR UPDATE SKIP LOCKED` on the challenge and token tables.
 **Consequences.** `DATABASE_URL` needed at build time unless the offline cache is current — CI
 must verify the cache is not stale. `recrypt-server`'s direct `tokio_rusqlite` use (outside the
 store traits) needs converting.
+
+**Actions this decision commits us to:**
+
+1. Commit `.sqlx/` and add a CI step that fails when the offline cache is stale — a cache that
+   silently drifts turns compile-time SQL checking into decoration.
+2. Real Postgres service container in CI; no SQLite or `pglite` fallback in the test path.
+3. Convert `recrypt-server`'s direct `tokio_rusqlite` usage to go through the store traits
+   (`identikey-core-zan.4`) — it is the one place that bypasses the abstraction.
+4. If `pglite` is ever introduced for the desktop app, it runs the *same* migrations and the
+   same trait implementations, and its divergences (advisory locks, `SKIP LOCKED`) are tested
+   explicitly rather than assumed equivalent.
 
 ---
 
