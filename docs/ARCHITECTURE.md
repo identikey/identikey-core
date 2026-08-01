@@ -562,7 +562,7 @@ C1 by definition. That is the delegation / key-graph ADR still to be written.
 
 ---
 
-## ADR-009: Pairwise `sub` by default, derived from user-held material 🟡 Proposed
+## ADR-009: Pairwise `sub` by default, via an exportable server salt 🟡 Proposed — revised 2026-08-01
 
 **Context.** ADR-001 makes `sub` a XID: globally unique and self-certifying. That is exactly what
 makes it *correlatable* — every relying party sees the same string, so any two RPs can collude to
@@ -571,24 +571,38 @@ Apple is pairwise by default) and an odd look for an identity product built on c
 Retrofitting is impossible in the direction that matters: every issued token embeds a subject the
 RP stores forever (`identikey-core-ccf.7`).
 
-**The trap in stock OIDC pairwise.** The standard construction is
-`sub = H(sector_identifier ‖ local_id ‖ salt)` with a **server-held salt**. That makes the OP the
-only party who can compute or prove the mapping — which reintroduces us as the authority that
-says which subject belongs to which user. ADR-001 rejected exactly this ("it makes *us* the
-authority… precisely the capture the project exists to avoid"). A departing user could not prove
-to an RP that they are the person it knows, because the linkage lived in our salt. **Stock
-pairwise fails the exit test.** We cannot simply adopt it.
+**Stock OIDC pairwise, and why it is sufficient.** The standard construction is
+`sub = H(sector_identifier ‖ local_id ‖ salt)` with a **server-held salt**. An earlier draft of
+this ADR rejected it as failing the exit test — reasoning that only the OP could compute or
+prove the mapping, so a departing user could not prove to an RP that they are the person it
+knows. **That was an over-read.** The salt is *data*. Export it, and a successor OP reproduces
+every pseudonym exactly, so continuity at every relying party survives our disappearance. This
+is a data-export obligation — one we already carry and can test — not a cryptographic-
+architecture problem.
+
+It also fits the exit test as narrowed: the test protects the *substrate*, not the feature set.
+The substrate here is the XID, which the user controls at every rung regardless. A pairwise
+`sub` is a **projection for legacy relying parties**, not the identity itself.
+
+**Proportionality — the reason the elaborate version was wrong.** The OIDC surface is the
+*legacy bridge*, not the high-assurance path. High-assurance operations run through
+`identikey-auth` and the URN grant against the real key, and those counterparties are
+capability-aware, so they are in *disclosed* mode anyway — capability chains need the real XID.
+A construction that introduces a new class of critical user-held secret to protect the
+low-assurance surface, while buying nothing on the surface that matters, is mis-proportioned.
+Build the legacy bridge to legacy-bridge complexity.
 
 **Decision.**
 
 1. **Pairwise by default.** Ordinary RPs receive a per-sector pseudonym. The bare XID is
    disclosed only on explicit, per-RP user consent.
-2. **The derivation input is user-held material, never a server salt.** A dedicated *pairwise
-   root* secret, established at inception and committed in the XID document, is the input:
-   `sub_rp = KDF(pairwise_root, sector_identifier)`. This single constraint is what keeps
-   pairwise compatible with the exit test — the user can always recompute their own pseudonyms,
-   and a successor OP given the same root reproduces them exactly, so continuity at every RP
-   survives our disappearance.
+2. **A server-held salt, which is exportable.** `sub_rp = KDF(salt, XID, sector_identifier)`,
+   computed by the OP. The salt is per-deployment secret material, **never published and never
+   placed in the XID document** — a root in the document would be served publicly by every
+   resolver, letting anyone compute every user's pseudonym at every sector, which is strictly
+   worse than using the bare XID and irreversible the moment it happens. Its exit-test
+   obligation is discharged by **export**, not by user custody: the salt (or the derived
+   `sector → sub` map) is part of the user's data export.
 3. **Sector identifiers per OIDC**, including `sector_identifier_uri`, so an organisation's
    several RPs can share one pseudonym deliberately.
 4. **Two disclosure modes, chosen by the user, both legitimate.** This is the same shape as the
@@ -603,9 +617,9 @@ pairwise fails the exit test.** We cannot simply adopt it.
    document, and that is correct rather than a gap. Legacy RPs live in the ordinary OIDC trust
    model, which is what they already expect. Capability-aware RPs across the sovereign stack
    (recrypt, mjolnir, Papyrus) use disclosed mode and get the full self-certifying benefit.
-5. **Bind on first issuance.** Record `(XID, sector) → sub_rp` and refuse any `sub_rp` already
-   bound to a different XID. Without this, a self-custodial user who asserts their own pseudonym
-   could assert *someone else's* and impersonate them at that RP.
+5. **No first-issuance binding table, and no asserted pseudonyms.** Because the OP computes
+   `sub_rp` deterministically at every rung, a user can never present someone else's pseudonym.
+   The impersonation class an earlier draft had to defend against does not arise.
 
 **Rationale — asymmetric reversibility.** Pairwise → disclosed is always available later: it is
 just an additional claim, and the user can choose it per RP whenever they want linkability.
@@ -616,28 +630,33 @@ privacy preference, which is why it is the primary rationale rather than the sec
 
 **Consequences.**
 
-- **The pairwise root becomes critical material.** Losing it costs the ability to prove
-  continuity at *every* RP simultaneously — a worse blast radius than losing a device key. It
-  must sit in the recovery set (`identikey-core-vt4`) on the same footing as key material, and
-  it must survive key rotation, which argues for a dedicated secret rather than deriving from
-  the inception key (`Privilege::Transfer` can remove the inception key from the document).
-- **At C3/C4 the OP does not hold the pairwise root** and therefore cannot compute the pseudonym
-  itself; the holder supplies it under the binding in (5). v1 ships C1/C2, so this is deferred —
-  **but the derivation must be pinned now**, because a pseudonym computed differently later
-  would silently break every RP account the user already has.
+- **The salt is operational secret material, on the same footing as signing keys** — backed up,
+  rotated only with a migration plan, and never logged. Losing it costs every user's continuity
+  at every relying party simultaneously. But it is *ours* to protect, not a new burden placed on
+  the user, and it does not enter the recovery design (`identikey-core-vt4`), which stays scoped
+  to key material.
+- **Rotating the salt breaks every pairwise `sub`.** It is therefore effectively permanent, and
+  must be generated per-deployment at install rather than shipped as a default or derived from
+  anything guessable.
+- **Export is the exit-test obligation and must be tested as one.** A user's export includes
+  enough to reproduce their pseudonyms at a successor OP. Untested export is the failure mode
+  here, not cryptography.
+- **The derivation must be pinned before the first token.** A pseudonym computed differently
+  later silently breaks every RP account a user already has.
 - Pairwise `sub` values must never be used as internal keys. The XID remains the canonical
   internal identity; the pseudonym is a projection at the token boundary only.
+- **The OP can correlate its own users across sectors.** Accepted: it already can, since it
+  authenticates them. Pairwise defends against *RP-to-RP* collusion, which is the threat that
+  exists on this surface.
 
-**The principled long-term answer is a VRF.** `sub_rp = VRF_sk(sector)` with a proof verifiable
-against a public key in the XID document gives all three properties at once: unlinkable across
-sectors, computable only by the key holder, and *verifiable* by the OP without holding the
-secret — which would remove the need for the first-issuance binding in (5) and make C3/C4
-pseudonyms self-verifying rather than asserted. Named here so it is not re-derived later.
-Not adopted for v1: it adds a primitive and a proof format for a rung v1 does not ship.
+**If the OP should ever be unable to correlate, the answer is a VRF** — `sub_rp = VRF_sk(sector)`
+with a proof verifiable against a key in the XID document: unlinkable across sectors, computable
+only by the holder, and verifiable by the OP without holding the secret. Named so it is not
+re-derived later. Out of scope here, because defending the user against *us* on the legacy OIDC
+surface is not this ADR's threat model — that is what the URN grant and disclosed mode are for.
 
-**Open.** The exact KDF and the pairwise root's representation in the XID document. Whether
-disclosed mode should be per-RP only, or also available as a standing "always disclose to
-capability-aware RPs" preference.
+**Open.** The exact KDF. Whether disclosed mode is per-RP only, or also available as a standing
+"always disclose to capability-aware RPs" preference.
 
 ---
 
