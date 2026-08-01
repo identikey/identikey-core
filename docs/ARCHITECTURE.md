@@ -562,16 +562,91 @@ C1 by definition. That is the delegation / key-graph ADR still to be written.
 
 ---
 
+## ADR-009: Pairwise `sub` by default, derived from user-held material 🟡 Proposed
+
+**Context.** ADR-001 makes `sub` a XID: globally unique and self-certifying. That is exactly what
+makes it *correlatable* — every relying party sees the same string, so any two RPs can collude to
+link a user across services. That is a privacy regression against incumbent IdPs (Sign in with
+Apple is pairwise by default) and an odd look for an identity product built on consent.
+Retrofitting is impossible in the direction that matters: every issued token embeds a subject the
+RP stores forever (`identikey-core-ccf.7`).
+
+**The trap in stock OIDC pairwise.** The standard construction is
+`sub = H(sector_identifier ‖ local_id ‖ salt)` with a **server-held salt**. That makes the OP the
+only party who can compute or prove the mapping — which reintroduces us as the authority that
+says which subject belongs to which user. ADR-001 rejected exactly this ("it makes *us* the
+authority… precisely the capture the project exists to avoid"). A departing user could not prove
+to an RP that they are the person it knows, because the linkage lived in our salt. **Stock
+pairwise fails the exit test.** We cannot simply adopt it.
+
+**Decision.**
+
+1. **Pairwise by default.** Ordinary RPs receive a per-sector pseudonym. The bare XID is
+   disclosed only on explicit, per-RP user consent.
+2. **The derivation input is user-held material, never a server salt.** A dedicated *pairwise
+   root* secret, established at inception and committed in the XID document, is the input:
+   `sub_rp = KDF(pairwise_root, sector_identifier)`. This single constraint is what keeps
+   pairwise compatible with the exit test — the user can always recompute their own pseudonyms,
+   and a successor OP given the same root reproduces them exactly, so continuity at every RP
+   survives our disappearance.
+3. **Sector identifiers per OIDC**, including `sector_identifier_uri`, so an organisation's
+   several RPs can share one pseudonym deliberately.
+4. **Two disclosure modes, chosen by the user, both legitimate.** This is the same shape as the
+   custody ladder — a spectrum the user positions themselves on, not a setting we pick for them:
+
+   | Mode | RP sees | RP can resolve the XID document? | Trust model |
+   |---|---|---|---|
+   | **Pairwise** (default) | per-sector pseudonym | **No** | ordinary OIDC — the RP trusts our token |
+   | **Disclosed** (opt-in) | the bare XID | Yes | self-certifying — the RP verifies without us |
+
+   This resolves the interaction ADR-007 flagged: a pairwise RP *cannot* resolve the XID
+   document, and that is correct rather than a gap. Legacy RPs live in the ordinary OIDC trust
+   model, which is what they already expect. Capability-aware RPs across the sovereign stack
+   (recrypt, mjolnir, Papyrus) use disclosed mode and get the full self-certifying benefit.
+5. **Bind on first issuance.** Record `(XID, sector) → sub_rp` and refuse any `sub_rp` already
+   bound to a different XID. Without this, a self-custodial user who asserts their own pseudonym
+   could assert *someone else's* and impersonate them at that RP.
+
+**Rationale — asymmetric reversibility.** Pairwise → disclosed is always available later: it is
+just an additional claim, and the user can choose it per RP whenever they want linkability.
+Disclosed → pairwise is **impossible**: once an RP has stored the bare XID, no later change
+un-correlates what it already shares with its peers. When one direction is reversible and the
+other is a one-way door, default to the reversible one. That argument holds independently of any
+privacy preference, which is why it is the primary rationale rather than the secondary one.
+
+**Consequences.**
+
+- **The pairwise root becomes critical material.** Losing it costs the ability to prove
+  continuity at *every* RP simultaneously — a worse blast radius than losing a device key. It
+  must sit in the recovery set (`identikey-core-vt4`) on the same footing as key material, and
+  it must survive key rotation, which argues for a dedicated secret rather than deriving from
+  the inception key (`Privilege::Transfer` can remove the inception key from the document).
+- **At C3/C4 the OP does not hold the pairwise root** and therefore cannot compute the pseudonym
+  itself; the holder supplies it under the binding in (5). v1 ships C1/C2, so this is deferred —
+  **but the derivation must be pinned now**, because a pseudonym computed differently later
+  would silently break every RP account the user already has.
+- Pairwise `sub` values must never be used as internal keys. The XID remains the canonical
+  internal identity; the pseudonym is a projection at the token boundary only.
+
+**The principled long-term answer is a VRF.** `sub_rp = VRF_sk(sector)` with a proof verifiable
+against a public key in the XID document gives all three properties at once: unlinkable across
+sectors, computable only by the key holder, and *verifiable* by the OP without holding the
+secret — which would remove the need for the first-issuance binding in (5) and make C3/C4
+pseudonyms self-verifying rather than asserted. Named here so it is not re-derived later.
+Not adopted for v1: it adds a primitive and a proof format for a rung v1 does not ship.
+
+**Open.** The exact KDF and the pairwise root's representation in the XID document. Whether
+disclosed mode should be per-RP only, or also available as a standing "always disclose to
+capability-aware RPs" preference.
+
+---
+
 ## Open questions
 
 1. **Pre-rotation.** ~~Open~~ — decided as **ADR-008** (adopt). Whether `bc-xid` implements it
    natively is an implementation question, not an open decision (`identikey-core-zan.5`).
 2. **XID document resolution.** ~~Open~~ — decided as **ADR-007**.
-3. **Pairwise subject identifiers.** A global self-certifying `sub` lets every relying party
-   correlate the same user across services. OIDC's `pairwise` subject type exists for exactly
-   this. Likely shape: XID is the canonical internal identity; the `sub` shown to an ordinary
-   RP is derived from (XID, sector_identifier), with the bare XID disclosed only where the user
-   wants to be linkable. Painful to retrofit — decide before the first token is issued.
+3. **Pairwise subject identifiers.** ~~Open~~ — drafted as **ADR-009** (🟡 Proposed).
 4. **Stewardship structure** — `licensing-and-commons.md` §5 (a)/(b)/(c)/(d). Currently
    materially (b).
 5. **C2 consent-record format.** Signed by what, stored where, shown how. Probably a capability
