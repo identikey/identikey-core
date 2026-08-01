@@ -587,7 +587,7 @@ C1 by definition. That is the delegation / key-graph ADR still to be written.
 
 ---
 
-## ADR-009: Pairwise `sub` by default, via an exportable server salt 🟡 Proposed — revised 2026-08-01
+## ADR-009: Pairwise `sub` by default, via an exportable server salt ✅ Decided 2026-08-02
 
 **Context.** ADR-001 makes `sub` a XID: globally unique and self-certifying. That is exactly what
 makes it *correlatable* — every relying party sees the same string, so any two RPs can collude to
@@ -646,12 +646,44 @@ Build the legacy bridge to legacy-bridge complexity.
    `sub_rp` deterministically at every rung, a user can never present someone else's pseudonym.
    The impersonation class an earlier draft had to defend against does not arise.
 
-**Rationale — asymmetric reversibility.** Pairwise → disclosed is always available later: it is
-just an additional claim, and the user can choose it per RP whenever they want linkability.
-Disclosed → pairwise is **impossible**: once an RP has stored the bare XID, no later change
-un-correlates what it already shares with its peers. When one direction is reversible and the
-other is a one-way door, default to the reversible one. That argument holds independently of any
-privacy preference, which is why it is the primary rationale rather than the secondary one.
+**Rationale — privacy is the goal, not a side effect.** Be precise about the mechanism: pairwise
+prevents no *attack*. Not account takeover, not impersonation, not token forgery, not key
+compromise. What it prevents is **correlation** — two relying parties, or two breach dumps,
+joining their user tables to establish that user X at A is user Y at B.
+
+Earlier drafts let that sit inside a security-shaped argument, which was wrong twice over: it
+misdescribed the mechanism, and it implied that being "only" a privacy control was a demotion.
+**For this product it is the point.** IdentiKey is an identity system built on consent, and an
+identity system that hands every relying party a global, permanent, cross-service correlation
+key has conceded the thing it exists to protect — regardless of how good its key custody is.
+Making identities less correlatable, at genuinely small cost, is worth doing on its own terms.
+That is the primary rationale. The arguments below are supporting, not load-bearing.
+
+**Rationale — asymmetric reversibility, with the claim corrected.** Pairwise → disclosed is
+always available later: an additional claim the user consents to per RP. Disclosed → pairwise
+cannot un-correlate what an RP has already stored and may already have shared.
+
+⚠️ But an earlier draft called that a one-way door closing at *first token issuance*, and
+inherited the same framing from `ccf.7`. **That is overstated.** The door closes **per relying
+party, as each one onboards** — ship a bare XID and add pairwise later, and only the RPs already
+onboarded keep the global identifier. The blast radius is "RPs onboarded before the switch," not
+"everyone forever." Worth recording precisely, because the corrected version is a materially
+weaker argument than the one originally used to justify this decision.
+
+**Why day one rather than deferred.** With the reversibility argument corrected, deferral was
+genuinely arguable — and was recommended and rejected. The decision rests on the privacy
+rationale above plus two practical points:
+
+- **Building it now means never needing the switch.** No migration, no window during which some
+  RPs hold a global identifier and others do not, and no judgement call about which RP counts as
+  "third-party enough" to trigger it.
+- **The cost is small in absolute terms**, which is what makes the values argument decisive
+  rather than merely nice. The salt rides on secret-material infrastructure epic 7 already
+  requires for JWT signing keys, and the revised construction adds **no per-rung code** — the OP
+  computes the pseudonym identically at every rung, because it mints the token at every rung.
+
+A control that is cheap and aligned with the product's purpose does not need to clear the bar of
+"strictly necessary."
 
 **Consequences.**
 
@@ -679,6 +711,20 @@ with a proof verifiable against a key in the XID document: unlinkable across sec
 only by the holder, and verifiable by the OP without holding the secret. Named so it is not
 re-derived later. Out of scope here, because defending the user against *us* on the legacy OIDC
 surface is not this ADR's threat model — that is what the URN grant and disclosed mode are for.
+
+**Actions this decision commits us to:**
+
+1. **Compute `sub` behind a single seam** — one function, never inlined at token construction —
+   so the pairwise/disclosed choice is one decision point rather than scattered across every
+   flow that mints a token.
+2. **`subject_type` on client registration**, and `subject_types_supported` in discovery, per
+   OIDC. Both `public` and `pairwise` are supported from v1; `pairwise` is the default for new
+   clients and `public` requires the user's per-RP consent.
+3. **Salt lifecycle**: generated per deployment at install, never shipped as a default or derived
+   from anything guessable, stored with the JWT signing keys, never logged, and included in user
+   data export. Rotation breaks every pairwise `sub` and is therefore not a supported operation.
+4. **Test the export path**, since export — not cryptography — is the failure mode that would
+   make this fail the exit test.
 
 **Open.** The exact KDF. Whether disclosed mode is per-RP only, or also available as a standing
 "always disclose to capability-aware RPs" preference.
