@@ -736,7 +736,7 @@ surface is not this ADR's threat model — that is what the URN grant and disclo
 1. **Pre-rotation.** ~~Open~~ — decided as **ADR-008** (adopt). Whether `bc-xid` implements it
    natively is an implementation question, not an open decision (`identikey-core-zan.5`).
 2. **XID document resolution.** ~~Open~~ — decided as **ADR-007**.
-3. **Pairwise subject identifiers.** ~~Open~~ — drafted as **ADR-009** (🟡 Proposed).
+3. **Pairwise subject identifiers.** ~~Open~~ — decided as **ADR-009**.
 4. **Stewardship structure** — `licensing-and-commons.md` §5 (a)/(b)/(c)/(d). Currently
    materially (b).
 5. **C2 consent-record format.** Signed by what, stored where, shown how. Probably a capability
