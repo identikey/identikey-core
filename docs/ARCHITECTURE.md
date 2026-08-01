@@ -327,7 +327,7 @@ store traits) needs converting.
 
 ---
 
-## ADR-007: XID document resolution — controller-designated resolvers, threshold reads 🟡 Proposed
+## ADR-007: XID document resolution — controller-designated resolvers, threshold reads ✅ Decided 2026-08-01
 
 **Context.** ADR-001 makes `sub` a XID. A stable identifier is only useful if a relying party
 can obtain *current* key state, so this is the remaining cost of ADR-001 (`identikey-core-zan.6`).
@@ -388,19 +388,79 @@ rotation of the resolver set itself.
 pseudonym, it cannot resolve the XID document at all — resolution serves the parties who see the
 real XID. These two decisions constrain each other and should be settled together.
 
-**Open.** The value of K and N, and whether N=1 (IdentiKey only) is an acceptable default for
-C1/C2 users who have not designated their own.
+**K and N — resolved, and the ladder decides it.**
+
+At C1/C2, **N=1 (IdentiKey alone) is an acceptable default**, because at those rungs IdentiKey
+*already holds the key*. A dishonest custodian has no need to lie about resolution — it can
+simply sign. Resolver honesty is dominated by custodian honesty, so additional resolvers buy
+nothing a C2 user does not already have to assume. Cheap default, no security theatre.
+
+At **C3/C4 the calculus inverts.** The user holds the key, so IdentiKey-as-sole-resolver is the
+*only* remaining lever we would hold over an otherwise self-custodial identity — precisely the
+lever the exit test exists to remove. Therefore **C3+ requires N≥2 with at least one resolver
+not operated by IdentiKey**, and K=2 for the consequential tier in (4).
+
+**This makes resolver diversity part of the C2→C3 migration ceremony** (`identikey-core-zan.2`):
+climbing to self-custody without relocating resolution is a half-migration that leaves us
+holding the freshness lever. The ceremony must move both, or it has not moved custody.
+
+---
+
+## ADR-008: Adopt pre-rotation; canonicalise on dCBOR / Gordian Envelope ✅ Decided 2026-08-01
+
+**Context.** Two questions arrived together and resolve together: does IdentiKey adopt KERI-style
+pre-rotation, and does it adopt KERI itself? See ADR-007 for the resolution half of the same
+discussion.
+
+**Decision 1 — pre-rotation, yes.** Every rotation commits to the *digest of the next key set*
+in advance. A compromised current key therefore cannot rotate the identity to an attacker's key,
+because the successor was fixed before the compromise.
+
+**Decision 2 — one canonicalisation: dCBOR / Gordian Envelope.** We take KERI's *ideas* and
+decline its *stack*. No CESR, no ACDC, no OOBI, no KERIA.
+
+**Rationale for pre-rotation.** It is the highest-value idea in KERI and among the cheapest to
+implement — a hash commitment. It matters most at C3/C4, where there is no custodian to appeal
+to and key compromise is otherwise terminal for the identity. It also closes an asymmetry the
+ladder would otherwise carry: at C2 a compromised key can be remediated by the custodian, at C3
+it could not be. Pre-rotation gives the self-custodial rungs a defence that does not require a
+custodian, which is the whole point of those rungs.
+
+**Rationale for one canonicalisation.** `identikey-auth` signs over canonical dCBOR; `bc-xid` is
+Gordian-native. KERI's substrate is CESR. Running both would mean a permanent translation layer
+between two canonical encodings — and canonicalisation mismatches are precisely where
+signature-verification bugs live, because both sides believe they are verifying the same bytes.
+Secondary but real: the Rust KERI implementations are fragmented and thinly adopted (`keri` 28k
+downloads, `keri-core` 20k, `keriox` 1.5k, `keri-rs` 285 and self-described as under active
+development) next to `bc-xid`'s 38k as the reference implementation of its own spec. `bc-xid` is
+also licensed **BSD-2-Clause-Patent** — already ADR-003's protocol-tier licence — and Blockchain
+Commons' Gordian Principles restate our exit test in their own words. We are in the right
+ecosystem already.
+
+**What KERI is still for.** An audit checklist, not a dependency. Their corner-case work on
+partial rotation, superseding recovery, multi-sig thresholds, and rotation *of the witness set
+itself* is the accumulated value, and we should check our derivation against it rather than
+re-discover those cases as bugs.
+
+**Consequences.**
+
+- Pre-rotation must exist **before the first production key is inceptioned**. It cannot be
+  retrofitted onto identities that never committed a successor digest.
+- If `bc-xid` does not implement pre-rotation, carry the commitment as an **extension assertion**
+  on the XID document rather than forking the crate (`identikey-core-zan.5`).
+- Losing the pre-committed successor is now a way to lose the identity even while holding a
+  valid current key. Successor material must be covered by the C3 recovery design
+  (`identikey-core-vt4`) exactly as the current key is — a new obligation on that epic.
+- Any future KERI interop is a bridge written at the edge, never a second encoding admitted to
+  the core.
 
 ---
 
 ## Open questions
 
-1. **Pre-rotation.** KERI commits to a *digest of the next key* at each rotation, so a
-   compromised current key cannot rotate to an attacker's key. Whether `bc-xid` supports this,
-   and whether we need it, is unresolved — it matters most at C3/C4 where there is no
-   custodian to appeal to. **Check before the protocol split lands.** Leaning yes: it is a hash
-   commitment, cheap, and drags in none of the KERI stack (see ADR-007).
-2. **XID document resolution.** ~~Open~~ — drafted as **ADR-007** (🟡 Proposed).
+1. **Pre-rotation.** ~~Open~~ — decided as **ADR-008** (adopt). Whether `bc-xid` implements it
+   natively is an implementation question, not an open decision (`identikey-core-zan.5`).
+2. **XID document resolution.** ~~Open~~ — decided as **ADR-007**.
 3. **Pairwise subject identifiers.** A global self-certifying `sub` lets every relying party
    correlate the same user across services. OIDC's `pairwise` subject type exists for exactly
    this. Likely shape: XID is the canonical internal identity; the `sub` shown to an ordinary
