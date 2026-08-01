@@ -327,16 +327,80 @@ store traits) needs converting.
 
 ---
 
+## ADR-007: XID document resolution — controller-designated resolvers, threshold reads 🟡 Proposed
+
+**Context.** ADR-001 makes `sub` a XID. A stable identifier is only useful if a relying party
+can obtain *current* key state, so this is the remaining cost of ADR-001 (`identikey-core-zan.6`).
+
+**Correcting the framing in `zan.6`.** That bead reasoned: the document is signed by the
+subject, so a resolver can serve but not forge it — therefore losing our resolver costs
+"freshness, not verifiability; an availability dependency, not a trust dependency."
+
+**Freshness *is* a security property.** A resolver cannot forge a document, but it can serve an
+old, validly-signed one. If key K1 is compromised and the user rotates to K2, the previous
+document is still correctly signed and still lists K1. A resolver serving it — maliciously or
+from a stale cache — presents an attacker's key as current. Withholding an update is
+indistinguishable in effect from authorising the attacker. So resolution is *partly* a trust
+dependency, and the design must make staleness detectable rather than assume it is benign.
+
+**Decision.**
+
+1. **The document declares its own resolvers.** `bc-xid` provides `resolution_methods()` — a set
+   of URIs inside the signed document. The controller designates them; because the set is
+   signed, relocation is a document update, not a support request. IdentiKey runs one resolver
+   and is never the only permitted one.
+2. **Provenance marks are the ordering primitive.** `bc-xid`'s `Provenance` gives a verifiable
+   chain of revisions, so "newer" is checkable without trusting the resolver that served it.
+3. **Threshold reads for consequential operations.** A relying party that needs assurance
+   queries K of the N declared resolvers and takes the highest provenance mark. Disagreement
+   beyond staleness — two valid documents that are not on the same chain — is a duplicity
+   signal: **fail closed**, do not pick a winner.
+4. **Freshness tiers by operation value.** An ordinary OIDC login may use a cached document
+   within a short TTL. Key-graph changes, delegation issuance, custody migration and wallet-class
+   actions require a fresh threshold read. One resolution mechanism, tiered strictness.
+5. **The OP is a convenience resolver, never a root of trust.** It serves the document over a
+   well-known path as an availability service. It holds no authority the document does not
+   grant it.
+
+**Rationale — what we take from KERI, and what we decline.** KERI's witness sets and duplicity
+detection exist for exactly the staleness problem above, and the pattern is worth adopting:
+controller-designated servers, threshold agreement, relocatable by the controller. We adopt the
+*pattern* and decline the *stack*. KERI's substrate is CESR/ACDC; ours is dCBOR / Gordian
+Envelope — `identikey-auth` signs over canonical dCBOR and `bc-xid` is Gordian-native. Running
+both would mean a permanent translation layer between two canonical encodings, which is where
+signature-verification bugs live. The Rust KERI implementations are also fragmented and thinly
+adopted relative to `bc-xid`. KERI's real value to us is as an audit checklist for corner cases
+we must cover anyway: partial rotation, superseding recovery, multi-sig thresholds, and
+rotation of the resolver set itself.
+
+**Consequences.**
+
+- Resolver relocation must be a first-class, self-service ceremony, or the exit test degrades
+  from "leave intact" to "leave and hope someone cached you."
+- A revocation or compromise rotation needs a short TTL and a push signal; the worst case is an
+  RP honouring a rotated-out key for the length of its cache.
+- Rotating the *resolver set* is itself a key-graph change and must require the same authority
+  as `Privilege::Update`, or the resolver set becomes the soft underbelly of the identity.
+- Threshold reads cost latency on exactly the operations that can least afford to be wrong.
+  Accepted: those are also the operations that can most afford the milliseconds.
+
+**Interaction with pairwise subjects (open question 3).** If an ordinary RP sees only a pairwise
+pseudonym, it cannot resolve the XID document at all — resolution serves the parties who see the
+real XID. These two decisions constrain each other and should be settled together.
+
+**Open.** The value of K and N, and whether N=1 (IdentiKey only) is an acceptable default for
+C1/C2 users who have not designated their own.
+
+---
+
 ## Open questions
 
 1. **Pre-rotation.** KERI commits to a *digest of the next key* at each rotation, so a
    compromised current key cannot rotate to an attacker's key. Whether `bc-xid` supports this,
    and whether we need it, is unresolved — it matters most at C3/C4 where there is no
-   custodian to appeal to. **Check before the protocol split lands.**
-2. **XID document resolution.** Who serves it, and how does a relying party get fresh key
-   state? Candidates: the OP (availability dependency only — it cannot forge a signed
-   document), a user-controlled endpoint, recrypt storage, or a witness set. A user must be
-   able to self-host or relocate resolution, or the exit test degrades.
+   custodian to appeal to. **Check before the protocol split lands.** Leaning yes: it is a hash
+   commitment, cheap, and drags in none of the KERI stack (see ADR-007).
+2. **XID document resolution.** ~~Open~~ — drafted as **ADR-007** (🟡 Proposed).
 3. **Pairwise subject identifiers.** A global self-certifying `sub` lets every relying party
    correlate the same user across services. OIDC's `pairwise` subject type exists for exactly
    this. Likely shape: XID is the canonical internal identity; the `sub` shown to an ordinary
