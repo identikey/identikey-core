@@ -263,14 +263,14 @@ so the mark may be weakening or already dormant — which is a risk *and* a poss
 classes, territories, and evidence of continued use, before further brand investment and
 *definitely* before building a revenue line on the mark. Tracked as P0.
 
-## ADR-005: The URN grant requires an `identikey-auth` Response, not a WebAuthn assertion 🟡 Proposed
+## ADR-005: The URN grant requires an `identikey-auth` Response, not a WebAuthn assertion ✅ Decided 2026-08-01
 
 **Context.** `urn:identikey:params:oauth:grant-type:challenge-response` lets a key holder obtain
 OIDC tokens for legacy relying parties without the OP ever holding a key. The open question
 (`identikey-core-h4p`) was whether a WebAuthn assertion should also satisfy it, unifying rung 1
 and rung 3 behind one verifier.
 
-**Proposed decision.** **No.** The URN grant accepts only an `identikey-auth` `Response`.
+**Decision.** **No.** The URN grant accepts only an `identikey-auth` `Response`.
 WebAuthn authenticates through the ordinary authorization-code flow.
 
 **Rationale.** The two prove different things, and conflating them muddles the ladder:
@@ -289,6 +289,23 @@ for a convenience that the auth-code flow already provides.
 The custody-ladder framing makes it clean: WebAuthn is access level **A3**, which authenticates
 you *to the party holding your key* (C1/C2) — normal OIDC. The URN grant is for **A4**, where
 you hold the key yourself, at any rung. Different column *and* different row.
+
+**Two further arguments, added when this was decided — both stronger than the original draft's.**
+
+**Privilege separation would be defeated at the token boundary.** ADR-008 splits `bc-xid`
+privileges so that at C2 the user's key holds `Elect` + `Transfer` while ours holds `Sign` +
+`Auth`. A passkey is a credential holding **`Auth`**. The key that satisfies the URN grant may
+hold `Sign`, `Elect`, `Transfer`. If a WebAuthn assertion could satisfy the grant, an
+**`Auth`-only credential would mint tokens indistinguishable from ones backed by full key
+authority** — collapsing the separation at the one place it most needs to hold.
+
+**It makes invariant I2 enforceable structurally rather than by policy.** I2 (`custody-ladder.md`)
+requires that account recovery and key recovery never merge, and calls any breach of it a release
+blocker. A passkey is re-registerable through an **A1** mechanism — an email link. So if a
+passkey assertion satisfied the URN grant, **an email link would transitively reach a C3 key**,
+which is exactly the silent collapse to C1 that I2 forbids. Refusing the assertion at the grant
+makes that unreachable by construction, rather than something a future change might quietly
+reintroduce.
 
 **Consequences.**
 
