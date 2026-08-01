@@ -48,12 +48,40 @@ Everything about consent, revocability, and the "miniature authority" framing li
 | **A0** | Password | C1, C2 |
 | **A1** | Email magic link / SMS OTP | C1, C2 — **account** recovery only, never **key** recovery |
 | **A2** | Social bootstrap (Apple / Google) | C1, C2 — identity verification at signup, not ongoing auth |
-| **A3** | Passkey / WebAuthn | C1, C2, and C3/C4 locally (unlocking a local key) |
-| **A4** | Enclave-held key, challenge/response (`identikey-auth`) | C2–C4 — the native mechanism |
+| **A3** | Passkey / WebAuthn — authentication **to a remote party** | C1, C2 |
+| **A4** | Enclave-backed key, challenge/response (`identikey-auth`) | C2–C4 — the native mechanism |
 | **A5** | Offline / air-gapped signer | C4 |
 
 Access mechanisms are **plural and freely chosen**. A user may have three of them at once.
 This is not fragmentation — it is redundancy, and redundancy is the point.
+
+### Local user verification is not an access level
+
+A3 previously read "C1, C2, **and C3/C4 locally (unlocking a local key)**." That conflated two
+mechanisms with different trust models, and the correction matters:
+
+- **WebAuthn authenticates you to a remote party.** It is a network protocol with a DNS-bound
+  RP ID. That is its job at C1/C2 — proving to the custodian that you authorise use of the key
+  it holds for you. At C2 the assertion is also the *consent artifact* that makes the rung
+  distinguishable from C1.
+- **Local user verification gates access to a key you already hold.** At C3/C4 there is no
+  remote party in the loop, so there is nothing to authenticate *to*. On a native app this is
+  the platform biometric API over a keychain or enclave item — **not WebAuthn**, and it needs
+  none of WebAuthn's RP-ID machinery.
+
+If you hold the key on your device, you simply use the key. The one genuine case for WebAuthn at
+C3/C4 is a **browser** context, where the WebAuthn `prf` extension can derive a wrapping key to
+decrypt a locally-stored key. Even there the passkey is a key-wrapping mechanism, not a proof of
+identity to anyone.
+
+⚠️ **A4 says "enclave-backed," not "enclave-held," pending hardware verification.** Whether the
+`identikey-auth` key can live *inside* a secure enclave — never extractable, signing on request —
+or must be stored encrypted and *unwrapped into memory* under an enclave-held wrapping key
+depends on whether the platform enclave supports our algorithms at all. Apple's Secure Enclave
+is believed to expose only NIST P-256 through its APIs, which Ed25519 and ML-DSA would not
+satisfy; that is **unconfirmed** and Android differs. This is a material difference in what the
+rung actually guarantees, so the wording stays deliberately weaker than the claim we would like
+to make until it is settled (`identikey-core-46v`).
 
 ---
 
@@ -63,13 +91,19 @@ This is not fragmentation — it is redundancy, and redundancy is the point.
                       A0        A1        A2        A3        A4        A5
                     passwd    email    social    passkey   enclave   airgap
   C4  sole            ·         ·         ·         ○         ●         ●
-  C3  assisted        ·         ·         ·         ●         ●         ○
+  C3  assisted        ·         ·         ·         ○         ●         ○
   C2  managed         ○         ○         ○         ●         ●         ·
   C1  custodial       ●         ●         ●         ●         ○         ·
   C0  throwaway       ·         ·         ·         ○         ●         ·
 
   ● primary   ○ supported   · not applicable
 ```
+
+**A3 at C3 was ● and is now ○**, following the correction above. WebAuthn is not the primary
+access mechanism at C3 — at C3 you hold the key, so you reach it by local user verification and
+sign with it directly. A3 remains *supported* there only for the browser `prf` unwrapping case.
+**Local user verification deliberately has no column**: it is not a way of authenticating to a
+remote party, so it is not an access level. It is the gate in front of a key you already hold.
 
 The hosted OP (this repo) serves the **C1–C2 rows**. `identikey-auth` serves the **A4 column**.
 The native app is what makes **C3 reachable by ordinary people**, because it is the thing that

@@ -293,8 +293,13 @@ you hold the key yourself, at any rung. Different column *and* different row.
 **Consequences.**
 
 - One proof format, one verifier, minimal surface on the token endpoint.
-- A C3/C4 user with a passkey uses the passkey for local key unlock, then the URN grant with the
-  unlocked key — the passkey never crosses the wire to us.
+- A C3/C4 user reaches their key through **local user verification**, then signs the URN grant
+  challenge with it. Nothing about that flow crosses the wire to us. Note this is *not*
+  necessarily WebAuthn: on a native app it is the platform biometric gating the enclave or
+  keychain item, and no passkey is involved at all. WebAuthn appears at C3/C4 only in a browser
+  context, via the `prf` extension used to unwrap a locally-stored key — where it is a
+  key-wrapping mechanism rather than an authentication. See `custody-ladder.md`, "Local user
+  verification is not an access level."
 - Costs a little elegance: there is no single endpoint that "does both." Judged worth it.
 
 ---
