@@ -426,10 +426,40 @@ lives and where the successor lives**, and is therefore not uniform across the l
 Pre-rotation is fundamentally **hot/cold separation within one controller**: KERI assumes a
 controller holding a hot signing key and a colder successor. Someone must custody the successor.
 
-Consequently: **required at C3/C4**, where the user holds everything and hot-key theft is the
-live threat with no custodian to appeal to. **Optional at C0/C1**, where we hold both and it is
-cosmetic — a fully-managed user has no separate place to keep a successor, so mandating it would
-be security theatre. **At C2 it applies to whoever holds `Elect`** (see Decision 3).
+**The condition is separation, not rung.** An earlier draft of this ADR mandated pre-rotation at
+C3/C4 while also publishing the table above — a contradiction, because **a C3 user with a single
+device is "same party, same security domain."** The successor sits in the same enclave, behind
+the same unlock, exposed to the same compromise as the hot key. For that user pre-rotation is
+not merely useless, it is **strictly negative**: no protection gained, and a new way to lose the
+identity.
+
+That loss mode is real and asymmetric. Losing the committed successor does not break the
+identity today — the current key still signs — it removes the ability to *ever rotate again*.
+The identity is frozen to one key forever, and when that key is eventually lost, aged out, or
+compromised, there is nothing to move to. A slow fuse on an identifier whose entire premise is
+that it is stable for life.
+
+**Therefore pre-rotation is optional at every rung, and is enabled by a structural condition
+rather than a preference:**
+
+- **Off by default.** Including at C3 and C4.
+- **On when, and only when, the successor lives in a custody domain distinct from the hot key**
+  — a second device, a hardware token, an offline HSM, or guardian-held shares.
+- **Never on with the successor in the same domain as the hot key**, at any rung. That
+  configuration is pure downside and the software should refuse it rather than offer it.
+- At C2 the question applies to whoever holds `Elect` (see Decision 3), not to the account.
+
+It is deliberately *not* a naked user-facing toggle. The user chooses whether to establish a
+separate successor custody; enabling pre-rotation follows from that, so nobody can switch on the
+loss risk without having first created the thing that earns the benefit.
+
+**The C3 synthesis: guardians should hold the successor.** At C3 a guardian quorum already
+exists for key recovery. Generating the successor into guardian-held shares puts it in a
+genuinely distinct security domain (earning the full guarantee) *and* makes it recoverable
+(removing the loss risk). That resolves both sides of the trade at once — but it couples
+pre-rotation to guardian infrastructure (`identikey-core-vt4`), and to superseding recovery
+(`identikey-core-wzr`) as the escape hatch when successor material is lost anyway. **Pre-rotation
+at C3 is only safe once those exist.** It cannot ship ahead of them.
 
 **Decision 2 — one canonicalisation: dCBOR / Gordian Envelope.** We take KERI's *ideas* and
 decline its *stack*. No CESR, no ACDC, no OOBI, no KERIA.
@@ -503,6 +533,27 @@ re-discover those cases as bugs.
   before C3 ships, not after.
 - Any future KERI interop is a bridge written at the edge, never a second encoding admitted to
   the core.
+
+**Shipping decision: v1 ships without pre-rotation.** Recorded 2026-08-01.
+
+It is not on the critical path. It is optional at every rung, its only compelling configuration
+at C3 depends on guardian infrastructure that does not exist yet (`vt4`), and it is safely
+adoptable at any later rotation. The one hazard of late adoption — a *compromised* current key
+committing the attacker's own successor, cementing rather than evicting them — does not reach
+the population that will want it, because climbing to C3 generates a fresh user-held key we
+never possessed. The commitment starts on a key with no exposure history.
+
+The gate, in place of "a hardening pass":
+
+1. **Pre-rotation must exist before the first C3/C4 identity does** — not before v1 ships.
+   Introduced at the C2→C3 migration rotation, which is generating a new key anyway.
+2. **Never enabled without a distinct successor custody domain and a recovery path.** Enabling
+   it into a single-device C3 would ship the strictly-negative configuration above.
+3. **Leave the extension point now** (`identikey-core-29v`). The one thing that makes this
+   expensive later is a rotation ceremony or event format with nowhere to carry the commitment,
+   which would turn a retrofit into a format break across every identity. `bc-xid` preserves
+   unrecognised assertions, so this should be nearly free — but confirm it before shipping
+   rather than during the hardening pass.
 
 **The C2 privilege split needs its own ADR.** Decision 3 states the mechanism but not its
 mechanics: how the user's `Elect` key is provisioned at signup for someone who has no device
