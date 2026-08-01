@@ -86,10 +86,13 @@ separate Shamir implementation.
 - The OP mints tokens *about* a XID, never *instead of* one. A C4 sole-custody user has a `sub`
   we have never held a private key for.
 - **A resolution story is now required.** A stable identifier is only useful if a relying party
-  can obtain current key state. See Open Questions — this is the real remaining cost of the
-  decision, and it is smaller than it looks: because the XID document is signed by the subject,
-  a resolver can serve it but cannot forge it. Losing our resolver costs *freshness*, not
-  *verifiability* — an availability dependency, not a trust dependency.
+  can obtain current key state. Settled in **ADR-007**. ⚠️ This bullet originally argued the cost
+  was "smaller than it looks" because a signed document cannot be forged, so losing our resolver
+  would cost *freshness, not verifiability — availability, not trust.* **ADR-007 corrects that.**
+  A resolver cannot forge a document but it can serve an **old, validly-signed** one, and after a
+  compromise rotation that presents the attacker's key as current. Withholding an update is
+  indistinguishable in effect from authorising the attacker, so freshness is a security property
+  and resolution is partly a trust dependency.
 - Supersedes the successor-key-attestation task filed under ADR-001's first draft; XID's
   rotation model covers it, except for pre-rotation (below).
 
