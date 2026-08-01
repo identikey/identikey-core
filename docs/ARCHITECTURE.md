@@ -406,18 +406,56 @@ holding the freshness lever. The ceremony must move both, or it has not moved cu
 
 ---
 
-## ADR-008: Adopt pre-rotation; canonicalise on dCBOR / Gordian Envelope ✅ Decided 2026-08-01
+## ADR-008: Pre-rotation (scoped by rung), privilege separation, one canonicalisation ✅ Decided 2026-08-01 — revised same day
 
 **Context.** Two questions arrived together and resolve together: does IdentiKey adopt KERI-style
 pre-rotation, and does it adopt KERI itself? See ADR-007 for the resolution half of the same
 discussion.
 
-**Decision 1 — pre-rotation, yes.** Every rotation commits to the *digest of the next key set*
-in advance. A compromised current key therefore cannot rotate the identity to an attacker's key,
-because the successor was fixed before the compromise.
+**Decision 1 — pre-rotation, yes, but scoped by rung.** Every rotation commits to the *digest of
+the next key set* in advance, so a compromised current key cannot rotate the identity to an
+attacker's key. **Its benefit is proportional to the separation between where the current key
+lives and where the successor lives**, and is therefore not uniform across the ladder:
+
+| Where current / successor live | Guarantee |
+|---|---|
+| Same party, same security domain | **None.** A hash in a document, nothing more. |
+| Same party, materially colder domain (offline HSM, separate KMS and access control) | Partial — defence in depth against a partial breach. |
+| Different parties | Full. |
+
+Pre-rotation is fundamentally **hot/cold separation within one controller**: KERI assumes a
+controller holding a hot signing key and a colder successor. Someone must custody the successor.
+
+Consequently: **required at C3/C4**, where the user holds everything and hot-key theft is the
+live threat with no custodian to appeal to. **Optional at C0/C1**, where we hold both and it is
+cosmetic — a fully-managed user has no separate place to keep a successor, so mandating it would
+be security theatre. **At C2 it applies to whoever holds `Elect`** (see Decision 3).
 
 **Decision 2 — one canonicalisation: dCBOR / Gordian Envelope.** We take KERI's *ideas* and
 decline its *stack*. No CESR, no ACDC, no OOBI, no KERIA.
+
+**Decision 3 — privilege separation is what makes managed custody non-rent, not pre-rotation.**
+`bc-xid` models `Elect` ("add or remove other verifiers — rotate keys") and `Transfer` ("remove
+the inception key") as privileges *distinct from* `Sign` and `Auth`, assignable to different
+keys. At C2 we therefore split them:
+
+- **IdentiKey's key holds `Sign` + `Auth`** — the day-to-day signing that is the managed
+  convenience the user is paying for.
+- **The user's key holds `Elect` + `Transfer`** — only they can rotate keys or remove the
+  inception key.
+
+Two properties follow, and they are the point of the rung:
+
+- **A breach of IdentiKey yields `Sign`, not `Elect`.** An attacker can sign as the user *now* —
+  bad, and detectable — but cannot take over the identity. No permanent theft.
+- **Exit is unilateral.** The user rotates our key out without our cooperation. Not a ceremony we
+  grant them; an operation they perform. This is the exit test enforced cryptographically at the
+  managed rung rather than by policy.
+
+Pre-rotation and privilege separation are **orthogonal tools for different threats**: pre-rotation
+defends a single holder against theft of their hot key; privilege separation defends the user
+against their custodian. Conflating them is what produced this ADR's first draft, in which
+pre-rotation was claimed to carry a benefit that in fact only privilege separation provides.
 
 **Rationale for pre-rotation.** It is the highest-value idea in KERI and among the cheapest to
 implement — a hash commitment. It matters most at C3/C4, where there is no custodian to appeal
@@ -444,15 +482,32 @@ re-discover those cases as bugs.
 
 **Consequences.**
 
-- Pre-rotation must exist **before the first production key is inceptioned**. It cannot be
-  retrofitted onto identities that never committed a successor digest.
+- **Pre-rotation is adoptable at any rotation, not only at inception.** An earlier draft of this
+  ADR claimed it "cannot be retrofitted"; that was wrong. Any rotation may begin committing a
+  successor. What cannot be recovered is protection for rotations that already happened
+  uncommitted — and starting late is safe only if the key is *not already compromised*, since a
+  breached current key can commit the attacker's own successor. Committing from inception is
+  meaningfully better, but it is not a one-way door.
+- **The C2→C3 migration must verify the committed digest against the user's own key.** The
+  migration rotation is authorised by our key, so a breached IdentiKey could otherwise commit a
+  successor it controls. The user's device must check that the published digest matches the key
+  it generated locally, or the migration hands the identity over at the moment it is supposed to
+  hand it back.
 - If `bc-xid` does not implement pre-rotation, carry the commitment as an **extension assertion**
   on the XID document rather than forking the crate (`identikey-core-zan.5`).
-- Losing the pre-committed successor is now a way to lose the identity even while holding a
-  valid current key. Successor material must be covered by the C3 recovery design
-  (`identikey-core-vt4`) exactly as the current key is — a new obligation on that epic.
+- Losing the pre-committed successor is a way to lose *rotatability* while still holding a valid
+  current key. Wherever pre-rotation is on, successor material must be covered by the C3 recovery
+  design (`identikey-core-vt4`) exactly as the current key is.
+- **The recovery path for lost successor material is also an attack path** — this is KERI's
+  "superseding recovery" problem and we do not get to skip it. Deferred, but it must be solved
+  before C3 ships, not after.
 - Any future KERI interop is a bridge written at the edge, never a second encoding admitted to
   the core.
+
+**The C2 privilege split needs its own ADR.** Decision 3 states the mechanism but not its
+mechanics: how the user's `Elect` key is provisioned at signup for someone who has no device
+yet, what happens when they lose it, and whether a user with *no* key custody at all is simply
+C1 by definition. That is the delegation / key-graph ADR still to be written.
 
 ---
 
