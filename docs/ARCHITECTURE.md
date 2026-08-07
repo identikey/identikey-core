@@ -96,7 +96,16 @@ separate Shamir implementation.
 - Supersedes the successor-key-attestation task filed under ADR-001's first draft; XID's
   rotation model covers it, except for pre-rotation (below).
 
-## ADR-002: Protocol crates live in a separate repository ✅ Decided
+## ADR-002: Protocol crates live in a separate repository ✅ Decided — realized 2026-08-01
+
+**Status.** Done. [`identikey-protocol`](https://github.com/identikey/identikey-protocol) now
+holds `identikey-auth`, `identikey-wallet` (the wallet engine extracted from `recrypt-cli`),
+`identikey-log`, and the `ikey` CLI, under `Apache-2.0 OR BSD-2-Clause-Patent`. Recorded on the
+recrypt side as D-4 (`docs/decisions/2026-08-02-protocol-tier-extraction.md`), which also
+freezes the wallet compatibility surfaces. `identikey-storage-auth` stayed with recrypt as this
+ADR requires. Remaining protocol work — crates.io publish, specs with test vectors, and the
+`cargo-deny` gate that makes the no-copyleft rule below enforced rather than merely asserted —
+is tracked in that repo's own bd workspace (`ikp-6yz`, `ikp-45w`), not here.
 
 **Context.** `identikey-auth` is a protocol library with many consumers (recrypt, mjolnir,
 Papyrus, the native app, this repo). `identikey-core` is a product. They have different
