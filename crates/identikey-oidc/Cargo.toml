@@ -1,0 +1,23 @@
+[package]
+name = "identikey-oidc"
+description = "OIDC provider: projects the managed custody rungs onto standard OAuth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# Not published. These are product crates, and cargo-deny relies on this flag to
+# scope its licence check to third-party code (see deny.toml, [licenses.private]).
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+identikey-keys.workspace = true
+josekit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

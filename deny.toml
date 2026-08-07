@@ -1,0 +1,143 @@
+# cargo-deny — identikey-core (the PRODUCT tier)
+#
+# identikey-core-ydd.7. This repo is AGPL-3.0-or-later **plus a commercial
+# licence**, and the commercial half is the constraint that matters here: we can
+# only offer proprietary terms over code whose dependencies permit it.
+#
+# NOTE FOR THE PROTOCOL TIER: identikey-protocol is `Apache-2.0 OR
+# BSD-2-Clause-Patent` and runs a *stricter* allowlist than this one, enforced in
+# its own repo (ikp-45w). ADR-002's standing rule — the protocol tier may never
+# take a copyleft dependency, not even weak copyleft — does not apply to this
+# file. Do not copy this config there.
+
+[graph]
+all-features = true
+
+[licenses]
+# Deliberately permissive-plus-weak-copyleft. See the bans below for the line.
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-2-Clause-Patent",
+    "BSD-3-Clause",
+    "BlueOak-1.0.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+# Our own crates are AGPL-3.0-or-later, which is precisely what the list above
+# forbids in a *dependency*. That is not a contradiction: we hold the copyright,
+# so the AGPL never binds us. `private` scopes the check to third-party code,
+# which is the only place the rule means anything.
+#
+# This works because no crate here is `publish = true`. If one is ever published,
+# it leaves this exemption and must be reasoned about on its own terms.
+[licenses.private]
+ignore = true
+
+# --- The distinction this file exists to draw -------------------------------
+#
+# "Keep copyleft out" is too blunt a rule and would have blocked the WebAuthn
+# implementation we already committed to. The real line is per-file versus
+# per-work copyleft:
+#
+#   MPL-2.0 is FILE-level. It reaches the MPL files themselves and our
+#   modifications to them. It does not reach our code that merely links against
+#   it, and MPL 2.0 §3.3 explicitly permits distributing a Larger Work under
+#   other terms. A commercial licence over identikey-core therefore remains
+#   available. `webauthn-rs` is MPL-2.0 and is REQUIRED by identikey-core-5gh.1
+#   — it is the maintained Rust WebAuthn implementation, from the kanidm
+#   project, and writing our own is not a serious alternative for a security
+#   protocol with this many edge cases.
+#
+#   GPL/AGPL/SSPL are WORK-level. A single such dependency makes the commercial
+#   half of the dual licence undeliverable, because we cannot grant terms over a
+#   combined work we do not control. That is not a review comment to argue about
+#   later; it is a build failure now.
+#
+# Our own AGPL crates (identikey-storage-auth) are a different case entirely: we
+# hold the copyright, so we can relicense them. Add them as explicit exceptions
+# below if and when they enter the graph (identikey-core-zan.3) — never by
+# widening `allow`.
+[[licenses.exceptions]]
+name = "unicode-ident"
+allow = ["Unicode-3.0"]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+# NOT BANNED, THOUGH IT ONCE WAS HERE: `openssl`.
+#
+# The first draft of this file banned it on the assumption that rustls was the
+# single crypto backend. That was wrong, and the ban failed on its first run:
+#
+#   openssl <- josekit                    (JOSE / token signing)
+#   openssl <- webauthn-attestation-ca <- webauthn-rs
+#
+# `webauthn-rs` is mandated by identikey-core-5gh.1, so the ban would have
+# forbidden a crate our own decisions require. We therefore link *both* openssl
+# and rustls: rustls terminates TLS (via sqlx and the HTTP stack), openssl backs
+# JOSE and WebAuthn attestation verification.
+#
+# That is a real cost, not a shrug — two crypto implementations mean two
+# vulnerability feeds, two FIPS stories, and a larger native build. It is
+# tracked as identikey-core-ccf.10 rather than silently accepted.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+# RUSTSEC-2023-0071 — the Marvin timing attack against the `rsa` crate. Private
+# key material leaks through timing observable over the network. There is no
+# patched version; the advisory says so outright.
+#
+# It reaches us through a path we did not choose and cannot currently sever:
+#
+#   rsa -> ssh-key -> bc-components -> bc-envelope -> bc-xid -> identikey-keys
+#
+# `bc-xid` is ADR-001's implementation of the XID, so this is a consequence of
+# that decision that the ADR did not record. Ignoring it here is a deliberate,
+# time-boxed judgement, not an oversight:
+#
+#  - IdentiKey performs no RSA operations. Our signing is Ed25519 with hybrid
+#    ML-DSA (identikey-auth); RSA arrives only via `ssh-key`'s support for SSH
+#    RSA keys inside `bc-components`. Nothing in our code path calls it.
+#  - The attack requires the attacker to observe timing of RSA private-key
+#    operations. With no such operation performed, there is no oracle.
+#
+# WHAT WOULD INVALIDATE THIS: accepting an SSH RSA key anywhere — as a resolver
+# credential, a guardian key, or an import format. That turns dead code into a
+# live signing path and this ignore into a real vulnerability. Re-examine before
+# any such feature lands.
+#
+# Tracked as identikey-core-zan.9. Do not add entries to this list without the
+# same standard of reasoning.
+#
+# The `pqcrypto-*` entries below are a different kind of problem and deserve to
+# be read, not skimmed. They are unmaintained because upstream **PQClean is being
+# archived**, and they arrive through bc-components — which is where our ML-DSA
+# implementation lives. ADR-001 treats the post-quantum migration as a scheduled
+# certainty, so this is an unmaintained dependency underneath a migration we have
+# already committed to. Tracked as identikey-core-zan.10. Ignoring it here keeps
+# CI honest about *other* advisories; it is not a judgement that the problem is
+# small.
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "no RSA operation in any IdentiKey code path; reachable only via ssh-key inside bc-components; no upstream fix exists (identikey-core-zan.9)" },
+    { id = "RUSTSEC-2024-0436", reason = "paste, proc-macro only, no runtime surface; arrives via bc-envelope" },
+    { id = "RUSTSEC-2026-0163", reason = "pqcrypto-internals: PQClean archived; see identikey-core-zan.10" },
+    { id = "RUSTSEC-2026-0166", reason = "pqcrypto-mldsa: PQClean archived; see identikey-core-zan.10" },
+    { id = "RUSTSEC-2026-0161", reason = "pqcrypto-mlkem: PQClean archived; see identikey-core-zan.10" },
+    { id = "RUSTSEC-2026-0162", reason = "pqcrypto-traits: PQClean archived; see identikey-core-zan.10" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

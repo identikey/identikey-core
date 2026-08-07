@@ -1,6 +1,13 @@
 test-results
 node_modules
 
+# Rust
+/target
+
+# NOT ignored, deliberately: /.sqlx
+# The offline query cache is committed so CI and contributors build without a
+# live database (ADR-006, identikey-core-xg2).
+
 # Output
 .output
 .vercel

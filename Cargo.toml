@@ -1,0 +1,81 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/identikey/identikey-core"
+authors = ["IdentiKey"]
+
+# Shared version registry. Crates here reference these with `dep.workspace = true`
+# so a version is stated once. Only dependencies an ADR has actually settled are
+# listed; this is not a wishlist.
+[workspace.dependencies]
+
+# --- HTTP / async ---------------------------------------------------------
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "fs"] }
+
+# --- Persistence (ADR-006) ------------------------------------------------
+# sqlx with the offline cache committed; see .sqlx/ and identikey-core-xg2.
+# ADR-006 chose sqlx over an ORM, and pglite only for real embedding.
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "uuid",
+    "time",
+    "json",
+    "macros",
+    "migrate",
+] }
+
+# --- Identity (ADR-001) ---------------------------------------------------
+# sub is a XID: SHA-256 of the CBOR encoding of the inception public signing key.
+bc-xid = "0.23"
+
+# --- Tokens ---------------------------------------------------------------
+josekit = "0.10"
+
+# --- WebAuthn / access level A3 (ADR-004, identikey-core-5gh.1) -----------
+# MPL-2.0. Deliberately allowed by deny.toml — see the licence note there.
+webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
+
+# --- Serialisation, errors, observability --------------------------------
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+time = { version = "0.3", features = ["serde"] }
+
+# --- Internal -------------------------------------------------------------
+# Versions are stated alongside the paths deliberately: a bare `path` dependency
+# is a wildcard requirement, which `cargo deny` rejects and which would silently
+# accept an incompatible sibling if these crates are ever published.
+identikey-keys = { path = "crates/identikey-keys", version = "0.1.0" }
+identikey-oidc = { path = "crates/identikey-oidc", version = "0.1.0" }
+identikey-recovery = { path = "crates/identikey-recovery", version = "0.1.0" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# Deny the panic paths outright rather than relying on review to catch them.
+# An auth server that unwraps on malformed input is a denial-of-service vector,
+# and every one of these has a Result-shaped alternative.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

@@ -3,9 +3,11 @@
 **Status:** Living document. ADRs inline, amended rather than deleted.
 **Date:** 2026-07-28
 
-**Supersedes** `_bmad-output/planning-artifacts/architecture.md` (ADR-001…009), which describes
-the Keycloak-era design. That document is retained for provenance; where the two disagree, this
-one is authoritative.
+**Supersedes** the Keycloak-era `_bmad-output/planning-artifacts/architecture.md`, deleted
+2026-08-07 (`identikey-core-sbw.1`) once it had drifted into contradicting this document on the
+central fact of the pivot. It survives in history at tag `pre-rust-pivot` if provenance is ever
+needed. The surviving BMAD-era material is `docs/passkey-port-spec/`, kept as the port
+specification for `identikey-core-5gh.1`.
 
 ---
 
@@ -27,6 +29,13 @@ identikey-core/  (here)      AGPL-3.0-or-later + commercial
   crates/identikey-server    axum binary; also serves the SSG assets
   web/                       SvelteKit, adapter-static — login / consent / account UI
 ```
+
+**Scaffolded 2026-08-07.** The four crates exist, build, and pass `clippy -D warnings`
+and `cargo deny check`; none of them implement anything yet. `web/` is *not* yet in
+place — the SvelteKit app is still at the repository root, where it serves the
+TypeScript implementation frozen at tag `pre-rust-pivot`. Relocating it touches every
+config path and would break a suite that currently passes, so it is a separate move
+(`identikey-core-ccf.11`) rather than a rider on the scaffold.
 
 Companion documents: [`custody-ladder.md`](./custody-ladder.md) (the normative rungs),
 [`licensing-and-commons.md`](./licensing-and-commons.md),
@@ -95,6 +104,21 @@ separate Shamir implementation.
   and resolution is partly a trust dependency.
 - Supersedes the successor-key-attestation task filed under ADR-001's first draft; XID's
   rotation model covers it, except for pre-rotation (below).
+- ⚠️ **`bc-xid` brings a dependency tail this ADR did not price, discovered 2026-08-07 when
+  `cargo deny` first ran against the Rust workspace.** The licence reasoning above holds —
+  every crate in the tail is permissive. The *supply chain* reasoning was never done:
+  - `rsa` 0.9, carrying **RUSTSEC-2023-0071** (Marvin timing attack) with **no fix
+    available**, via `ssh-key` inside `bc-components`. Harmless today only because
+    IdentiKey performs no RSA operation; that ceases to be true the moment anything
+    accepts an SSH RSA key (`identikey-core-zan.9`).
+  - `pqcrypto-mldsa` / `-mlkem` / `-traits` / `-internals`, all **unmaintained because
+    upstream PQClean is being archived**. This one bites where it hurts: the argument for
+    a XID over a key fingerprint *is* that PQ migration is a scheduled certainty, so the
+    ML-DSA implementation is not incidental — it is the thing this decision was made in
+    anticipation of, and it is unmaintained beneath us (`identikey-core-zan.10`).
+
+  Neither is a reason to revisit the decision; `bc-xid` remains the right choice. Both are
+  reasons to treat "adopt a crate" as including its transitive tail, which this ADR did not.
 
 ## ADR-002: Protocol crates live in a separate repository ✅ Decided — realized 2026-08-01
 

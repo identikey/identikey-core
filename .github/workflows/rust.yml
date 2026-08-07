@@ -1,0 +1,65 @@
+name: rust
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # sqlx compiles queries against the committed .sqlx/ cache rather than a live
+  # database. See identikey-core-xg2 and the `sqlx-offline-cache` job below.
+  SQLX_OFFLINE: "true"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all --check
+
+      # --all-targets so the lints in [workspace.lints] reach tests too. An
+      # unwrap in a test helper still panics in CI; the deny is not cosmetic.
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --workspace
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  sqlx-offline-cache:
+    # identikey-core-xg2. A stale .sqlx/ cache is worse than none: the build
+    # passes here and fails against the real schema, which is exactly the class
+    # of error the offline cache exists to prevent. This job fails when the
+    # committed cache no longer matches the queries in the tree.
+    #
+    # Currently a no-op guard — there are no sqlx queries yet. It is wired now so
+    # the check exists from the first query rather than being retrofitted after
+    # the first drift.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: verify the committed cache is current
+        run: |
+          if ! ls crates/*/src/**/*.rs >/dev/null 2>&1; then exit 0; fi
+          if ! grep -rqE 'sqlx::(query|query_as|query_scalar)!' crates/; then
+            echo "no compile-time sqlx queries yet; nothing to verify"
+            exit 0
+          fi
+          cargo install sqlx-cli --no-default-features --features postgres,rustls
+          cargo sqlx prepare --workspace --check -- --all-targets
