@@ -25,6 +25,11 @@ See morphist-tools `CONVENTIONS.md`.
 - 2026-07-28 — `cargo metadata --format-version 1 --all-features` gives license fields for
   *every* package including ones absent from the local registry src cache; scanning
   `~/.cargo/registry/src` directly only resolved 396 of 659 and would have missed this.
+- 2026-08-16 — `bc-xid` 0.23 does not enforce `Elect` on `add_key`/`remove_key`, and
+  `XIDVerifySignature::Inception` accepts any rewrite signed by the inception
+  private key. A C2 privilege split is decorative unless we (a) authorize key-graph
+  changes ourselves (`authorize_elect`) and (b) do not persist inception private
+  after promotion. (`crates/identikey-keys/src/privilege.rs`, ADR-010)
 - 2026-08-16 — `#[sqlx::test]` against `postgres://localhost/...` (no user in the URL)
   asks the `whoami` crate for a username. On this host that can come back as
   `anonymous`, and Postgres then fails with `role "anonymous" does not exist`.

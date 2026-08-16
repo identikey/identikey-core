@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 bc-xid.workspace = true
+bc-components.workspace = true
 sqlx.workspace = true
 webauthn-rs.workspace = true
 serde.workspace = true

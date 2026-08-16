@@ -616,9 +616,7 @@ The gate, in place of "a hardening pass":
    rather than during the hardening pass.
 
 **The C2 privilege split needs its own ADR.** Decision 3 states the mechanism but not its
-mechanics: how the user's `Elect` key is provisioned at signup for someone who has no device
-yet, what happens when they lose it, and whether a user with *no* key custody at all is simply
-C1 by definition. That is the delegation / key-graph ADR still to be written.
+mechanics. Settled as **ADR-010**.
 
 ---
 
@@ -763,6 +761,80 @@ surface is not this ADR's threat model — that is what the URN grant and disclo
 
 **Open.** The exact KDF. Whether disclosed mode is per-RP only, or also available as a standing
 "always disclose to capability-aware RPs" preference.
+
+---
+
+## ADR-010: C2 is the privilege split, and it is C1 until the user holds Elect ✅ Decided 2026-08-16
+
+**Context.** ADR-008 Decision 3 assigned `Elect` + `Transfer` to a user-held key and `Sign` +
+`Auth` to IdentiKey. That is the mechanism that makes managed custody non-rent. Three mechanics
+were left open (`identikey-core-av9`): how `Elect` is provisioned at signup for someone with no
+device yet; what happens when they lose it; and whether a user with no key custody at all is
+simply C1.
+
+A fourth fact, discovered against `bc-xid` 0.23 rather than inferred: **the crate does not
+enforce `Elect` on mutation.** `add_key` / `remove_key` are in-memory edits. The only
+first-party verification mode is `XIDVerifySignature::Inception` — whoever holds the inception
+*private* key can publish any successor document, regardless of the privileges written on it.
+If IdentiKey keeps the inception private key, the split is a promise.
+
+**Decision.**
+
+1. **No user-held `Elect` + `Transfer` ⇒ the identity is C1.** C2 *is* the split. A user who
+   has not yet generated a key we cannot use is a C1 customer, and we will say so. We do not
+   mint a C2 document that lists privileges the user cannot exercise.
+
+2. **Two constructions, one invariant.**
+   - **C2-native.** The user's `Elect` key *is* the inception key. IdentiKey's key is a
+     separate operational key holding only `Sign` + `Auth`. We never possessed inception
+     private, so we cannot `Inception`-sign a rewrite.
+   - **C1 → C2 promotion.** Signup without a device starts C1: our key is inception and holds
+     `All`. Promotion is a single inception-signed update that adds the user's `Elect` +
+     `Transfer` key (and `Verify` + `Update`, so they can change the document and the resolver
+     set), adds a *new* operational key for us with `Sign` + `Auth`, **Transfers the inception
+     key out of the document**, and **forgets the inception private key**. After that, the only
+     authorized key-graph change is a signature from a key that holds `Elect` in the *previous*
+     document. `XIDVerifySignature::Inception` is the wrong verifier at C2.
+
+3. **Lost `Elect` does not collapse to C1 and is not A1-recoverable.** We still cannot rotate
+   or take over the identity — that is the point of the split. The user also cannot exit or
+   rotate until they recover `Elect`. Email/SMS/social restore *account access* (A1), never
+   the `Elect` key (I2). Restoring rotatability is guardian / superseding-recovery work
+   (`identikey-core-vt4`, `identikey-core-wzr`), not a support action. Holding a second `Elect`
+   key (or wrapping the first to every passkey) is how a user avoids the trap; it is not
+   required to *be* C2.
+
+**Rationale.** The alternative — "C2 from the first click, we hold `Elect` until they have a
+device" — is C1 with a nicer name. The alternative — "A1 restores `Elect`" — is the I2 collapse.
+The alternative — "keep inception private so we can still sign document updates" — makes every
+privilege in the document decorative, because inception-verify will accept a document we forged
+that puts `All` back on our key.
+
+`Verify` and `Update` travel with the user at C2 even though ADR-008 named only `Elect` +
+`Transfer`. Without them the user cannot change the document or the resolver set, and C2 → C3
+(ADR-007: relocation of resolution) becomes a thing we do *to* them.
+
+**Consequences.**
+
+- Signup is C1 until the C1 → C2 ceremony completes. The product must not advertise C2 before
+  that.
+- After promotion we must not persist inception private. A backup that still has it is a C1
+  backup of a C2 customer — treat that as a breach-class incident, not an operational
+  convenience.
+- Resolvers and our own apply-path must authorize key-graph changes via `Elect` on the previous
+  document, not via inception-verify. That function lives in `identikey-keys` (`authorize_elect`).
+- `bc-xid` remaining the document format is unchanged. We are not forking it to add
+  `XIDVerifySignature::Elect`; we wrap it.
+- C2 → C3 (`identikey-core-zan.2`) starts from a document that already has the split, and must
+  also move resolution (ADR-007). It does not have to invent the privilege model.
+
+**Actions this decision commits us to:**
+
+1. Construct C2 documents that encode the split, and refuse to call a document C2 if any key
+   holds `All` or if IdentiKey's key holds `Elect`.
+2. `authorize_elect` rejects our `Sign` key. A test covers the reject path.
+3. Promotion Transfers inception and takes inception private by value so the happy path cannot
+   keep it by accident.
 
 ---
 

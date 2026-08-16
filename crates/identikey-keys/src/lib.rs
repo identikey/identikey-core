@@ -56,13 +56,26 @@
 //! Privilege assignments live in the XID document, not in extra columns. Device
 //! records (`zan.8`), OIDC tokens (`ccf.*`), and guardian tables (`vt4`) are
 //! later migrations.
+//!
+//! # Privilege split (`identikey-core-av9`, ADR-010)
+//!
+//! C2 *is* the split: the user's key holds `Elect` + `Transfer`, ours holds
+//! `Sign` + `Auth`. No user-held `Elect` is C1, and we will say so. `bc-xid`
+//! does not enforce this — [`authorize_elect`] is the check, and after
+//! promotion we Transfer the inception key out so `XIDVerifySignature::Inception`
+//! cannot undo the split.
 
 pub mod consent;
+pub mod privilege;
 pub mod rung;
 pub mod xid;
 
 pub use consent::{
     hash_consent_entry, hash_proof, ConsentHashInput, ConsentResult, ProofKind, CONSENT_HASH_V1,
+};
+pub use privilege::{
+    authorize_elect, c1, c2_native, is_c2, key_allows, promote_c1_to_c2, PrivilegeError,
+    IDENTIKEY_C2_PRIVILEGES, USER_C2_PRIVILEGES,
 };
 pub use rung::{AccessLevel, CustodyRung, ParseRungError};
 pub use xid::{Xid, XidError};
