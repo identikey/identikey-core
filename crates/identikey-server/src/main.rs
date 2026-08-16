@@ -12,8 +12,7 @@
 //! - Configuration, including the strict WebAuthn origin allowlist that must
 //!   fail closed at boot (`identikey-core-62j`). Failing at startup is much
 //!   cheaper than discovering a permissive origin in production.
-//! - The Postgres pool. The schema itself is `identikey-core-zan.1`
-//!   (`identikey-keys::MIGRATOR`); wiring the pool at boot is still open.
+//! - WebAuthn RP ID / origin allowlist (`identikey-core-62j`).
 //! - `/.well-known/webauthn`, required on the *first* deploy of
 //!   `auth.identikey.me` (`identikey-core-2js`).
 //! - The OIDC endpoints (`identikey-core-ccf.4`) and the URN grant
@@ -23,6 +22,7 @@
 use std::net::SocketAddr;
 
 use axum::{Router, routing::get};
+use identikey_keys::KeysStore;
 use tokio::net::TcpListener;
 use tokio::signal;
 
@@ -35,8 +35,10 @@ async fn health() -> &'static str {
     "ok"
 }
 
-fn router() -> Router {
-    Router::new().route("/health", get(health))
+fn router(store: KeysStore) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .with_state(store)
 }
 
 /// The bind address used when `IDENTIKEY_BIND` is unset.
@@ -57,6 +59,14 @@ fn bind_addr() -> Result<SocketAddr, BoxError> {
     parse_bind(&raw)
 }
 
+/// Fail closed: an auth server that is up without a store is a lie.
+fn database_url(raw: Option<String>) -> Result<String, BoxError> {
+    match raw {
+        Some(url) if !url.is_empty() => Ok(url),
+        _ => Err("DATABASE_URL is required".into()),
+    }
+}
+
 async fn shutdown_signal() {
     if let Err(e) = signal::ctrl_c().await {
         tracing::error!(error = %e, "failed to install ctrl-c handler; shutting down");
@@ -73,11 +83,16 @@ async fn main() -> Result<(), BoxError> {
         )
         .init();
 
+    let url = database_url(std::env::var("DATABASE_URL").ok())?;
+    let store = KeysStore::connect(&url).await?;
+    store.migrate().await?;
+    tracing::info!("database migrated");
+
     let addr = bind_addr()?;
     let listener = TcpListener::bind(addr).await?;
     tracing::info!(%addr, "identikey-server listening");
 
-    axum::serve(listener, router())
+    axum::serve(listener, router(store))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
@@ -107,5 +122,15 @@ mod tests {
             parse_bind("not-an-address").is_err(),
             "a malformed bind address must fail at boot, not silently fall back"
         );
+    }
+
+    #[test]
+    fn missing_database_url_fails_closed() {
+        let err = database_url(None).unwrap_err().to_string();
+        assert!(
+            err.contains("DATABASE_URL"),
+            "boot error must name DATABASE_URL, got {err}"
+        );
+        assert!(database_url(Some(String::new())).is_err());
     }
 }

@@ -48,6 +48,12 @@ impl Xid {
     }
 }
 
+impl From<bc_components::XID> for Xid {
+    fn from(value: bc_components::XID) -> Self {
+        Self::from_bytes(*value.data())
+    }
+}
+
 impl AsRef<[u8]> for Xid {
     fn as_ref(&self) -> &[u8] {
         &self.0

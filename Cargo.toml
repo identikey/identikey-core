@@ -39,6 +39,7 @@ sqlx = { version = "0.9", default-features = false, features = [
 # sub is a XID: SHA-256 of the CBOR encoding of the inception public signing key.
 bc-xid = "0.23"
 bc-components = "0.31"
+dcbor = "0.25"
 
 # --- Tokens ---------------------------------------------------------------
 josekit = "0.10"

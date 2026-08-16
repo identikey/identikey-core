@@ -64,10 +64,17 @@
 //! does not enforce this — [`authorize_elect`] is the check, and after
 //! promotion we Transfer the inception key out so `XIDVerifySignature::Inception`
 //! cannot undo the split.
+//!
+//! # Store (`add-keys-store`)
+//!
+//! [`KeysStore`] is the durable face. A key-graph write goes through
+//! [`KeysStore::apply_document_update`], which authorizes against the **stored**
+//! document. The server requires `DATABASE_URL` and runs [`MIGRATOR`] at boot.
 
 pub mod consent;
 pub mod privilege;
 pub mod rung;
+pub mod store;
 pub mod xid;
 
 pub use consent::{
@@ -78,6 +85,7 @@ pub use privilege::{
     IDENTIKEY_C2_PRIVILEGES, USER_C2_PRIVILEGES,
 };
 pub use rung::{AccessLevel, CustodyRung, ParseRungError};
+pub use store::{ConsentAppend, KeysStore, StoreError, StoredAccount, StoredCustody};
 pub use xid::{Xid, XidError};
 
 /// sqlx migrator for the schema in `migrations/`.
