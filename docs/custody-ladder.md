@@ -183,8 +183,11 @@ custody rungs, one token format at the edge. This is the thing Keycloak structur
 
 ## Open questions
 
-1. **C2 consent-record format.** Signed by what, stored where, presented to the user how?
-   Probably a capability envelope, reusing the `identikey-storage-auth` chain machinery.
+1. **C2 consent-record format.** ~~Open~~ — settled at the schema layer 2026-08-16
+   (`identikey-core-zan.1`). Proved by the access credential (A3 assertion or A4
+   Response), stored in append-only hash-chained `consent_log`, shown from the row.
+   See `docs/ARCHITECTURE.md` open question 5. We do not import
+   `identikey-storage-auth`.
 2. **Is C2 with a WebCrypto non-extractable key a distinct rung?** concepts.md floats it.
    It is stronger than C2 (server genuinely cannot extract) but weaker than C3 (device loss
    is unrecoverable). Possibly C2.5. Deferred until the device-loss story is solved.

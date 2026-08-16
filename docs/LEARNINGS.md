@@ -25,6 +25,15 @@ See morphist-tools `CONVENTIONS.md`.
 - 2026-07-28 — `cargo metadata --format-version 1 --all-features` gives license fields for
   *every* package including ones absent from the local registry src cache; scanning
   `~/.cargo/registry/src` directly only resolved 396 of 659 and would have missed this.
+- 2026-08-16 — `#[sqlx::test]` against `postgres://localhost/...` (no user in the URL)
+  asks the `whoami` crate for a username. On this host that can come back as
+  `anonymous`, and Postgres then fails with `role "anonymous" does not exist`.
+  Put a user in `DATABASE_URL` or export `PGUSER`. Peer-auth `psql` hides this
+  because it uses the OS user over a unix socket. (`crates/identikey-keys` tests)
+- 2026-08-16 — C2 consent is a hash-chained Postgres log of *access-credential* proofs,
+  not a reuse of `identikey-storage-auth` capability envelopes. Importing that crate
+  would pull recrypt + AGPL into the product workspace. The chain *pattern* is the
+  useful part and is cheap to reimplement (`crates/identikey-keys/src/consent.rs`).
 - 2026-07-28 — `sub` must be a XID (hash of an *inception* key), not the current key's
   fingerprint. Fingerprint-as-subject makes key rotation an identity break, and PQ migration is
   a *scheduled* rotation — so it would have had a known future date on which every identity

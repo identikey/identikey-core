@@ -12,7 +12,8 @@
 //! - Configuration, including the strict WebAuthn origin allowlist that must
 //!   fail closed at boot (`identikey-core-62j`). Failing at startup is much
 //!   cheaper than discovering a permissive origin in production.
-//! - The Postgres pool (`identikey-core-zan.1`).
+//! - The Postgres pool. The schema itself is `identikey-core-zan.1`
+//!   (`identikey-keys::MIGRATOR`); wiring the pool at boot is still open.
 //! - `/.well-known/webauthn`, required on the *first* deploy of
 //!   `auth.identikey.me` (`identikey-core-2js`).
 //! - The OIDC endpoints (`identikey-core-ccf.4`) and the URN grant

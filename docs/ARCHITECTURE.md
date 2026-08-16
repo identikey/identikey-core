@@ -31,11 +31,13 @@ identikey-core/  (here)      AGPL-3.0-or-later + commercial
 ```
 
 **Scaffolded 2026-08-07.** The four crates exist, build, and pass `clippy -D warnings`
-and `cargo deny check`; none of them implement anything yet. `web/` is *not* yet in
-place — the SvelteKit app is still at the repository root, where it serves the
-TypeScript implementation frozen at tag `pre-rust-pivot`. Relocating it touches every
-config path and would break a suite that currently passes, so it is a separate move
-(`identikey-core-ccf.11`) rather than a rider on the scaffold.
+and `cargo deny check`. `identikey-keys` now owns the Postgres schema
+(`identikey-core-zan.1`, 2026-08-16); none of the crates yet implement product
+behaviour on top of it. `web/` is *not* yet in place — the SvelteKit app is still at
+the repository root, where it serves the TypeScript implementation frozen at tag
+`pre-rust-pivot`. Relocating it touches every config path and would break a suite
+that currently passes, so it is a separate move (`identikey-core-ccf.11`) rather than
+a rider on the scaffold.
 
 Companion documents: [`custody-ladder.md`](./custody-ladder.md) (the normative rungs),
 [`licensing-and-commons.md`](./licensing-and-commons.md),
@@ -772,8 +774,20 @@ surface is not this ADR's threat model — that is what the URN grant and disclo
 3. **Pairwise subject identifiers.** ~~Open~~ — decided as **ADR-009**.
 4. **Stewardship structure** — `licensing-and-commons.md` §5 (a)/(b)/(c)/(d). Currently
    materially (b).
-5. **C2 consent-record format.** Signed by what, stored where, shown how. Probably a capability
-   envelope reusing the `identikey-storage-auth` chain machinery.
+5. **C2 consent-record format.** ~~Open~~ — settled at the schema layer 2026-08-16
+   (`identikey-core-zan.1`).
+   - **Signed/proved by** the *access* credential that authorised the action: a WebAuthn
+     assertion at A3, or an `identikey-auth` Response at A4. Not by the managed Sign key —
+     a log of our own signatures would make C2 self-certifying theatre.
+   - **Stored in** `consent_log` (Postgres): append-only, hash-chained per account. UPDATE
+     and DELETE are refused. The hash is computed in-process (`identikey_keys::consent`)
+     so the encoding cannot drift from a SQL expression.
+   - **Shown from** the row: when, what action, for whom, which credential, outcome. The
+     account UI (`ccf.11`) renders it; the table is already shaped for that.
+   - We take the hash-chain *pattern* from `identikey-storage-auth` and do **not** depend
+     on that crate (AGPL + recrypt; LEARNINGS 2026-07-28). The full capability-envelope
+     wire format is still available later if a grant needs to leave the server; the C2
+     audit log does not need it.
 6. **Is WebCrypto non-extractable a distinct rung (C2.5)?** Stronger than C2, weaker than C3;
    device loss unrecoverable. Deferred.
 7. **Does the OP advertise custody rung to relying parties** via `acr`/`amr`? Useful for
