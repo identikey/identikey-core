@@ -80,7 +80,7 @@ pub mod rung;
 pub mod store;
 pub mod xid;
 
-pub use ceremony::{CeremonyError, held_publics, validate_c2_to_c3};
+pub use ceremony::{CeremonyError, check_resolution, held_publics, validate_c2_to_c3};
 pub use consent::{
     CONSENT_HASH_V1, ConsentHashInput, ConsentResult, ProofKind, hash_consent_entry, hash_proof,
 };

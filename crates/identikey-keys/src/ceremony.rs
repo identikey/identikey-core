@@ -130,7 +130,8 @@ pub fn validate_c2_to_c3(
     Ok(())
 }
 
-fn check_resolution(doc: &XIDDocument) -> Result<(), CeremonyError> {
+/// C3/C4 resolver set: N≥2 distinct HTTP(S) hosts, one not-us eTLD+1.
+pub fn check_resolution(doc: &XIDDocument) -> Result<(), CeremonyError> {
     let mut hosts = HashSet::new();
     let mut saw_not_ours = false;
 

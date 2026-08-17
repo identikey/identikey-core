@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::MIGRATOR;
-use crate::ceremony::{CeremonyError, validate_c2_to_c3};
+use crate::ceremony::{CeremonyError, check_resolution, validate_c2_to_c3};
 use crate::consent::{ConsentHashInput, ConsentResult, ProofKind, hash_consent_entry, hash_proof};
 use crate::privilege::{PrivilegeError, authorize_elect, is_c2};
 use crate::rung::{AccessLevel, CustodyRung};
@@ -367,6 +367,9 @@ async fn apply_document_update_tx(
         .map_err(|e: crate::ParseRungError| StoreError::Document(e.to_string()))?;
     if stored_rung == CustodyRung::C2 && !is_c2(new_document) {
         return Err(StoreError::DocumentRungMismatch);
+    }
+    if matches!(stored_rung, CustodyRung::C3 | CustodyRung::C4) {
+        check_resolution(new_document)?;
     }
     authorize_elect(&previous, signer)?;
     sqlx::query!(
@@ -754,5 +757,93 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(id, Uuid::nil());
+    }
+
+    async fn climb_to_c3(
+        store: &KeysStore,
+        user: &PrivateKeyBase,
+        ours: &PrivateKeyBase,
+        c2: &XIDDocument,
+        xid: Xid,
+    ) -> XIDDocument {
+        use bc_components::Signer;
+
+        let c3 = c3_doc(c2, user, ours);
+        let bytes = encode_document(&c3).unwrap();
+        let sig = user.sign(&bytes).unwrap();
+        store
+            .migrate_c2_to_c3(&c3, &sig, user, climb_consent(xid))
+            .await
+            .unwrap();
+        c3
+    }
+
+    #[sqlx::test]
+    async fn c3_user_can_replace_a_resolver(pool: PgPool) {
+        use bc_components::URI;
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let c2 = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &c2, &blob())
+            .await
+            .unwrap();
+        let c3 = climb_to_c3(&store, &user, &ours, &c2, xid).await;
+        let before = store.document_bytes(xid).await.unwrap().unwrap();
+
+        let mut relocated = c3;
+        relocated.remove_resolution_method(
+            URI::new("https://resolver.example/.well-known/xid").unwrap(),
+        );
+        relocated
+            .add_resolution_method(URI::new("https://backup.example/.well-known/xid").unwrap());
+        store
+            .apply_document_update(&user, &relocated)
+            .await
+            .unwrap();
+
+        let after = store.document_bytes(xid).await.unwrap().unwrap();
+        assert_ne!(before, after);
+        let got = store.get_custody(xid).await.unwrap().unwrap();
+        assert_eq!(got.rung, CustodyRung::C3);
+        assert_eq!(store.has_managed_key(xid).await.unwrap(), Some(false));
+    }
+
+    #[sqlx::test]
+    async fn c3_cannot_drop_the_last_not_us_host(pool: PgPool) {
+        use bc_components::URI;
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let c2 = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &c2, &blob())
+            .await
+            .unwrap();
+        let c3 = climb_to_c3(&store, &user, &ours, &c2, xid).await;
+        let before = store.document_bytes(xid).await.unwrap().unwrap();
+
+        let mut only_ours = c3;
+        only_ours.remove_resolution_method(
+            URI::new("https://resolver.example/.well-known/xid").unwrap(),
+        );
+        only_ours.add_resolution_method(URI::new("https://identikey.io/.well-known/xid").unwrap());
+        let err = store
+            .apply_document_update(&user, &only_ours)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::Ceremony(CeremonyError::Resolution(_))),
+            "unexpected error: {err}"
+        );
+        assert_eq!(store.document_bytes(xid).await.unwrap().unwrap(), before);
+        assert_eq!(
+            store.get_custody(xid).await.unwrap().unwrap().rung,
+            CustodyRung::C3
+        );
+        assert_eq!(store.has_managed_key(xid).await.unwrap(), Some(false));
     }
 }
