@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT xid, rung, xid_document FROM custody_records WHERE xid = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "xid",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "custody_records",
+            "name": "xid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "rung",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "custody_records",
+            "name": "rung"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "xid_document",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "custody_records",
+            "name": "xid_document"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2bd07e2fd7129e9c0306ce0ada57c750050995687e9a33116a8520679ab656a3"
+}

@@ -204,6 +204,9 @@ mod tests {
     fn action_is_committed() {
         let mut other = sample(None);
         other.action = "export";
-        assert_ne!(hash_consent_entry(&sample(None)), hash_consent_entry(&other));
+        assert_ne!(
+            hash_consent_entry(&sample(None)),
+            hash_consent_entry(&other)
+        );
     }
 }

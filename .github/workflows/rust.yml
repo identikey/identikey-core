@@ -14,6 +14,25 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: identikey
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # #[sqlx::test] creates throwaway DBs from this URL. Put a user in the
+      # URL: sqlx 0.9 otherwise asks whoami, which can be `anonymous`.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/identikey
+      PGUSER: postgres
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -45,21 +64,37 @@ jobs:
     # passes here and fails against the real schema, which is exactly the class
     # of error the offline cache exists to prevent. This job fails when the
     # committed cache no longer matches the queries in the tree.
-    #
-    # Currently a no-op guard — there are no sqlx queries yet. It is wired now so
-    # the check exists from the first query rather than being retrofitted after
-    # the first drift.
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: identikey
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/identikey
+      PGUSER: postgres
+      # prepare must talk to Postgres; the workspace default is offline.
+      SQLX_OFFLINE: "false"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: baptiste0928/cargo-install@v3
+        with:
+          crate: sqlx-cli
+          version: 0.9.0
+          locked: true
+          args: --no-default-features --features postgres,rustls
+      - name: apply migrations
+        run: sqlx migrate run --source crates/identikey-keys/migrations
       - name: verify the committed cache is current
-        run: |
-          if ! ls crates/*/src/**/*.rs >/dev/null 2>&1; then exit 0; fi
-          if ! grep -rqE 'sqlx::(query|query_as|query_scalar)!' crates/; then
-            echo "no compile-time sqlx queries yet; nothing to verify"
-            exit 0
-          fi
-          cargo install sqlx-cli --no-default-features --features postgres,rustls
-          cargo sqlx prepare --workspace --check -- --all-targets
+        run: cargo sqlx prepare --workspace --check -- --all-targets

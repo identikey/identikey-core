@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT xid_document FROM custody_records WHERE xid = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "xid_document",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "custody_records",
+            "name": "xid_document"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f89c14145a06b2caf9fbc4eb8fbff5994e90a92aa0e6ed9cf9732b1c8dc1f709"
+}

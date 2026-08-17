@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (managed_key_blob IS NOT NULL) AS present FROM custody_records WHERE xid = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "present",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6e6931f4b5761f3a5e312aeb0b236681709cc3c39a82c5cbdc94c7b43f8e2649"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO custody_events (xid, from_rung, to_rung, ceremony)\n             VALUES ($1, NULL, $2, 'signup')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a943eff9aa3e1c0700d355eba9886917108879c012c15b0ba0c4f2907c35eb50"
+}

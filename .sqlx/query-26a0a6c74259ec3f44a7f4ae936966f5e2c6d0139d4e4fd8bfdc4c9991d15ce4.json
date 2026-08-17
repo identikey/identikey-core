@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE custody_records SET xid_document = $2, updated_at = now() WHERE xid = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "26a0a6c74259ec3f44a7f4ae936966f5e2c6d0139d4e4fd8bfdc4c9991d15ce4"
+}

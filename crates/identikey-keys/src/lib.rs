@@ -79,13 +79,13 @@ pub mod rung;
 pub mod store;
 pub mod xid;
 
-pub use ceremony::{held_publics, validate_c2_to_c3, CeremonyError};
+pub use ceremony::{CeremonyError, held_publics, validate_c2_to_c3};
 pub use consent::{
-    hash_consent_entry, hash_proof, ConsentHashInput, ConsentResult, ProofKind, CONSENT_HASH_V1,
+    CONSENT_HASH_V1, ConsentHashInput, ConsentResult, ProofKind, hash_consent_entry, hash_proof,
 };
 pub use privilege::{
-    authorize_elect, c1, c2_native, is_c2, key_allows, promote_c1_to_c2, PrivilegeError,
-    IDENTIKEY_C2_PRIVILEGES, USER_C2_PRIVILEGES,
+    IDENTIKEY_C2_PRIVILEGES, PrivilegeError, USER_C2_PRIVILEGES, authorize_elect, c1, c2_native,
+    is_c2, key_allows, promote_c1_to_c2,
 };
 pub use rung::{AccessLevel, CustodyRung, ParseRungError};
 pub use store::{ConsentAppend, KeysStore, StoreError, StoredAccount, StoredCustody};

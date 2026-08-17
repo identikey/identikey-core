@@ -23,9 +23,9 @@ impl Xid {
 
     /// Construct from a slice, rejecting any other length.
     pub fn try_from_slice(bytes: &[u8]) -> Result<Self, XidError> {
-        let bytes: [u8; Self::LEN] = bytes.try_into().map_err(|_| XidError::InvalidLength {
-            got: bytes.len(),
-        })?;
+        let bytes: [u8; Self::LEN] = bytes
+            .try_into()
+            .map_err(|_| XidError::InvalidLength { got: bytes.len() })?;
         Ok(Self(bytes))
     }
 

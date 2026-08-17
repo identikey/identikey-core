@@ -51,10 +51,12 @@ pub enum PrivilegeError {
 }
 
 fn forbidden_on_identikey(key: &Key) -> bool {
-    FORBIDDEN_ON_IDENTIKEY.iter().any(|privilege| match privilege {
-        Privilege::All => HasPermissions::allow(key).contains(&Privilege::All),
-        other => key_allows(key, other.clone()),
-    })
+    FORBIDDEN_ON_IDENTIKEY
+        .iter()
+        .any(|privilege| match privilege {
+            Privilege::All => HasPermissions::allow(key).contains(&Privilege::All),
+            other => key_allows(key, other.clone()),
+        })
 }
 
 /// True if `key` allows `privilege`, including via `Privilege::All`.
@@ -133,7 +135,8 @@ pub fn c2_native(
     for privilege in IDENTIKEY_C2_PRIVILEGES {
         ours.add_permission(privilege);
     }
-    doc.add_key(ours).map_err(|e| PrivilegeError::Xid(e.to_string()))?;
+    doc.add_key(ours)
+        .map_err(|e| PrivilegeError::Xid(e.to_string()))?;
 
     if !is_c2(&doc) {
         return Err(PrivilegeError::NotC2(
@@ -231,7 +234,8 @@ fn set_privileges(
     for privilege in privileges {
         key.add_permission(privilege.clone());
     }
-    doc.add_key(key).map_err(|e| PrivilegeError::Xid(e.to_string()))
+    doc.add_key(key)
+        .map_err(|e| PrivilegeError::Xid(e.to_string()))
 }
 
 #[cfg(test)]

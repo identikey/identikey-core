@@ -40,6 +40,10 @@ See morphist-tools `CONVENTIONS.md`.
   `anonymous`, and Postgres then fails with `role "anonymous" does not exist`.
   Put a user in `DATABASE_URL` or export `PGUSER`. Peer-auth `psql` hides this
   because it uses the OS user over a unix socket. (`crates/identikey-keys` tests)
+- 2026-08-16 — `identikey-core-test` still holds the old Drizzle schema. `sqlx migrate
+  run` against it dies on `relation "challenges" already exists`. Use a clean DB
+  (`identikey-core-sqlx`) for migrate / `cargo sqlx prepare`; `#[sqlx::test]` can
+  still use the dirty DB as a maintenance connection. (`.sqlx/`, CLAUDE.md)
 - 2026-08-16 — C2 consent is a hash-chained Postgres log of *access-credential* proofs,
   not a reuse of `identikey-storage-auth` capability envelopes. Importing that crate
   would pull recrypt + AGPL into the product workspace. The chain *pattern* is the

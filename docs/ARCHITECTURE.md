@@ -376,7 +376,7 @@ store traits) needs converting.
 **Actions this decision commits us to:**
 
 1. Commit `.sqlx/` and add a CI step that fails when the offline cache is stale — a cache that
-   silently drifts turns compile-time SQL checking into decoration.
+   silently drifts turns compile-time SQL checking into decoration. Done as `identikey-core-xg2`.
 2. Real Postgres service container in CI; no SQLite or `pglite` fallback in the test path.
 3. Convert `recrypt-server`'s direct `tokio_rusqlite` usage to go through the store traits
    (`identikey-core-zan.4`) — it is the one place that bypasses the abstraction.

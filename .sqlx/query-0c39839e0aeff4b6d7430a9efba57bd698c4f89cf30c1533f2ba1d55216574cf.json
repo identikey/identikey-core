@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO custody_events (xid, from_rung, to_rung, ceremony, consent_id)\n             VALUES ($1, 'c2', 'c3', 'c2_to_c3', $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0c39839e0aeff4b6d7430a9efba57bd698c4f89cf30c1533f2ba1d55216574cf"
+}

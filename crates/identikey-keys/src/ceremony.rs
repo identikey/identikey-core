@@ -7,10 +7,10 @@ use bc_components::{PublicKeys, PublicKeysProvider, Signature, Verifier};
 use bc_xid::{Privilege, XIDDocument};
 use url::Url;
 
-use bc_components::XIDProvider;
-use crate::privilege::{authorize_elect, is_c2, key_allows, PrivilegeError};
+use crate::privilege::{PrivilegeError, authorize_elect, is_c2, key_allows};
 use crate::rung::CustodyRung;
 use crate::xid::Xid;
+use bc_components::XIDProvider;
 
 /// eTLD+1 we operate. A sibling or CNAME under these is still us.
 const OPERATOR_ETLD1: [&str; 2] = ["identikey.me", "identikey.io"];
@@ -104,10 +104,7 @@ pub fn validate_c2_to_c3(
 
     for held_pub in &held {
         if let Some(on_new) = new_doc.find_key_by_public_keys(held_pub) {
-            if HELD_MUST_DROP
-                .iter()
-                .any(|p| key_allows(on_new, p.clone()))
-            {
+            if HELD_MUST_DROP.iter().any(|p| key_allows(on_new, p.clone())) {
                 return Err(CeremonyError::HeldKeyRetainsPrivilege);
             }
         }
@@ -171,7 +168,9 @@ fn check_resolution(doc: &XIDDocument) -> Result<(), CeremonyError> {
 }
 
 fn is_operator_host(host: &str) -> bool {
-    OPERATOR_ETLD1.iter().any(|root| host == *root || host.ends_with(&format!(".{root}")))
+    OPERATOR_ETLD1
+        .iter()
+        .any(|root| host == *root || host.ends_with(&format!(".{root}")))
 }
 
 fn is_local_or_private(host: &str) -> bool {
@@ -179,7 +178,9 @@ fn is_local_or_private(host: &str) -> bool {
         return true;
     }
     match host.parse::<IpAddr>() {
-        Ok(IpAddr::V4(v)) => v.is_loopback() || v.is_private() || v.is_link_local() || v.is_unspecified(),
+        Ok(IpAddr::V4(v)) => {
+            v.is_loopback() || v.is_private() || v.is_link_local() || v.is_unspecified()
+        }
         Ok(IpAddr::V6(v)) => v.is_loopback() || v.is_unspecified(),
         Err(_) => false,
     }
