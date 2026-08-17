@@ -4,6 +4,8 @@
 
 Activated from `nod-threshold-read` (`identikey-core-5f3`).
 
+**Rigor:** change
+
 ## Why
 
 ADR-007 (3–4): a resolver cannot forge a document but can serve an old

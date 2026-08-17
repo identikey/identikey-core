@@ -4,6 +4,8 @@
 
 Activated from `nod-serve-xid` (`identikey-core-998`).
 
+**Rigor:** change
+
 ## Why
 
 ADR-007 (5): the OP serves the XID document as an availability service.

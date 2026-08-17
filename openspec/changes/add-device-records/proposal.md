@@ -4,6 +4,8 @@
 
 Activated from `nod-device-records` (`identikey-core-zan.8`).
 
+**Rigor:** change
+
 ## Why
 
 The TS/Keycloak device model (`is_master`, `device_trust` in every

@@ -4,6 +4,8 @@
 
 Activated from `nod-relocate-resolvers` (`identikey-core-cmd`).
 
+**Rigor:** change
+
 ## Why
 
 ADR-007: relocation is a document update the user performs, not a
