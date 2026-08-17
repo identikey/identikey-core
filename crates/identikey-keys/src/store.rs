@@ -1,6 +1,6 @@
 //! Durable store. Elect is checked against the row, not the caller.
 
-use bc_components::{PublicKeysProvider, XIDProvider};
+use bc_components::{PublicKeysProvider, Signature, XIDProvider};
 use bc_xid::XIDDocument;
 use dcbor::prelude::*;
 use sqlx::postgres::PgPoolOptions;
@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::consent::{
     hash_consent_entry, hash_proof, ConsentHashInput, ConsentResult, ProofKind,
 };
+use crate::ceremony::{validate_c2_to_c3, CeremonyError};
 use crate::privilege::{authorize_elect, is_c2, PrivilegeError};
 use crate::rung::{AccessLevel, CustodyRung};
 use crate::xid::Xid;
@@ -33,6 +34,10 @@ pub enum StoreError {
     DocumentRungMismatch,
     #[error("XID document: {0}")]
     Document(String),
+    #[error(transparent)]
+    Ceremony(#[from] CeremonyError),
+    #[error("consent proof must be A3 or A4")]
+    ConsentProofNotAccess,
 }
 
 #[derive(Clone)]
@@ -180,6 +185,9 @@ impl KeysStore {
     }
 
     /// Persist a new XID document only if `signer` holds Elect on the stored one.
+    ///
+    /// On a C2 row the new document must still be C2. Privilege-shape change
+    /// that drops our Sign key goes through [`Self::migrate_c2_to_c3`].
     pub async fn apply_document_update(
         &self,
         signer: &impl PublicKeysProvider,
@@ -191,6 +199,84 @@ impl KeysStore {
         apply_document_update_tx(&mut tx, xid, signer, new_document, &new_bytes).await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// C2→C3 exit. One UPDATE of document + NULL blob + `rung = c3`.
+    pub async fn migrate_c2_to_c3(
+        &self,
+        new_document: &XIDDocument,
+        elect_signature: &Signature,
+        signer: &impl PublicKeysProvider,
+        consent: ConsentAppend<'_>,
+    ) -> Result<(), StoreError> {
+        match (consent.access_level, consent.proof_kind) {
+            (
+                AccessLevel::A3 | AccessLevel::A4,
+                ProofKind::WebauthnAssertion | ProofKind::IdentikeyAuthResponse,
+            ) => {}
+            _ => return Err(StoreError::ConsentProofNotAccess),
+        }
+
+        let xid = Xid::from(new_document.xid());
+        if consent.xid != xid {
+            return Err(StoreError::XidMismatch);
+        }
+        let new_bytes = encode_document(new_document)?;
+        let mut tx = self.pool.begin().await?;
+
+        let row: Option<(Vec<u8>, String)> = sqlx::query_as(
+            "SELECT xid_document, rung FROM custody_records WHERE xid = $1 FOR UPDATE",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((stored_bytes, rung_raw)) = row else {
+            return Err(StoreError::NotFound);
+        };
+        let stored_rung: CustodyRung = rung_raw
+            .parse()
+            .map_err(|e: crate::ParseRungError| StoreError::Document(e.to_string()))?;
+        let stored = decode_document(&stored_bytes)?;
+        validate_c2_to_c3(
+            stored_rung,
+            &stored,
+            new_document,
+            elect_signature,
+            signer,
+            &new_bytes,
+        )?;
+
+        let consent_id = append_consent_tx(&mut tx, consent).await?;
+        sqlx::query(
+            "UPDATE custody_records
+             SET xid_document = $2, managed_key_blob = NULL, rung = 'c3', updated_at = now()
+             WHERE xid = $1",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .bind(&new_bytes)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO custody_events (xid, from_rung, to_rung, ceremony, consent_id)
+             VALUES ($1, 'c2', 'c3', 'c2_to_c3', $2)",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .bind(consent_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Whether the managed-key blob is present. Does not return the bytes.
+    pub async fn has_managed_key(&self, xid: Xid) -> Result<Option<bool>, StoreError> {
+        let row: Option<(bool,)> = sqlx::query_as(
+            "SELECT managed_key_blob IS NOT NULL FROM custody_records WHERE xid = $1",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(present,)| present))
     }
 
     pub async fn insert_passkey(
@@ -216,67 +302,9 @@ impl KeysStore {
     }
 
     pub async fn append_consent(&self, entry: ConsentAppend<'_>) -> Result<Uuid, StoreError> {
-        let prev: Option<(i64, Vec<u8>)> = sqlx::query_as(
-            "SELECT seq, entry_hash FROM consent_log WHERE xid = $1 ORDER BY seq DESC LIMIT 1",
-        )
-        .bind(entry.xid.as_bytes().as_slice())
-        .fetch_optional(&self.pool)
-        .await?;
-
-        let (seq, prev_hash) = match prev {
-            None => (1_u64, None),
-            Some((s, hash)) => {
-                let seq = u64::try_from(s).map_err(|e| StoreError::Document(e.to_string()))? + 1;
-                let prev = <[u8; 32]>::try_from(hash.as_slice())
-                    .map_err(|_| StoreError::Document("consent prev_hash is not 32 bytes".into()))?;
-                (seq, Some(prev))
-            }
-        };
-
-        let proof_hash = hash_proof(entry.proof_bytes);
-        let input = ConsentHashInput {
-            xid: entry.xid,
-            seq,
-            prev_hash,
-            action: entry.action,
-            audience: entry.audience,
-            purpose: entry.purpose,
-            access_level: entry.access_level,
-            credential_id: entry.credential_id,
-            proof_kind: entry.proof_kind,
-            proof_hash,
-            result: entry.result,
-        };
-        let entry_hash = hash_consent_entry(&input);
-        let seq_i64 = i64::try_from(seq).map_err(|e| StoreError::Document(e.to_string()))?;
-
-        let id: Uuid = sqlx::query_scalar(
-            "INSERT INTO consent_log (
-                xid, seq, prev_hash, entry_hash,
-                action, audience, purpose,
-                access_level, credential_id, proof_kind, proof_bytes, proof_hash, result
-             ) VALUES (
-                $1, $2, $3, $4,
-                $5, $6, $7,
-                $8, $9, $10, $11, $12, $13
-             )
-             RETURNING id",
-        )
-        .bind(entry.xid.as_bytes().as_slice())
-        .bind(seq_i64)
-        .bind(prev_hash.as_ref().map(|h| h.as_slice()))
-        .bind(entry_hash.as_slice())
-        .bind(entry.action)
-        .bind(entry.audience)
-        .bind(entry.purpose)
-        .bind(entry.access_level.as_str())
-        .bind(entry.credential_id)
-        .bind(entry.proof_kind.as_str())
-        .bind(entry.proof_bytes)
-        .bind(proof_hash.as_slice())
-        .bind(entry.result.as_str())
-        .fetch_one(&self.pool)
-        .await?;
+        let mut tx = self.pool.begin().await?;
+        let id = append_consent_tx(&mut tx, entry).await?;
+        tx.commit().await?;
         Ok(id)
     }
 }
@@ -288,18 +316,24 @@ async fn apply_document_update_tx(
     new_document: &XIDDocument,
     new_bytes: &[u8],
 ) -> Result<(), StoreError> {
-    let row: Option<(Vec<u8>,)> = sqlx::query_as(
-        "SELECT xid_document FROM custody_records WHERE xid = $1 FOR UPDATE",
+    let row: Option<(Vec<u8>, String)> = sqlx::query_as(
+        "SELECT xid_document, rung FROM custody_records WHERE xid = $1 FOR UPDATE",
     )
     .bind(xid.as_bytes().as_slice())
     .fetch_optional(&mut **tx)
     .await?;
-    let Some((stored_bytes,)) = row else {
+    let Some((stored_bytes, rung_raw)) = row else {
         return Err(StoreError::NotFound);
     };
     let previous = decode_document(&stored_bytes)?;
     if Xid::from(new_document.xid()) != xid || Xid::from(previous.xid()) != xid {
         return Err(StoreError::XidMismatch);
+    }
+    let stored_rung: CustodyRung = rung_raw
+        .parse()
+        .map_err(|e: crate::ParseRungError| StoreError::Document(e.to_string()))?;
+    if stored_rung == CustodyRung::C2 && !is_c2(new_document) {
+        return Err(StoreError::DocumentRungMismatch);
     }
     authorize_elect(&previous, signer)?;
     sqlx::query(
@@ -310,6 +344,74 @@ async fn apply_document_update_tx(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+async fn append_consent_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    entry: ConsentAppend<'_>,
+) -> Result<Uuid, StoreError> {
+    let prev: Option<(i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT seq, entry_hash FROM consent_log WHERE xid = $1 ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(entry.xid.as_bytes().as_slice())
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    let (seq, prev_hash) = match prev {
+        None => (1_u64, None),
+        Some((s, hash)) => {
+            let seq = u64::try_from(s).map_err(|e| StoreError::Document(e.to_string()))? + 1;
+            let prev = <[u8; 32]>::try_from(hash.as_slice())
+                .map_err(|_| StoreError::Document("consent prev_hash is not 32 bytes".into()))?;
+            (seq, Some(prev))
+        }
+    };
+
+    let proof_hash = hash_proof(entry.proof_bytes);
+    let input = ConsentHashInput {
+        xid: entry.xid,
+        seq,
+        prev_hash,
+        action: entry.action,
+        audience: entry.audience,
+        purpose: entry.purpose,
+        access_level: entry.access_level,
+        credential_id: entry.credential_id,
+        proof_kind: entry.proof_kind,
+        proof_hash,
+        result: entry.result,
+    };
+    let entry_hash = hash_consent_entry(&input);
+    let seq_i64 = i64::try_from(seq).map_err(|e| StoreError::Document(e.to_string()))?;
+
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO consent_log (
+            xid, seq, prev_hash, entry_hash,
+            action, audience, purpose,
+            access_level, credential_id, proof_kind, proof_bytes, proof_hash, result
+         ) VALUES (
+            $1, $2, $3, $4,
+            $5, $6, $7,
+            $8, $9, $10, $11, $12, $13
+         )
+         RETURNING id",
+    )
+    .bind(entry.xid.as_bytes().as_slice())
+    .bind(seq_i64)
+    .bind(prev_hash.as_ref().map(|h| h.as_slice()))
+    .bind(entry_hash.as_slice())
+    .bind(entry.action)
+    .bind(entry.audience)
+    .bind(entry.purpose)
+    .bind(entry.access_level.as_str())
+    .bind(entry.credential_id)
+    .bind(entry.proof_kind.as_str())
+    .bind(entry.proof_bytes)
+    .bind(proof_hash.as_slice())
+    .bind(entry.result.as_str())
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(id)
 }
 
 fn encode_document(document: &XIDDocument) -> Result<Vec<u8>, StoreError> {
@@ -334,6 +436,7 @@ mod tests {
     use sqlx::PgPool;
 
     use super::*;
+    use crate::ceremony::CeremonyError;
     use crate::privilege::c2_native;
 
     fn blob() -> Vec<u8> {
@@ -411,6 +514,185 @@ mod tests {
         // Our operational privileges must still be Sign+Auth only.
         let our_key = got.document.find_key_by_public_keys(&ours).unwrap();
         assert!(crate::privilege::key_allows(our_key, Privilege::Sign));
+    }
+
+    fn climb_consent(xid: Xid) -> ConsentAppend<'static> {
+        ConsentAppend {
+            xid,
+            action: "c2_to_c3",
+            audience: None,
+            purpose: Some("leave managed custody"),
+            access_level: AccessLevel::A3,
+            credential_id: None,
+            proof_kind: ProofKind::WebauthnAssertion,
+            proof_bytes: b"assertion",
+            result: ConsentResult::Signed,
+        }
+    }
+
+    fn c3_doc(
+        c2: &XIDDocument,
+        user: &PrivateKeyBase,
+        ours: &PrivateKeyBase,
+    ) -> XIDDocument {
+        use bc_components::URI;
+        use bc_xid::{XIDGenesisMarkOptions, XIDInceptionKeyOptions};
+
+        let mut c3 = c2.clone();
+        c3.remove_key(ours).unwrap();
+        let mut user_key = c3.take_key(user).unwrap();
+        user_key.add_permission(Privilege::Sign);
+        user_key.add_permission(Privilege::Auth);
+        c3.add_key(user_key).unwrap();
+        c3.add_resolution_method(
+            URI::new("https://auth.identikey.me/.well-known/xid").unwrap(),
+        );
+        c3.add_resolution_method(URI::new("https://resolver.example/.well-known/xid").unwrap());
+        let tmp = XIDDocument::new(
+            XIDInceptionKeyOptions::Default,
+            XIDGenesisMarkOptions::Passphrase("c3-mark".to_owned(), None, None, None),
+        );
+        c3.set_provenance(tmp.provenance().cloned());
+        c3
+    }
+
+    #[sqlx::test]
+    async fn apply_document_update_cannot_drop_our_sign(pool: PgPool) {
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &blob())
+            .await
+            .unwrap();
+        let c3 = c3_doc(&doc, &user, &ours);
+        let err = store.apply_document_update(&user, &c3).await.unwrap_err();
+        assert!(
+            matches!(err, StoreError::DocumentRungMismatch),
+            "unexpected error: {err}"
+        );
+        assert_eq!(store.has_managed_key(xid).await.unwrap(), Some(true));
+        assert_eq!(
+            store.get_custody(xid).await.unwrap().unwrap().rung,
+            CustodyRung::C2
+        );
+    }
+
+    #[sqlx::test]
+    async fn migrate_c2_to_c3_happy_path(pool: PgPool) {
+        use bc_components::Signer;
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &blob())
+            .await
+            .unwrap();
+        let c3 = c3_doc(&doc, &user, &ours);
+        let bytes = encode_document(&c3).unwrap();
+        let sig = user.sign(&bytes).unwrap();
+        store
+            .migrate_c2_to_c3(&c3, &sig, &user, climb_consent(xid))
+            .await
+            .unwrap();
+
+        let got = store.get_custody(xid).await.unwrap().unwrap();
+        assert_eq!(got.rung, CustodyRung::C3);
+        assert_eq!(store.has_managed_key(xid).await.unwrap(), Some(false));
+        assert!(!is_c2(&got.document));
+        assert!(got.document.find_key_by_public_keys(&ours).is_none());
+        assert!(crate::privilege::key_allows(
+            got.document.find_key_by_public_keys(&user).unwrap(),
+            Privilege::Sign
+        ));
+    }
+
+    #[sqlx::test]
+    async fn migrate_refuses_only_our_resolvers(pool: PgPool) {
+        use bc_components::{Signer, URI};
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &blob())
+            .await
+            .unwrap();
+        let mut c3 = c3_doc(&doc, &user, &ours);
+        c3.remove_resolution_method(URI::new("https://resolver.example/.well-known/xid").unwrap());
+        c3.add_resolution_method(URI::new("https://identikey.io/.well-known/xid").unwrap());
+        let bytes = encode_document(&c3).unwrap();
+        let sig = user.sign(&bytes).unwrap();
+        let err = store
+            .migrate_c2_to_c3(&c3, &sig, &user, climb_consent(xid))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::Ceremony(CeremonyError::Resolution(_))),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            store.get_custody(xid).await.unwrap().unwrap().rung,
+            CustodyRung::C2
+        );
+        assert_eq!(store.has_managed_key(xid).await.unwrap(), Some(true));
+    }
+
+    #[sqlx::test]
+    async fn migrate_refuses_our_sign_key(pool: PgPool) {
+        use bc_components::Signer;
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &blob())
+            .await
+            .unwrap();
+        let c3 = c3_doc(&doc, &user, &ours);
+        let bytes = encode_document(&c3).unwrap();
+        let sig = ours.sign(&bytes).unwrap();
+        let err = store
+            .migrate_c2_to_c3(&c3, &sig, &ours, climb_consent(xid))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                StoreError::Ceremony(
+                    CeremonyError::ElectDenied | CeremonyError::SignerIsHeldKey
+                )
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[sqlx::test]
+    async fn migrate_refuses_c1(pool: PgPool) {
+        use bc_components::Signer;
+
+        let store = KeysStore::from_pool(pool);
+        let ours = PrivateKeyBase::new();
+        let doc = crate::privilege::c1(&ours);
+        let xid = store
+            .create_managed(CustodyRung::C1, &doc, &blob())
+            .await
+            .unwrap();
+        let bytes = encode_document(&doc).unwrap();
+        let sig = ours.sign(&bytes).unwrap();
+        let err = store
+            .migrate_c2_to_c3(&doc, &sig, &ours, climb_consent(xid))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::Ceremony(CeremonyError::NotC2)),
+            "unexpected error: {err}"
+        );
     }
 
     #[sqlx::test]

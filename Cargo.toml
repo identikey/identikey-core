@@ -57,6 +57,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 time = { version = "0.3", features = ["serde"] }
 sha2 = "0.10"
+url = "2"
 
 # --- Internal -------------------------------------------------------------
 # Versions are stated alongside the paths deliberately: a bare `path` dependency

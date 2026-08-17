@@ -7,8 +7,11 @@ Owed by this activation (`nod-c2-c3-adr`) only:
 - [x] Deltas for the C2→C3 ceremony on `managed-custody`
 - [x] Independent architecture read (critic REVISE; findings absorbed)
 
+- [x] `migrate_c2_to_c3`: Elect signature, one UPDATE, consent then event
+- [x] `apply_document_update` refuses a non-`is_c2` document on a C2 row
+- [x] Tests: happy path, only-ours resolvers, our Sign key, C1 skip, apply hole
+
 Not owed here (bullets, not boxes):
 
-- `migrate_c2_to_c3` implementation — `nod-c2-c3-exit`
 - Resolver HTTP — `identikey-core-998`
 - Threshold client — `identikey-core-5f3`

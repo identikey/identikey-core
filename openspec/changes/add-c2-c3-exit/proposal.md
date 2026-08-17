@@ -2,8 +2,7 @@
 
 > **ACTIVE BUILD**
 
-This activation (`nod-c2-c3-adr`) writes the ADR and the deltas.
-Ceremony **code** is `nod-c2-c3-exit` and is not owed here.
+This change now includes the `nod-c2-c3-exit` implementation.
 
 ## Why
 
@@ -41,7 +40,6 @@ checks hold; they can stop paying; their XID is unchanged.
 
 ## Out of scope
 
-- Ceremony implementation (`nod-c2-c3-exit` / remaining `zan.2` code)
 - Serving the document (`identikey-core-998`)
 - Threshold reads (`identikey-core-5f3`)
 - C3→C2 downward ceremony (I4)

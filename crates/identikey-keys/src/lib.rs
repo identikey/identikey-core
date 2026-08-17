@@ -67,16 +67,19 @@
 //!
 //! # Store (`add-keys-store`)
 //!
-//! [`KeysStore`] is the durable face. A key-graph write goes through
-//! [`KeysStore::apply_document_update`], which authorizes against the **stored**
-//! document. The server requires `DATABASE_URL` and runs [`MIGRATOR`] at boot.
+//! [`KeysStore`] is the durable face. A C2 document write goes through
+//! [`KeysStore::apply_document_update`] and must stay C2. The climb is
+//! [`KeysStore::migrate_c2_to_c3`] (ADR-011). The server requires
+//! `DATABASE_URL` and runs [`MIGRATOR`] at boot.
 
+pub mod ceremony;
 pub mod consent;
 pub mod privilege;
 pub mod rung;
 pub mod store;
 pub mod xid;
 
+pub use ceremony::{held_publics, validate_c2_to_c3, CeremonyError};
 pub use consent::{
     hash_consent_entry, hash_proof, ConsentHashInput, ConsentResult, ProofKind, CONSENT_HASH_V1,
 };

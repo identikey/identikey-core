@@ -1,7 +1,7 @@
 # Design — C2→C3 ceremony (ADR-011)
 
 Independent read (critic, 2026-08-16): REVISE. Findings absorbed below.
-Do not implement in this node.
+Implemented in `nod-c2-c3-exit`.
 
 ## Two write paths, one job each
 
