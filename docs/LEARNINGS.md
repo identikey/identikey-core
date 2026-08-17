@@ -25,6 +25,11 @@ See morphist-tools `CONVENTIONS.md`.
 - 2026-07-28 — `cargo metadata --format-version 1 --all-features` gives license fields for
   *every* package including ones absent from the local registry src cache; scanning
   `~/.cargo/registry/src` directly only resolved 396 of 659 and would have missed this.
+- 2026-08-16 — C2→C3 must not export `managed_key_blob`. After ADR-010 the user
+  already holds Elect; they generate a Sign key we have never held, and we
+  destroy ours in the same transaction as the document write. The old zan.2
+  line "hand them the managed key" and ADR-008's "migration authorised by our
+  key" are both withdrawn (ADR-011). (`docs/ARCHITECTURE.md` ADR-011)
 - 2026-08-16 — `bc-xid` 0.23 does not enforce `Elect` on `add_key`/`remove_key`, and
   `XIDVerifySignature::Inception` accepts any rewrite signed by the inception
   private key. A C2 privilege split is decorative unless we (a) authorize key-graph

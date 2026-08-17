@@ -578,11 +578,12 @@ re-discover those cases as bugs.
   uncommitted — and starting late is safe only if the key is *not already compromised*, since a
   breached current key can commit the attacker's own successor. Committing from inception is
   meaningfully better, but it is not a one-way door.
-- **The C2→C3 migration must verify the committed digest against the user's own key.** The
-  migration rotation is authorised by our key, so a breached IdentiKey could otherwise commit a
-  successor it controls. The user's device must check that the published digest matches the key
-  it generated locally, or the migration hands the identity over at the moment it is supposed to
-  hand it back.
+- **The C2→C3 migration must verify the committed digest against the user's own key** when
+  a successor was committed. ⚠️ ADR-008's first draft said the migration rotation is
+  "authorised by our key." **ADR-011 corrects that.** After ADR-010, the user holds `Elect`
+  at C2; we cannot authorize a key-graph change. The remaining attack is a *client* that
+  accepts a successor we suggested. The user's device still checks a published digest
+  against the key it generated locally (`identikey-core-4qd`).
 - If `bc-xid` does not implement pre-rotation, carry the commitment as an **extension assertion**
   on the XID document rather than forking the crate (`identikey-core-zan.5`).
 - Losing the pre-committed successor is a way to lose *rotatability* while still holding a valid
@@ -835,6 +836,115 @@ that puts `All` back on our key.
 2. `authorize_elect` rejects our `Sign` key. A test covers the reject path.
 3. Promotion Transfers inception and takes inception private by value so the happy path cannot
    keep it by accident.
+
+---
+
+## ADR-011: C2→C3 hands over the document, not our key ✅ Decided 2026-08-16
+
+**Context.** Invariant I3 requires a self-service exit: same `sub`, stop paying, no permission.
+`identikey-core-zan.2` originally said "the managed key is handed to the user, the server's copy
+is destroyed." ADR-007 added that resolution must move too — N≥2 at C3+, at least one resolver
+not operated by us — or we keep the freshness lever and the climb is a half-migration.
+
+ADR-010 then changed the authorisation story. At C2 the user holds `Elect` + `Transfer`; we
+hold `Sign` + `Auth`. `authorize_elect` rejects our Sign key. The 4qd / ADR-008 line that
+"the migration rotation is authorised by our key" is therefore false, and exporting our Sign
+private to the user would hand them a key that has been in our custody — a contaminated C3.
+
+**Decision.**
+
+1. **We do not export `managed_key_blob`.** The user signs at C3 with a key they generated
+   locally, which we have never held. I3 is identity + data + connectivity, not "leave with
+   the operational key we used to sign for you." Exporting our Sign private is a contaminated
+   C3 — the withdrawn zan.2 sentence.
+
+2. **`migrate_c2_to_c3` is the only climb path.** It is one transaction and one `UPDATE`
+   that writes the new document, sets `managed_key_blob` NULL, and sets `rung = c3`
+   (Postgres CHECKs are per-statement). It also writes `custody_events` and `consent_log`.
+   **`apply_document_update` is not a climb path.** It MUST refuse a new document that is
+   not valid for the stored rung (a C2 row's new document must still satisfy `is_c2`).
+   Privilege-shape change that drops our Sign key only goes through `migrate_c2_to_c3`.
+   Today's public `apply_document_update` can already persist a C3-shaped document and
+   leave the blob — that is a defect the implementation node closes, not an acceptable
+   interim.
+
+3. **The user authorizes with Elect *private*, not Elect public.** `authorize_elect` as
+   written matches public keys. The XID document is public, so naming the Elect public
+   key is not authorization. `migrate_c2_to_c3` verifies a signature over the new document
+   bytes by a key that holds `Elect` on the *stored* previous document. This retires
+   ADR-008's "authorised by our key."
+
+4. **Stored state must already be C2.** Fail closed unless `rung = c2` and `is_c2(stored)`.
+   C1 `All` would pass a naive Elect check because `All` implies Elect — that is our key,
+   not an exit.
+
+5. **The C3 document (acceptance, not a new `is_c3` predicate).**
+   - Same XID as the C2 row (I1).
+   - **Keys we hold:** every Sign+Auth key on the stored C2 document (there is no
+     operational-public column; the blob is opaque). None of those publics may retain
+     Sign, Elect, All, Transfer, Verify, Update, Delegate, Burn, or Revoke on the new
+     document.
+   - **User capability:** some key we do not hold can Sign, and some key we do not hold
+     can Elect (same key or a hot/cold split — ADR-008's good C3). Some user key keeps
+     `Update` so later resolver relocation is possible. Do **not** require Sign and Elect
+     on one key; do **not** infer C3 vs C4 from privileges. The rung column is the rung.
+   - **Resolution:** N≥2 *distinct hosts*. At least one host's eTLD+1 is outside the
+     operator-host allowlist (`identikey.me`, `identikey.io` — all subdomains). Hostless
+     URIs (`btcr:…`) do not count as "not us." Do not CNAME-follow. Refuse localhost /
+     RFC1918. We cannot prove a third-party URI is honest; we only refuse to be the
+     entire set.
+   - **Provenance:** if C2 had no mark, C3 must start one. The **client** creates the
+     genesis mark and holds the generator. The server refuses a C3 document with no mark
+     when C2 had none, and refuses a submitted document that carries generator material
+     (plaintext or encrypted). We must not hold a generator that would win every future
+     threshold read.
+
+6. **`successor_digest`, when present.** v1 does not turn pre-rotation on (ADR-008). If
+   the column is set, the user's device checks it against the key it generated before
+   submit (`identikey-core-4qd`). The server stores the public document; it does not
+   re-derive the digest.
+
+7. **Consent.** `action = c2_to_c3`. `result = signed` means "authorized instruction
+   completed," not "we produced a signature." Proof is A3 or A4 only (not A0/A1/A2).
+   Insert consent first, then the event with `consent_id`.
+
+8. **Resolver relocation is this ceremony, the first time.** Later relocation is an
+   Elect-gated document write that does **not** change privilege shape, blob, or rung
+   (`identikey-core-cmd`).
+
+9. **C3→C2 is not this ceremony.** I4, later, fail closed if invoked here.
+
+**Rationale.** Handing them our Sign key would make C3 "self-custody of a key we used to
+hold." Generating a fresh user Sign key and dropping ours makes C3 a key we have never
+been able to use. Relocating resolution at the same moment is what makes the climb satisfy
+the exit test rather than a change of who can *sign* while we still decide what the world
+believes is current. A general document-write that can drop our Sign without destroying
+the blob would make the ceremony optional — so that write is refused.
+
+**Consequences.**
+
+- The original zan.2 sentence "managed key handed to the user" is withdrawn. Destroy, do
+  not export.
+- A C3 identity may still have an account row here (OIDC convenience, recovery
+  subscription). That is not custody. `managed_key_blob` is the custody bit. "Stop paying"
+  here means stop paying for custody, not account deletion (salt / consent export is
+  ADR-009 / I3 data, a different path).
+- Our convenience resolver (`identikey-core-998`) may remain one of the N. It must not be
+  the only one.
+- Implementation (`nod-c2-c3-exit`) closes the `apply_document_update` hole and adds
+  `migrate_c2_to_c3` using the private `apply_document_update_tx` hook (or equivalent)
+  inside one transaction. This ADR does not write those functions.
+- Do not add an `is_c3` that means "one key has Sign+Elect." That rejects ADR-008's
+  hot/cold C3, cannot tell C3 from C4, and fights `is_c2`.
+
+**Actions this decision commits us to:**
+
+1. Implement `migrate_c2_to_c3` and close `apply_document_update` against privilege-shape
+   escape, in the implementation node — not here.
+2. Fail closed on the cases in design.md (not-C2, XID change, our key as signer, no Elect
+   signature, our publics still privileged, user cannot Sign or Elect or Update, resolution
+   only-ours / hostless-as-not-us, missing provenance / generator present, A0/A1/A2 proof).
+3. Record the climb on `consent_log` as above.
 
 ---
 

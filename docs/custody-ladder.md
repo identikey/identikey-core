@@ -149,8 +149,10 @@ mechanism recover a C3 key is a release blocker.
 > permission?
 
 At C2 this means an explicit, documented, self-service **custody migration ceremony**: the
-managed key is handed to the user, the server's copy is destroyed, and the account continues
-to work at C3 with the *same* `sub`. If that ceremony does not exist, C2 is rent, not a service.
+server's Sign material is destroyed (not exported), the user signs with a key we have never
+held, resolution moves to N≥2 with one resolver that is not us, and the account continues
+at C3 with the *same* `sub`. See `docs/ARCHITECTURE.md` ADR-011. If that ceremony does not
+exist, C2 is rent, not a service.
 
 **Build the C2 → C3 migration before, or at the same time as, C2 itself.** A managed-custody
 product without an exit is the exact thing this project exists to oppose, and it is much
