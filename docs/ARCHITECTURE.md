@@ -33,8 +33,8 @@ identikey-core/  (here)      AGPL-3.0-or-later + commercial
 **Scaffolded 2026-08-07.** The four crates exist, build, and pass `clippy -D warnings`
 and `cargo deny check`. `identikey-keys` owns the Postgres schema (`zan.1`) and a
 durable `KeysStore` (`add-keys-store`, 2026-08-16): boot requires `DATABASE_URL`,
-migrates, and refuses an Elect-denied document write. C2→C3 is specified
-(ADR-011) and not yet implemented. `web/` is *not* yet in place — the SvelteKit
+migrates, and refuses an Elect-denied document write. C2→C3 is
+`migrate_c2_to_c3` (ADR-011, folded `add-c2-c3-exit`). `web/` is *not* yet in place — the SvelteKit
 app is still at the repository root, frozen at tag `pre-rust-pivot`. Relocating
 it is `identikey-core-ccf.11`.
 
