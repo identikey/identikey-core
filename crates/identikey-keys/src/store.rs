@@ -5,6 +5,7 @@ use bc_xid::XIDDocument;
 use dcbor::prelude::*;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres, Transaction};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::MIGRATOR;
@@ -53,6 +54,13 @@ pub struct StoredCustody {
 #[derive(Debug, Clone)]
 pub struct StoredAccount {
     pub xid: Xid,
+}
+
+/// Bytes we will serve as a convenience resolver. No key material.
+#[derive(Debug, Clone)]
+pub struct PublishedDocument {
+    pub bytes: Vec<u8>,
+    pub updated_at: OffsetDateTime,
 }
 
 pub struct ConsentAppend<'a> {
@@ -183,6 +191,26 @@ impl KeysStore {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|rec| rec.xid_document))
+    }
+
+    /// Document bytes for the well-known resolver. Missing or disabled → `None`.
+    pub async fn published_document(
+        &self,
+        xid: Xid,
+    ) -> Result<Option<PublishedDocument>, StoreError> {
+        let row = sqlx::query!(
+            "SELECT c.xid_document, c.updated_at
+             FROM custody_records c
+             JOIN accounts a ON a.xid = c.xid
+             WHERE c.xid = $1 AND a.disabled_at IS NULL",
+            xid.as_bytes().as_slice()
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|rec| PublishedDocument {
+            bytes: rec.xid_document,
+            updated_at: rec.updated_at,
+        }))
     }
 
     /// Persist a new XID document only if `signer` holds Elect on the stored one.

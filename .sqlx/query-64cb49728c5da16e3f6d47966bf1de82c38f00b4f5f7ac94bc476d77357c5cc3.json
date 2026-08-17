@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.xid_document, c.updated_at\n             FROM custody_records c\n             JOIN accounts a ON a.xid = c.xid\n             WHERE c.xid = $1 AND a.disabled_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "xid_document",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "custody_records",
+            "name": "xid_document"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "custody_records",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "64cb49728c5da16e3f6d47966bf1de82c38f00b4f5f7ac94bc476d77357c5cc3"
+}

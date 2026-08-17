@@ -75,6 +75,7 @@
 pub mod ceremony;
 pub mod consent;
 pub mod privilege;
+pub mod resolve;
 pub mod rung;
 pub mod store;
 pub mod xid;
@@ -87,8 +88,11 @@ pub use privilege::{
     IDENTIKEY_C2_PRIVILEGES, PrivilegeError, USER_C2_PRIVILEGES, authorize_elect, c1, c2_native,
     is_c2, key_allows, promote_c1_to_c2,
 };
+pub use resolve::{FetchedDocument, ResolutionTier, ResolveError, WinningDoc, resolve_documents};
 pub use rung::{AccessLevel, CustodyRung, ParseRungError};
-pub use store::{ConsentAppend, KeysStore, StoreError, StoredAccount, StoredCustody};
+pub use store::{
+    ConsentAppend, KeysStore, PublishedDocument, StoreError, StoredAccount, StoredCustody,
+};
 pub use xid::{Xid, XidError};
 
 /// sqlx migrator for the schema in `migrations/`.

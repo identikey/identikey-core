@@ -46,6 +46,22 @@ impl Xid {
     pub fn as_bytes(&self) -> &[u8; Self::LEN] {
         &self.0
     }
+
+    /// Parse 64 lowercase hex characters. Any other shape is [`XidError::InvalidHex`].
+    pub fn from_hex(hex: &str) -> Result<Self, XidError> {
+        if hex.len() != Self::LEN * 2
+            || !hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(XidError::InvalidHex);
+        }
+        let mut bytes = [0u8; Self::LEN];
+        for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+            let slot = bytes.get_mut(i).ok_or(XidError::InvalidHex)?;
+            let text = std::str::from_utf8(chunk).map_err(|_| XidError::InvalidHex)?;
+            *slot = u8::from_str_radix(text, 16).map_err(|_| XidError::InvalidHex)?;
+        }
+        Ok(Self(bytes))
+    }
 }
 
 impl From<bc_components::XID> for Xid {
@@ -73,6 +89,8 @@ impl fmt::Display for Xid {
 pub enum XidError {
     #[error("XID must be {} bytes, got {got}", Xid::LEN)]
     InvalidLength { got: usize },
+    #[error("XID hex must be 64 lowercase characters")]
+    InvalidHex,
 }
 
 #[cfg(test)]
@@ -103,5 +121,20 @@ mod tests {
     fn display_is_hex() {
         let xid = Xid::from_bytes([0xab; 32]);
         assert_eq!(xid.to_string(), "ab".repeat(32));
+    }
+
+    #[test]
+    fn from_hex_round_trips() {
+        let xid = Xid::from_bytes([0xab; 32]);
+        assert_eq!(Xid::from_hex(&xid.to_string()).unwrap(), xid);
+    }
+
+    #[test]
+    fn from_hex_rejects_uppercase_and_short() {
+        assert!(matches!(
+            Xid::from_hex(&"AB".repeat(32)),
+            Err(XidError::InvalidHex)
+        ));
+        assert!(matches!(Xid::from_hex("dead"), Err(XidError::InvalidHex)));
     }
 }

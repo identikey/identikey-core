@@ -1,10 +1,10 @@
 # Tasks
 
-- [ ] `GET /.well-known/xid/{xid}` on `identikey-server` returns stored document bytes
-- [ ] 404 for unknown or malformed XID; `/health` unchanged
-- [ ] `Cache-Control: max-age=60, must-revalidate` and body SHA-256 ETag
-- [ ] After a document write, a subsequent GET (or revalidate) returns the new bytes
-- [ ] Tests against the existing `KeysStore` + axum router
+- [x] `GET /.well-known/xid/{xid}` on `identikey-server` returns stored document bytes
+- [x] 404 for unknown or malformed XID; `/health` unchanged
+- [x] `Cache-Control: max-age=60, must-revalidate` and body SHA-256 ETag
+- [x] After a document write, a subsequent GET (or revalidate) returns the new bytes
+- [x] Tests against the existing `KeysStore` + axum router
 
 Not owed here (bullets, not boxes):
 

@@ -1474,10 +1474,13 @@ name = "identikey-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bc-components",
+ "bc-xid",
  "identikey-keys",
  "identikey-oidc",
  "identikey-recovery",
  "serde",
+ "sha2 0.10.9",
  "sqlx",
  "thiserror 2.0.19",
  "tokio",
