@@ -1,8 +1,9 @@
 # managed-custody
 
 Living truth for the user store and managed custody in `identikey-keys`.
-Folded from `add-keys-store`, `add-c2-c3-exit`, and
-`add-resolver-relocation` on 2026-08-16.
+Folded from `add-keys-store`, `add-c2-c3-exit`,
+`add-resolver-relocation` (2026-08-16), and `add-device-records`
+(2026-08-17).
 
 ### Requirement: Durable managed-custody store
 
@@ -139,3 +140,24 @@ document that is not `is_c2`.
 - WHEN `apply_document_update` is called with a document that is not
   `is_c2`
 - THEN the call fails and the blob and rung are unchanged
+
+### Requirement: Devices are listable, revocable credentials
+
+The system SHALL treat a `credentials` row as the device record. It
+SHALL list non-revoked credentials for a XID and SHALL revoke a
+credential by setting `revoked_at`. A revoked credential SHALL NOT
+appear in a subsequent list. The list type SHALL NOT include
+`device_trust`, `is_master`, or a master/temporary enum.
+
+#### Scenario: Register then list
+
+- GIVEN a stored account
+- WHEN a passkey credential is inserted and `list_devices` is called
+- THEN the list contains that credential id and not a trust claim
+
+#### Scenario: Revoke hides the device
+
+- GIVEN a listed credential C
+- WHEN `revoke_device` is called for C and `list_devices` is called
+  again
+- THEN C is absent from the list
