@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE credentials\n             SET revoked_at = COALESCE(revoked_at, now())\n             WHERE id = $1 AND xid = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2f5b34dc99b609d3043f367660054c6602cada7d705c2c60cd5cb12b8fc3cb5e"
+}

@@ -63,6 +63,16 @@ pub struct PublishedDocument {
     pub updated_at: OffsetDateTime,
 }
 
+/// A credential listed as a device. No public keys, no trust flags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceRecord {
+    pub id: Uuid,
+    pub kind: String,
+    pub nickname: Option<String>,
+    pub created_at: OffsetDateTime,
+    pub last_used_at: Option<OffsetDateTime>,
+}
+
 pub struct ConsentAppend<'a> {
     pub xid: Xid,
     pub action: &'a str,
@@ -330,6 +340,48 @@ impl KeysStore {
         .fetch_one(&self.pool)
         .await?;
         Ok(rec.id)
+    }
+
+    /// Non-revoked credentials for this XID. Ids + kind + nickname + timestamps only.
+    pub async fn list_devices(&self, xid: Xid) -> Result<Vec<DeviceRecord>, StoreError> {
+        let rows = sqlx::query!(
+            "SELECT id, kind, nickname, created_at, last_used_at
+             FROM credentials
+             WHERE xid = $1 AND revoked_at IS NULL
+             ORDER BY created_at ASC",
+            xid.as_bytes().as_slice()
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|rec| DeviceRecord {
+                id: rec.id,
+                kind: rec.kind,
+                nickname: rec.nickname,
+                created_at: rec.created_at,
+                last_used_at: rec.last_used_at,
+            })
+            .collect())
+    }
+
+    /// Soft-revoke a credential. Idempotent if `revoked_at` is already set.
+    ///
+    /// Missing id or a different XID is [`StoreError::NotFound`].
+    pub async fn revoke_device(&self, xid: Xid, credential_id: Uuid) -> Result<(), StoreError> {
+        let result = sqlx::query!(
+            "UPDATE credentials
+             SET revoked_at = COALESCE(revoked_at, now())
+             WHERE id = $1 AND xid = $2",
+            credential_id,
+            xid.as_bytes().as_slice()
+        )
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::NotFound);
+        }
+        Ok(())
     }
 
     pub async fn append_consent(&self, entry: ConsentAppend<'_>) -> Result<Uuid, StoreError> {
@@ -757,6 +809,42 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(id, Uuid::nil());
+    }
+
+    #[sqlx::test]
+    async fn insert_list_revoke_devices(pool: PgPool) {
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &blob())
+            .await
+            .unwrap();
+
+        assert!(store.list_devices(xid).await.unwrap().is_empty());
+
+        let cred = store
+            .insert_passkey(xid, &[0xAAu8], &[0xBBu8], 0)
+            .await
+            .unwrap();
+        let listed = store.list_devices(xid).await.unwrap();
+        let device = listed.first().expect("registered credential is listed");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(device.id, cred);
+        assert_eq!(device.kind, "passkey");
+        assert_eq!(device.nickname, None);
+        assert!(device.last_used_at.is_none());
+
+        store.revoke_device(xid, cred).await.unwrap();
+        store.revoke_device(xid, cred).await.unwrap();
+        assert!(store.list_devices(xid).await.unwrap().is_empty());
+
+        let missing = store.revoke_device(xid, Uuid::nil()).await.unwrap_err();
+        assert!(
+            matches!(missing, StoreError::NotFound),
+            "unexpected error: {missing}"
+        );
     }
 
     async fn climb_to_c3(

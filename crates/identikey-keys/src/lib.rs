@@ -53,9 +53,9 @@
 //! We take the hash-chain *pattern* from `identikey-storage-auth` and do not
 //! depend on that crate (AGPL + recrypt; LEARNINGS 2026-07-28).
 //!
-//! Privilege assignments live in the XID document, not in extra columns. Device
-//! records (`zan.8`), OIDC tokens (`ccf.*`), and guardian tables (`vt4`) are
-//! later migrations.
+//! Privilege assignments live in the XID document, not in extra columns.
+//! Devices are `credentials` rows (`add-device-records`). OIDC tokens (`ccf.*`)
+//! and guardian tables (`vt4`) are later migrations.
 //!
 //! # Privilege split (`identikey-core-av9`, ADR-010)
 //!
@@ -91,7 +91,8 @@ pub use privilege::{
 pub use resolve::{FetchedDocument, ResolutionTier, ResolveError, WinningDoc, resolve_documents};
 pub use rung::{AccessLevel, CustodyRung, ParseRungError};
 pub use store::{
-    ConsentAppend, KeysStore, PublishedDocument, StoreError, StoredAccount, StoredCustody,
+    ConsentAppend, DeviceRecord, KeysStore, PublishedDocument, StoreError, StoredAccount,
+    StoredCustody,
 };
 pub use xid::{Xid, XidError};
 
