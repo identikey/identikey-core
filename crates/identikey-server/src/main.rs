@@ -25,6 +25,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Router, routing::get};
 use identikey_keys::{KeysStore, Xid};
+use identikey_oidc::PairwiseSalt;
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -158,6 +159,14 @@ async fn main() -> Result<(), BoxError> {
     let store = KeysStore::connect(&url).await?;
     store.migrate().await?;
     tracing::info!("database migrated");
+
+    let data_dir = std::env::var("IDENTIKEY_DATA_DIR").unwrap_or_else(|_| ".".into());
+    // Load only. Never log the value — Debug redacts, and we do not print hex.
+    let _salt = PairwiseSalt::load(
+        std::env::var("IDENTIKEY_PAIRWISE_SALT").ok().as_deref(),
+        std::path::Path::new(&data_dir),
+    )?;
+    tracing::info!("pairwise salt ready");
 
     let addr = bind_addr()?;
     let listener = TcpListener::bind(addr).await?;

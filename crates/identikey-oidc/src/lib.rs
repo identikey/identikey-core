@@ -23,9 +23,9 @@
 //! account-recovery path reach key authority — the merge that invariant I2 makes
 //! a release blocker.
 //!
-//! # Not implemented yet
-//!
-//! Nothing here is built. See `identikey-core-ccf` for the epic, and
-//! `docs/ARCHITECTURE.md` ADR-005/006/009 for the decisions this crate implements.
-//! In particular `sub` must be computed through a single seam (`identikey-core-duw`),
-//! pairwise by default, never inlined at token construction.
+//! Pairwise salt is loaded at boot (`PairwiseSalt`). `sub` is still a single
+//! seam to be added (`identikey-core-duw`). See `docs/oidc-implementation-checklist.md`.
+
+pub mod salt;
+
+pub use salt::{PairwiseSalt, SaltError};

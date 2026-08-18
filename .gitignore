@@ -20,6 +20,9 @@ node_modules
 .DS_Store
 Thumbs.db
 
+# Pairwise salt (ADR-009). Generated at first boot; never commit.
+/pairwise.salt
+
 # Env
 .env
 .env.*
