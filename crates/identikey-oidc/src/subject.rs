@@ -23,6 +23,7 @@ pub struct Client {
     pub id: String,
     pub subject_type: SubjectType,
     pub sector_identifier: String,
+    pub redirect_uris: Vec<String>,
 }
 
 impl Client {
@@ -32,7 +33,14 @@ impl Client {
             id: id.into(),
             subject_type: SubjectType::Pairwise,
             sector_identifier: sector_identifier.into(),
+            redirect_uris: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_redirect(mut self, uri: impl Into<String>) -> Self {
+        self.redirect_uris.push(uri.into());
+        self
     }
 }
 

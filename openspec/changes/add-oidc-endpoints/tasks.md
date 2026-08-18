@@ -1,10 +1,10 @@
 # Tasks
 
-- [ ] Discovery + JWKS serve on `identikey-server`
-- [ ] `/authorize` requires PKCE S256 and exact redirect; refuses implicit and ROPC
-- [ ] `/token` exchanges a one-time code; PKCE downgrade refused
-- [ ] `/userinfo` `/introspect` `/revoke` exist
-- [ ] Tests: discovery shape, PKCE required, code replay rejected
+- [x] Discovery + JWKS serve on `identikey-server`
+- [x] `/authorize` requires PKCE S256 and exact redirect; refuses implicit and ROPC
+- [x] `/token` exchanges a one-time code; PKCE downgrade refused
+- [x] `/userinfo` `/introspect` `/revoke` exist
+- [x] Tests: discovery shape, PKCE required, code replay rejected
 
 Not owed here (bullets, not boxes):
 

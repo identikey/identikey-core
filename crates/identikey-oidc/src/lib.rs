@@ -9,11 +9,12 @@
 //!
 //! # Two boundaries this crate must not cross
 //!
-//! **It never holds a private key.** Token minting is a projection of an identity
-//! this crate does not own. Key custody lives in [`identikey_keys`]; a C4
-//! sole-custody user has a `sub` here that no key in this process could ever
-//! produce a signature for. If key material appears in this crate, the custody
-//! ladder has collapsed.
+//! **It never holds a *user* private key.** The OP signing key (EdDSA) lives
+//! here so we can mint ID tokens; it is not a custody key. Token minting is a
+//! projection of an identity this crate does not own. Key custody lives in
+//! [`identikey_keys`]; a C4 sole-custody user has a `sub` here that no key in
+//! this process could ever produce a signature for. If a *user* private key
+//! appears in this crate, the custody ladder has collapsed.
 //!
 //! **The URN grant accepts only an `identikey-auth` `Response` — never a WebAuthn
 //! assertion** (ADR-005). A WebAuthn assertion proves "I hold a passkey registered
@@ -23,11 +24,22 @@
 //! account-recovery path reach key authority — the merge that invariant I2 makes
 //! a release blocker.
 //!
-//! Pairwise salt is loaded at boot (`PairwiseSalt`). `sub` is still a single
-//! seam to be added (`identikey-core-duw`). See `docs/oidc-implementation-checklist.md`.
+//! Pairwise salt is loaded at boot (`PairwiseSalt`). Every token `sub` goes
+//! through [`subject`]. See `docs/oidc-implementation-checklist.md`.
 
+pub mod discovery;
+pub mod error;
+pub mod provider;
 pub mod salt;
+pub mod signing;
 pub mod subject;
 
+pub use discovery::DiscoveryDocument;
+pub use error::{AuthorizeError, OidcError};
+pub use provider::{
+    AuthorizeQuery, Introspection, PendingAuthorization, Provider, TokenRequest, TokenResponse,
+    UserInfo, s256_challenge,
+};
 pub use salt::{PairwiseSalt, SaltError};
+pub use signing::{SigningError, SigningKey};
 pub use subject::{Client, SubjectError, SubjectType, subject};

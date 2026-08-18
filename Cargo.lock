@@ -1484,6 +1484,7 @@ dependencies = [
  "identikey-oidc",
  "identikey-recovery",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
  "sqlx",
  "thiserror 2.0.19",
@@ -1492,6 +1493,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
