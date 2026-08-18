@@ -6,6 +6,10 @@ See morphist-tools `CONVENTIONS.md`.
 
 ---
 
+- 2026-08-18 — The OpenID Foundation conformance suite (gitlab.com/openid/conformance-suite
+  `LICENSE.txt`) is MIT. GitHub’s “unclassified” badge on mirrors is why
+  `identikey-core-ccf.3` existed. Safe as a Docker CI runner; not a Cargo
+  dependency; official certification is a separate paid program.
 - 2026-07-28 — `identikey-auth` is `MIT OR Apache-2.0` with zero recrypt deps, but
   `identikey-storage-auth` is `AGPL-3.0-or-later` and depends on `recrypt-core`/`recrypt-wire`.
   They must not share a workspace or the commercial product inherits AGPL entanglement.
