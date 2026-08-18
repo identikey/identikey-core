@@ -37,6 +37,11 @@ migrates, and refuses an Elect-denied document write. C2→C3 is
 `migrate_c2_to_c3` (ADR-011, folded `add-c2-c3-exit`). Devices are
 `credentials` rows (`add-device-records`, 2026-08-17): `list_devices` /
 `revoke_device`, no `devices` table, no `device_trust` / `is_master`.
+`identikey-oidc` is a code+PKCE OP (folded 2026-08-18): pairwise salt at
+boot, one `sub()` seam (HKDF-SHA-256), discovery/JWKS/authorize/token,
+hashed rotating refresh, and export of the salt. Login at `/authorize`
+is flag-gated (`IDENTIKEY_DEV_LOGIN=1`); production passkeys are
+`5gh.1`. OIDF Basic OP + Config OP CI is still `add-oidf-conformance`.
 `web/` is *not* yet in place — the SvelteKit
 app is still at the repository root, frozen at tag `pre-rust-pivot`. Relocating
 it is `identikey-core-ccf.11`.
@@ -762,8 +767,15 @@ surface is not this ADR's threat model — that is what the URN grant and disclo
 4. **Test the export path**, since export — not cryptography — is the failure mode that would
    make this fail the exit test.
 
-**Open.** The exact KDF. Whether disclosed mode is per-RP only, or also available as a standing
+**Open.** Whether disclosed mode is per-RP only, or also available as a standing
 "always disclose to capability-aware RPs" preference.
+
+**Amended 2026-08-18.** The KDF is **HKDF-SHA-256** (RFC 5869), pinned in
+`docs/oidc-implementation-checklist.md` and implemented by `subject()`
+(`add-sub-seam`). IKM is the pairwise salt, salt is the sector identifier,
+info is `identikey-oidc-sub-v1` ‖ 0x00 ‖ xid_bytes, L = 32, output is
+unpadded base64url. Actions 1–4 of this ADR landed with `add-pairwise-salt`,
+`add-sub-seam`, and `add-pairwise-export`.
 
 ---
 
