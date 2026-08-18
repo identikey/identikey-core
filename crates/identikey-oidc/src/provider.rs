@@ -52,6 +52,7 @@ pub struct TokenRequest {
     pub redirect_uri: Option<String>,
     pub client_id: Option<String>,
     pub code_verifier: Option<String>,
+    pub refresh_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,6 +98,12 @@ struct AccessGrant {
     expires_at: Instant,
 }
 
+struct RefreshGrant {
+    client_id: String,
+    xid: Xid,
+    sub: String,
+}
+
 pub struct Provider {
     issuer: String,
     signing: SigningKey,
@@ -104,6 +111,8 @@ pub struct Provider {
     clients: Mutex<HashMap<String, Client>>,
     codes: Mutex<HashMap<String, AuthCode>>,
     access: Mutex<HashMap<String, AccessGrant>>,
+    /// SHA-256 of the refresh token → grant. The raw token is never stored.
+    refresh: Mutex<HashMap<[u8; 32], RefreshGrant>>,
 }
 
 impl std::fmt::Debug for Provider {
@@ -126,6 +135,7 @@ impl Provider {
             clients: Mutex::new(HashMap::new()),
             codes: Mutex::new(HashMap::new()),
             access: Mutex::new(HashMap::new()),
+            refresh: Mutex::new(HashMap::new()),
         }
     }
 
@@ -277,9 +287,7 @@ impl Provider {
             Some("password") => Err(OidcError::unsupported_grant_type(
                 "resource owner password is refused",
             )),
-            Some("refresh_token") => Err(OidcError::unsupported_grant_type(
-                "refresh rotation is add-refresh-lifecycle",
-            )),
+            Some("refresh_token") => self.exchange_refresh(req),
             _ => Err(OidcError::invalid_request("grant_type is required")),
         }
     }
@@ -293,7 +301,15 @@ impl Provider {
 
     #[must_use]
     pub fn introspect(&self, token: &str) -> Introspection {
-        match self.lookup_access(token) {
+        if let Ok(Some(grant)) = self.lookup_access(token) {
+            return Introspection {
+                active: true,
+                sub: Some(grant.sub),
+                client_id: Some(grant.client_id),
+                token_type: Some("Bearer"),
+            };
+        }
+        match self.lookup_refresh(token) {
             Ok(Some(grant)) => Introspection {
                 active: true,
                 sub: Some(grant.sub),
@@ -311,7 +327,12 @@ impl Provider {
 
     pub fn revoke(&self, token: &str) -> Result<(), OidcError> {
         let mut access = lock(&self.access)?;
-        access.remove(token);
+        if access.remove(token).is_some() {
+            return Ok(());
+        }
+        drop(access);
+        let mut refresh = lock(&self.refresh)?;
+        refresh.remove(&hash_token(token));
         Ok(())
     }
 
@@ -373,47 +394,110 @@ impl Provider {
             }
         }
 
+        let xid = entry.xid;
+        let nonce = entry.nonce.clone();
+        entry.used = true;
+        drop(codes);
+
+        let issued = self.mint_tokens(client_id, xid, nonce.as_deref())?;
+        {
+            let mut codes = lock(&self.codes)?;
+            if let Some(entry) = codes.get_mut(code) {
+                entry.issued_access = Some(issued.access_token.clone());
+            }
+        }
+        Ok(issued)
+    }
+
+    fn exchange_refresh(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
+        let presented = req
+            .refresh_token
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| OidcError::invalid_request("refresh_token is required"))?;
+        let mut refresh = lock(&self.refresh)?;
+        let grant = refresh
+            .remove(&hash_token(presented))
+            .ok_or_else(|| OidcError::invalid_grant("unknown or revoked refresh token"))?;
+        drop(refresh);
+        if let Some(client_id) = req.client_id.as_deref() {
+            if client_id != grant.client_id {
+                return Err(OidcError::invalid_grant(
+                    "refresh token belongs to another client",
+                ));
+            }
+        }
+        self.mint_tokens(&grant.client_id, grant.xid, None)
+    }
+
+    fn mint_tokens(
+        &self,
+        client_id: &str,
+        xid: Xid,
+        nonce: Option<&str>,
+    ) -> Result<TokenResponse, OidcError> {
         let client = self
             .client(client_id)
             .ok_or_else(|| OidcError::invalid_client("unknown client_id"))?;
-        let sub = subject(&self.salt, entry.xid, &client)
+        let sub = subject(&self.salt, xid, &client)
             .map_err(|e| OidcError::server_error(e.to_string()))?;
         let id_token = self
             .signing
-            .sign_id_token(
-                &self.issuer,
-                client_id,
-                &sub,
-                entry.nonce.as_deref(),
-                ACCESS_TTL_SECS,
-            )
+            .sign_id_token(&self.issuer, client_id, &sub, nonce, ACCESS_TTL_SECS)
             .map_err(|e| OidcError::server_error(e.to_string()))?;
         let access_token = random_token()?;
-        entry.used = true;
-        entry.issued_access = Some(access_token.clone());
-        drop(codes);
-
-        let mut access = lock(&self.access)?;
-        access.insert(
-            access_token.clone(),
-            AccessGrant {
-                sub,
-                client_id: client_id.to_owned(),
-                expires_at: Instant::now() + ACCESS_TTL,
-            },
-        );
-
+        let refresh_token = random_token()?;
+        {
+            let mut access = lock(&self.access)?;
+            access.insert(
+                access_token.clone(),
+                AccessGrant {
+                    sub: sub.clone(),
+                    client_id: client_id.to_owned(),
+                    expires_at: Instant::now() + ACCESS_TTL,
+                },
+            );
+        }
+        {
+            let mut refresh = lock(&self.refresh)?;
+            refresh.insert(
+                hash_token(&refresh_token),
+                RefreshGrant {
+                    client_id: client_id.to_owned(),
+                    xid,
+                    sub,
+                },
+            );
+        }
         Ok(TokenResponse {
             access_token,
             token_type: "Bearer",
             expires_in: ACCESS_TTL_SECS,
             id_token,
-            refresh_token: None,
+            refresh_token: Some(refresh_token),
         })
     }
 
     fn client(&self, id: &str) -> Option<Client> {
         self.clients.lock().ok()?.get(id).cloned()
+    }
+
+    #[cfg(test)]
+    fn refresh_is_hashed(&self, raw: &str) -> bool {
+        let Ok(map) = self.refresh.lock() else {
+            return false;
+        };
+        map.contains_key(&hash_token(raw))
+            && map.keys().all(|stored| stored.as_slice() != raw.as_bytes())
+    }
+
+    fn lookup_refresh(&self, token: &str) -> Result<Option<RefreshGrant>, OidcError> {
+        let refresh = lock(&self.refresh)?;
+        Ok(refresh.get(&hash_token(token)).map(|g| RefreshGrant {
+            client_id: g.client_id.clone(),
+            xid: g.xid,
+            sub: g.sub.clone(),
+        }))
     }
 
     fn lookup_access(&self, token: &str) -> Result<Option<AccessGrant>, OidcError> {
@@ -436,6 +520,10 @@ fn lock<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, OidcError> 
     mutex
         .lock()
         .map_err(|_| OidcError::server_error("lock poisoned"))
+}
+
+fn hash_token(token: &str) -> [u8; 32] {
+    Sha256::digest(token.as_bytes()).into()
 }
 
 fn random_token() -> Result<String, OidcError> {
@@ -598,6 +686,7 @@ mod tests {
             redirect_uri: Some(pending.redirect_uri.clone()),
             client_id: Some("smoke".into()),
             code_verifier: Some(VERIFIER.into()),
+            refresh_token: None,
         };
         let first = p.token(&req).unwrap();
         assert!(!first.access_token.is_empty());
@@ -619,6 +708,7 @@ mod tests {
                 redirect_uri: Some(pending.redirect_uri.clone()),
                 client_id: Some("smoke".into()),
                 code_verifier: None,
+                refresh_token: None,
             })
             .unwrap_err();
         assert_eq!(err.error, "invalid_request");
@@ -631,6 +721,7 @@ mod tests {
                 redirect_uri: Some(pending.redirect_uri),
                 client_id: Some("smoke".into()),
                 code_verifier: Some(VERIFIER.into()),
+                refresh_token: None,
             })
             .unwrap_err();
         assert_eq!(err.error, "invalid_grant");
@@ -646,5 +737,82 @@ mod tests {
         assert!(json.contains("\"code\""));
         assert!(json.contains("S256"));
         assert!(!json.contains("password"));
+    }
+
+    #[test]
+    fn refresh_rotates_and_stores_only_hash() {
+        let p = provider();
+        let pending = p.validate_authorize(&good_query()).unwrap();
+        let code = p.issue_code(&pending, xid()).unwrap();
+        let first = p
+            .token(&TokenRequest {
+                grant_type: Some("authorization_code".into()),
+                code: Some(code),
+                redirect_uri: Some(pending.redirect_uri),
+                client_id: Some("smoke".into()),
+                code_verifier: Some(VERIFIER.into()),
+                refresh_token: None,
+            })
+            .unwrap();
+        let t1 = first.refresh_token.clone().unwrap();
+        assert!(p.refresh_is_hashed(&t1));
+
+        let second = p
+            .token(&TokenRequest {
+                grant_type: Some("refresh_token".into()),
+                code: None,
+                redirect_uri: None,
+                client_id: Some("smoke".into()),
+                code_verifier: None,
+                refresh_token: Some(t1.clone()),
+            })
+            .unwrap();
+        let t2 = second.refresh_token.clone().unwrap();
+        assert_ne!(t1, t2);
+        assert!(p.refresh_is_hashed(&t2));
+
+        let replay = p
+            .token(&TokenRequest {
+                grant_type: Some("refresh_token".into()),
+                code: None,
+                redirect_uri: None,
+                client_id: Some("smoke".into()),
+                code_verifier: None,
+                refresh_token: Some(t1),
+            })
+            .unwrap_err();
+        assert_eq!(replay.error, "invalid_grant");
+    }
+
+    #[test]
+    fn revoked_refresh_is_inactive() {
+        let p = provider();
+        let pending = p.validate_authorize(&good_query()).unwrap();
+        let code = p.issue_code(&pending, xid()).unwrap();
+        let issued = p
+            .token(&TokenRequest {
+                grant_type: Some("authorization_code".into()),
+                code: Some(code),
+                redirect_uri: Some(pending.redirect_uri),
+                client_id: Some("smoke".into()),
+                code_verifier: Some(VERIFIER.into()),
+                refresh_token: None,
+            })
+            .unwrap();
+        let refresh = issued.refresh_token.unwrap();
+        assert!(p.introspect(&refresh).active);
+        p.revoke(&refresh).unwrap();
+        assert!(!p.introspect(&refresh).active);
+        let err = p
+            .token(&TokenRequest {
+                grant_type: Some("refresh_token".into()),
+                code: None,
+                redirect_uri: None,
+                client_id: Some("smoke".into()),
+                code_verifier: None,
+                refresh_token: Some(refresh),
+            })
+            .unwrap_err();
+        assert_eq!(err.error, "invalid_grant");
     }
 }

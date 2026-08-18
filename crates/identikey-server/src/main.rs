@@ -202,6 +202,7 @@ struct TokenForm {
     redirect_uri: Option<String>,
     client_id: Option<String>,
     code_verifier: Option<String>,
+    refresh_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -404,6 +405,7 @@ async fn token(State(state): State<AppState>, Form(form): Form<TokenForm>) -> Re
         redirect_uri: form.redirect_uri,
         client_id: form.client_id,
         code_verifier: form.code_verifier,
+        refresh_token: form.refresh_token,
     };
     match state.provider.token(&req) {
         Ok(issued) => Json(issued).into_response(),

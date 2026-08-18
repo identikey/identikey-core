@@ -1,9 +1,9 @@
 # Tasks
 
-- [ ] Only SHA-256 hashes of refresh tokens are stored
-- [ ] Refresh rotates; previous token is unusable
-- [ ] Revoked token rejected at `/token` and `/introspect`
-- [ ] Test: revoked token cannot be replayed
+- [x] Only SHA-256 hashes of refresh tokens are stored
+- [x] Refresh rotates; previous token is unusable
+- [x] Revoked token rejected at `/token` and `/introspect`
+- [x] Test: revoked token cannot be replayed
 
 Not owed here (bullets, not boxes):
 
