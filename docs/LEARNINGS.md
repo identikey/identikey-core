@@ -6,6 +6,10 @@ See morphist-tools `CONVENTIONS.md`.
 
 ---
 
+- 2026-08-18 — Advise send-back does not un-fold. First stop is classify
+  which assumption died: instrument-only → amend the in-flight change
+  (`/change` on that id); a folded SHALL is false → new change with
+  MODIFIED against `openspec/specs/`. Archives stay. (`openspec/changes/add-oidf-conformance/reviews/2026-08-18-advise.md`)
 - 2026-08-18 — The OpenID Foundation conformance suite (gitlab.com/openid/conformance-suite
   `LICENSE.txt`) is MIT. GitHub’s “unclassified” badge on mirrors is why
   `identikey-core-ccf.3` existed. Safe as a Docker CI runner; not a Cargo
