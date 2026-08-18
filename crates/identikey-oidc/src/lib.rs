@@ -27,5 +27,7 @@
 //! seam to be added (`identikey-core-duw`). See `docs/oidc-implementation-checklist.md`.
 
 pub mod salt;
+pub mod subject;
 
 pub use salt::{PairwiseSalt, SaltError};
+pub use subject::{Client, SubjectError, SubjectType, subject};
