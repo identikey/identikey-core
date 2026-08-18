@@ -1,8 +1,8 @@
 # Tasks
 
-- [ ] Export payload includes what a successor needs to recompute `sub`
-- [ ] Test: export + `sub()` reproduces previously issued pairwise values
-- [ ] Raw salt is not logged during export
+- [x] Export payload includes what a successor needs to recompute `sub`
+- [x] Test: export + `sub()` reproduces previously issued pairwise values
+- [x] Raw salt is not logged during export
 
 Not owed here (bullets, not boxes):
 

@@ -29,6 +29,7 @@
 
 pub mod discovery;
 pub mod error;
+pub mod export;
 pub mod provider;
 pub mod salt;
 pub mod signing;
@@ -36,6 +37,7 @@ pub mod subject;
 
 pub use discovery::DiscoveryDocument;
 pub use error::{AuthorizeError, OidcError};
+pub use export::PairwiseExport;
 pub use provider::{
     AuthorizeQuery, Introspection, PendingAuthorization, Provider, TokenRequest, TokenResponse,
     UserInfo, s256_challenge,
