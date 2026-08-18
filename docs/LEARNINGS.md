@@ -44,6 +44,9 @@ See morphist-tools `CONVENTIONS.md`.
   run` against it dies on `relation "challenges" already exists`. Use a clean DB
   (`identikey-core-sqlx`) for migrate / `cargo sqlx prepare`; `#[sqlx::test]` can
   still use the dirty DB as a maintenance connection. (`.sqlx/`, CLAUDE.md)
+- 2026-08-17 — `#[sqlx::test]` can fail setup with `databases_pkey` when a leftover
+  `_sqlx_test.databases` row names a db that still exists. Retry once; that is
+  infra, not a store bug. (`crates/identikey-keys` tests)
 - 2026-08-16 — C2 consent is a hash-chained Postgres log of *access-credential* proofs,
   not a reuse of `identikey-storage-auth` capability envelopes. Importing that crate
   would pull recrypt + AGPL into the product workspace. The chain *pattern* is the
