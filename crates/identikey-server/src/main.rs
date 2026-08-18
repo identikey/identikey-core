@@ -21,7 +21,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::{Form, Path, Query, State};
+use axum::extract::{Form, OriginalUri, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -42,6 +42,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 struct AppState {
     store: KeysStore,
     provider: Arc<Provider>,
+    dev_login: bool,
 }
 
 /// Liveness only. This must not grow into a readiness check that reports on the
@@ -51,8 +52,8 @@ async fn health() -> &'static str {
     "ok"
 }
 
-fn router(store: KeysStore, provider: Arc<Provider>) -> Router {
-    Router::new()
+fn router(store: KeysStore, provider: Arc<Provider>, dev_login: bool) -> Router {
+    let mut routes = Router::new()
         .route("/health", get(health))
         .route("/.well-known/xid/{xid}", get(xid_document))
         .route("/.well-known/openid-configuration", get(discovery))
@@ -61,8 +62,19 @@ fn router(store: KeysStore, provider: Arc<Provider>) -> Router {
         .route("/token", post(token))
         .route("/userinfo", get(userinfo).post(userinfo))
         .route("/introspect", post(introspect))
-        .route("/revoke", post(revoke))
-        .with_state(AppState { store, provider })
+        .route("/revoke", post(revoke));
+    if dev_login {
+        // The form lives only on this route, which is absent when the flag is off.
+        routes = routes.route(
+            "/authorize/dev",
+            get(dev_login_form).post(dev_login_complete),
+        );
+    }
+    routes.with_state(AppState {
+        store,
+        provider,
+        dev_login,
+    })
 }
 
 fn body_etag(bytes: &[u8]) -> String {
@@ -145,6 +157,45 @@ struct AuthorizeParams {
 }
 
 #[derive(Debug, Deserialize)]
+struct DevLoginParams {
+    response_type: Option<String>,
+    client_id: Option<String>,
+    redirect_uri: Option<String>,
+    code_challenge: Option<String>,
+    code_challenge_method: Option<String>,
+    state: Option<String>,
+    nonce: Option<String>,
+    scope: Option<String>,
+    xid: Option<String>,
+}
+
+fn authorize_query(params: &AuthorizeParams) -> AuthorizeQuery {
+    AuthorizeQuery {
+        response_type: params.response_type.clone(),
+        client_id: params.client_id.clone(),
+        redirect_uri: params.redirect_uri.clone(),
+        code_challenge: params.code_challenge.clone(),
+        code_challenge_method: params.code_challenge_method.clone(),
+        state: params.state.clone(),
+        nonce: params.nonce.clone(),
+        scope: params.scope.clone(),
+    }
+}
+
+fn dev_query(params: &DevLoginParams) -> AuthorizeQuery {
+    AuthorizeQuery {
+        response_type: params.response_type.clone(),
+        client_id: params.client_id.clone(),
+        redirect_uri: params.redirect_uri.clone(),
+        code_challenge: params.code_challenge.clone(),
+        code_challenge_method: params.code_challenge_method.clone(),
+        state: params.state.clone(),
+        nonce: params.nonce.clone(),
+        scope: params.scope.clone(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct TokenForm {
     grant_type: Option<String>,
     code: Option<String>,
@@ -175,22 +226,23 @@ async fn jwks(State(state): State<AppState>) -> Response {
 async fn authorize(
     State(state): State<AppState>,
     Query(params): Query<AuthorizeParams>,
+    OriginalUri(uri): OriginalUri,
 ) -> Response {
-    let query = AuthorizeQuery {
-        response_type: params.response_type,
-        client_id: params.client_id,
-        redirect_uri: params.redirect_uri,
-        code_challenge: params.code_challenge,
-        code_challenge_method: params.code_challenge_method,
-        state: params.state,
-        nonce: params.nonce,
-        scope: params.scope,
-    };
+    let query = authorize_query(&params);
     match state.provider.validate_authorize(&query) {
-        Ok(_) => {
-            // Login finish is add-dev-authorize. Valid request, no code.
-            (StatusCode::UNAUTHORIZED, "authentication required").into_response()
+        Ok(_) if state.dev_login => {
+            let suffix = uri.query().unwrap_or("");
+            let location = format!("/authorize/dev?{suffix}");
+            match HeaderValue::from_str(&location) {
+                Ok(value) => (StatusCode::FOUND, [(header::LOCATION, value)]).into_response(),
+                Err(_) => oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "could not redirect to the login form",
+                ),
+            }
         }
+        Ok(_) => (StatusCode::UNAUTHORIZED, "authentication required").into_response(),
         Err(AuthorizeError::Redirect {
             uri,
             error,
@@ -200,6 +252,148 @@ async fn authorize(
         Err(AuthorizeError::Deny { error, description }) => {
             oauth_error(StatusCode::BAD_REQUEST, error, &description)
         }
+    }
+}
+
+fn html_escape(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn hidden(name: &str, value: Option<&str>) -> String {
+    let Some(value) = value.filter(|s| !s.is_empty()) else {
+        return String::new();
+    };
+    format!(
+        "<input type=\"hidden\" name=\"{name}\" value=\"{}\" />\n",
+        html_escape(value)
+    )
+}
+
+async fn dev_login_form(
+    State(state): State<AppState>,
+    Query(params): Query<DevLoginParams>,
+) -> Response {
+    if params.xid.as_deref().is_some_and(|s| !s.is_empty()) {
+        return complete_dev_login(state, params).await;
+    }
+    let body = format!(
+        "<!doctype html><html><body>\
+         <form method=\"post\" action=\"/authorize/dev\">\
+         {}{}{}{}{}{}{}{}\
+         <label>XID <input name=\"xid\" required pattern=\"[0-9a-f]{{64}}\" /></label>\
+         <button type=\"submit\">Continue</button>\
+         </form></body></html>",
+        hidden("response_type", params.response_type.as_deref()),
+        hidden("client_id", params.client_id.as_deref()),
+        hidden("redirect_uri", params.redirect_uri.as_deref()),
+        hidden("code_challenge", params.code_challenge.as_deref()),
+        hidden(
+            "code_challenge_method",
+            params.code_challenge_method.as_deref(),
+        ),
+        hidden("state", params.state.as_deref()),
+        hidden("nonce", params.nonce.as_deref()),
+        hidden("scope", params.scope.as_deref()),
+    );
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
+async fn dev_login_complete(
+    State(state): State<AppState>,
+    Form(params): Form<DevLoginParams>,
+) -> Response {
+    complete_dev_login(state, params).await
+}
+
+async fn complete_dev_login(state: AppState, params: DevLoginParams) -> Response {
+    let query = dev_query(&params);
+    let pending = match state.provider.validate_authorize(&query) {
+        Ok(pending) => pending,
+        Err(AuthorizeError::Redirect {
+            uri,
+            error,
+            description,
+            state,
+        }) => return redirect_with_error(&uri, error, &description, state.as_deref()),
+        Err(AuthorizeError::Deny { error, description }) => {
+            return oauth_error(StatusCode::BAD_REQUEST, error, &description);
+        }
+    };
+    let Some(hex) = params.xid.as_deref().filter(|s| !s.is_empty()) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "xid is required",
+        );
+    };
+    let Ok(xid) = Xid::from_hex(hex) else {
+        return redirect_with_error(
+            &pending.redirect_uri,
+            "access_denied",
+            "unknown xid",
+            pending.state.as_deref(),
+        );
+    };
+    match state.store.get_account(xid).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return redirect_with_error(
+                &pending.redirect_uri,
+                "access_denied",
+                "unknown xid",
+                pending.state.as_deref(),
+            );
+        }
+        Err(_) => {
+            return oauth_error(StatusCode::BAD_REQUEST, "server_error", "store unavailable");
+        }
+    }
+    let code = match state.provider.issue_code(&pending, xid) {
+        Ok(code) => code,
+        Err(err) => return token_error(err),
+    };
+    redirect_with_code(&pending.redirect_uri, &code, pending.state.as_deref())
+}
+
+fn redirect_with_code(uri: &str, code: &str, state: Option<&str>) -> Response {
+    let Ok(mut parsed) = url::Url::parse(uri) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "redirect_uri is not a URI",
+        );
+    };
+    {
+        let mut pairs = parsed.query_pairs_mut();
+        pairs.append_pair("code", code);
+        if let Some(state) = state {
+            pairs.append_pair("state", state);
+        }
+    }
+    let location = parsed.to_string();
+    match HeaderValue::from_str(&location) {
+        Ok(value) => (StatusCode::FOUND, [(header::LOCATION, value)]).into_response(),
+        Err(_) => oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "redirect_uri produced an invalid Location",
+        ),
     }
 }
 
@@ -388,7 +582,8 @@ async fn main() -> Result<(), BoxError> {
     let listener = TcpListener::bind(addr).await?;
     tracing::info!(%addr, "identikey-server listening");
 
-    axum::serve(listener, router(store, Arc::new(provider)))
+    let dev_login = std::env::var("IDENTIKEY_DEV_LOGIN").ok().as_deref() == Some("1");
+    axum::serve(listener, router(store, Arc::new(provider), dev_login))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
@@ -414,7 +609,11 @@ mod tests {
     }
 
     fn test_router(store: KeysStore) -> Router {
-        router(store, test_provider())
+        router(store, test_provider(), false)
+    }
+
+    fn test_router_dev(store: KeysStore, provider: Arc<Provider>) -> Router {
+        router(store, provider, true)
     }
 
     #[test]
@@ -664,7 +863,7 @@ mod tests {
         let code = provider
             .issue_code(&pending, Xid::from_bytes([0x22; 32]))
             .unwrap();
-        let app = router(store, provider);
+        let app = router(store, provider, false);
         let form = format!(
             "grant_type=authorization_code&code={code}&redirect_uri=http://127.0.0.1:9999/cb&client_id=smoke&code_verifier={VERIFIER}"
         );
@@ -704,6 +903,145 @@ mod tests {
             .unwrap();
         let err: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
         assert_eq!(err["error"], "invalid_grant");
+    }
+
+    fn authorize_qs(challenge: &str) -> String {
+        format!(
+            "response_type=code&client_id=smoke&redirect_uri=http://127.0.0.1:9999/cb&code_challenge={challenge}&code_challenge_method=S256"
+        )
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn dev_login_issues_code_for_stored_xid(pool: sqlx::PgPool) {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use bc_components::PrivateKeyBase;
+        use identikey_keys::{CustodyRung, c2_native};
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &[0x51, 0x47])
+            .await
+            .unwrap();
+        let provider = test_provider();
+        let app = test_router_dev(store, provider);
+        let challenge = s256_challenge(VERIFIER);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/authorize/dev")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "{}&xid={xid}",
+                        authorize_qs(&challenge)
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FOUND);
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            location.contains("code="),
+            "expected a code on the redirect, got {location}"
+        );
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn dev_login_path_absent_without_flag(pool: sqlx::PgPool) {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let response = test_router(KeysStore::from_pool(pool))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/authorize/dev")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "{}&xid={}",
+                        authorize_qs(&s256_challenge(VERIFIER)),
+                        "11".repeat(32)
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn unknown_xid_is_refused_and_creates_nothing(pool: sqlx::PgPool) {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use identikey_keys::Xid;
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool);
+        let missing = Xid::from_bytes([0x33; 32]);
+        let provider = test_provider();
+        let app = test_router_dev(store.clone(), provider);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/authorize/dev")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "{}&xid={missing}",
+                        authorize_qs(&s256_challenge(VERIFIER))
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FOUND);
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(location.contains("error=access_denied"));
+        assert!(!location.contains("code="));
+        assert!(store.get_account(missing).await.unwrap().is_none());
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn health_does_not_mention_dev_login(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let response = test_router_dev(KeysStore::from_pool(pool), test_provider())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = std::str::from_utf8(&body).unwrap();
+        assert_eq!(text, "ok");
+        assert!(!text.to_ascii_lowercase().contains("dev"));
+        assert!(!text.contains("IDENTIKEY"));
     }
 
     const VERIFIER: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
