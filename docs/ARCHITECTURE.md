@@ -131,6 +131,17 @@ separate Shamir implementation.
   Neither is a reason to revisit the decision; `bc-xid` remains the right choice. Both are
   reasons to treat "adopt a crate" as including its transitive tail, which this ADR did not.
 
+**Amended 2026-08-19 (`identikey-core-zan.7`).** Of the two halves on the hybrid PQ
+path (`identikey-auth`: Ed25519 + ML-DSA), **only the PQ half can be hardware-resident.**
+Apple's Secure Enclave holds NIST P-256 for classical (we do not use it) and, from
+OS 26.0, `SecureEnclave.MLDSA87`. Ed25519 is enclave-wrapped — the seed is unwrapped
+into app memory on every signature. `identikey-auth` does not yet hold ML-DSA in the
+enclave (`ikp-zyq`). A4 is therefore not statically enclave-held; mixed custody
+depends on OS version and whether that work has landed. See `custody-ladder.md` A4.
+The source of truth is a runtime probe (`SecureEnclave.isAvailable` plus an
+OS-version floor) in the native client — this repo has no Apple client, and
+`identikey-server` is not that probe.
+
 ## ADR-002: Protocol crates live in a separate repository ✅ Decided — realized 2026-08-01
 
 **Status.** Done. [`identikey-protocol`](https://github.com/identikey/identikey-protocol) now

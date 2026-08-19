@@ -74,14 +74,21 @@ C3/C4 is a **browser** context, where the WebAuthn `prf` extension can derive a 
 decrypt a locally-stored key. Even there the passkey is a key-wrapping mechanism, not a proof of
 identity to anyone.
 
-⚠️ **A4 says "enclave-backed," not "enclave-held," pending hardware verification.** Whether the
-`identikey-auth` key can live *inside* a secure enclave — never extractable, signing on request —
-or must be stored encrypted and *unwrapped into memory* under an enclave-held wrapping key
-depends on whether the platform enclave supports our algorithms at all. Apple's Secure Enclave
-is believed to expose only NIST P-256 through its APIs, which Ed25519 and ML-DSA would not
-satisfy; that is **unconfirmed** and Android differs. This is a material difference in what the
-rung actually guarantees, so the wording stays deliberately weaker than the claim we would like
-to make until it is settled (`identikey-core-46v`).
+**A4 is enclave-backed, not statically enclave-held.** Label custody **per key half**,
+in three states (`identikey-core-zan.7`; Apple CryptoKit, verified):
+
+- **enclave-held** — private material never leaves the Secure Enclave. Classical:
+  NIST P-256 only (not an `identikey-auth` algorithm). PQ: `SecureEnclave.MLDSA87`
+  from OS 26.0. `identikey-auth` does not hold ML-DSA in the enclave yet (`ikp-zyq`).
+- **enclave-wrapped** — the enclave holds a wrapping key; the seed is unwrapped into
+  app memory on every signature. This is the Ed25519 half we actually use.
+- **mixed** — one half held, one half wrapped. A hybrid Ed25519 + ML-DSA key is mixed
+  only when the OS is 26.0+ *and* `ikp-zyq` has landed; otherwise both halves are
+  wrapped (or the PQ half is software).
+
+Do not assert that A4 is enclave-held. When a client exists, the source of truth is a
+runtime probe (`SecureEnclave.isAvailable` plus an OS-version floor). That probe lives
+in the native client, not in `identikey-server` — this repo has no Apple client.
 
 ---
 
@@ -107,7 +114,7 @@ remote party, so it is not an access level. It is the gate in front of a key you
 
 The hosted OP (this repo) serves the **C1–C2 rows**. `identikey-auth` serves the **A4 column**.
 The native app is what makes **C3 reachable by ordinary people**, because it is the thing that
-can hold a key in an enclave and participate in a guardian ceremony.
+can back a key with the enclave (held or wrapped) and participate in a guardian ceremony.
 
 ---
 
