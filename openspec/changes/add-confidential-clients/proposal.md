@@ -1,8 +1,8 @@
 # add-confidential-clients
 
-> **PENDING**
+> **ACTIVE BUILD**
 
-Drafted from `identikey-core-ccf.12`.
+Activated from `identikey-core-ccf.12`.
 
 **Rigor:** change
 
