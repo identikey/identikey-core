@@ -4,19 +4,18 @@
 //! behind axum, and serves the SvelteKit build output.
 //!
 //! Serves `/health` (liveness only), the convenience XID resolver
-//! (`GET /.well-known/xid/{xid}`), and the OIDC code+PKCE surface
-//! (`add-oidc-endpoints`). Login at `/authorize` is `add-dev-authorize`.
+//! (`GET /.well-known/xid/{xid}`), Related Origin Requests
+//! (`GET /.well-known/webauthn`, `identikey-core-2js`), and the OIDC
+//! code+PKCE surface (`add-oidc-endpoints`). Login at `/authorize` is
+//! `add-dev-authorize`. WebAuthn RP ID / origin allowlist fails closed
+//! at boot (`identikey-core-62j`).
 //!
 //! Not yet wired, each blocking on its own issue:
 //!
-//! - Configuration, including the strict WebAuthn origin allowlist that must
-//!   fail closed at boot (`identikey-core-62j`). Failing at startup is much
-//!   cheaper than discovering a permissive origin in production.
-//! - WebAuthn RP ID / origin allowlist (`identikey-core-62j`).
-//! - `/.well-known/webauthn`, required on the *first* deploy of
-//!   `auth.identikey.me` (`identikey-core-2js`).
 //! - The URN grant (`identikey-core-ccf.5`).
 //! - Static asset serving for `web/`.
+
+mod webauthn;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -35,6 +34,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tokio::signal;
+use webauthn::{WebAuthnConfig, parse_webauthn_config};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -43,6 +43,7 @@ struct AppState {
     store: KeysStore,
     provider: Arc<Provider>,
     dev_login: bool,
+    webauthn: WebAuthnConfig,
 }
 
 /// Liveness only. This must not grow into a readiness check that reports on the
@@ -52,12 +53,18 @@ async fn health() -> &'static str {
     "ok"
 }
 
-fn router(store: KeysStore, provider: Arc<Provider>, dev_login: bool) -> Router {
+fn router(
+    store: KeysStore,
+    provider: Arc<Provider>,
+    dev_login: bool,
+    webauthn: WebAuthnConfig,
+) -> Router {
     let mut routes = Router::new()
         .route("/health", get(health))
         .route("/.well-known/xid/{xid}", get(xid_document))
         .route("/.well-known/openid-configuration", get(discovery))
         .route("/.well-known/jwks.json", get(jwks))
+        .route("/.well-known/webauthn", get(well_known_webauthn))
         .route("/authorize", get(authorize))
         .route("/token", post(token))
         .route("/userinfo", get(userinfo).post(userinfo))
@@ -74,7 +81,15 @@ fn router(store: KeysStore, provider: Arc<Provider>, dev_login: bool) -> Router 
         store,
         provider,
         dev_login,
+        webauthn,
     })
+}
+
+/// Related Origin Requests (`identikey-core-2js`). Served from the first
+/// deploy even when the list is only the RP origin. Never lists profile
+/// or user-content origins.
+async fn well_known_webauthn(State(state): State<AppState>) -> Json<webauthn::RelatedOrigins> {
+    Json(state.webauthn.related_origins())
 }
 
 fn body_etag(bytes: &[u8]) -> String {
@@ -552,6 +567,13 @@ async fn main() -> Result<(), BoxError> {
         )
         .init();
 
+    // Fail closed before opening a store or binding a port.
+    let webauthn = parse_webauthn_config(
+        std::env::var("WEBAUTHN_RP_ID").ok().as_deref(),
+        std::env::var("WEBAUTHN_EXPECTED_ORIGIN").ok().as_deref(),
+    )?;
+    tracing::info!("webauthn origin allowlist ready");
+
     let url = database_url(std::env::var("DATABASE_URL").ok())?;
     let store = KeysStore::connect(&url).await?;
     store.migrate().await?;
@@ -585,9 +607,12 @@ async fn main() -> Result<(), BoxError> {
     tracing::info!(%addr, "identikey-server listening");
 
     let dev_login = std::env::var("IDENTIKEY_DEV_LOGIN").ok().as_deref() == Some("1");
-    axum::serve(listener, router(store, Arc::new(provider), dev_login))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        router(store, Arc::new(provider), dev_login, webauthn),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     Ok(())
 }
@@ -610,12 +635,16 @@ mod tests {
         Arc::new(provider)
     }
 
+    fn test_webauthn() -> WebAuthnConfig {
+        parse_webauthn_config(Some("auth.identikey.me"), Some("https://auth.identikey.me")).unwrap()
+    }
+
     fn test_router(store: KeysStore) -> Router {
-        router(store, test_provider(), false)
+        router(store, test_provider(), false, test_webauthn())
     }
 
     fn test_router_dev(store: KeysStore, provider: Arc<Provider>) -> Router {
-        router(store, provider, true)
+        router(store, provider, true, test_webauthn())
     }
 
     #[test]
@@ -643,6 +672,36 @@ mod tests {
             "boot error must name DATABASE_URL, got {err}"
         );
         assert!(database_url(Some(String::new())).is_err());
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn well_known_webauthn_lists_configured_https_origin_only(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let response = test_router(KeysStore::from_pool(pool))
+            .oneshot(
+                Request::builder()
+                    .uri("/.well-known/webauthn")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            doc,
+            serde_json::json!({"origins": ["https://auth.identikey.me"]})
+        );
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
@@ -865,7 +924,7 @@ mod tests {
         let code = provider
             .issue_code(&pending, Xid::from_bytes([0x22; 32]))
             .unwrap();
-        let app = router(store, provider, false);
+        let app = router(store, provider, false, test_webauthn());
         let form = format!(
             "grant_type=authorization_code&code={code}&redirect_uri=http://127.0.0.1:9999/cb&client_id=smoke&code_verifier={VERIFIER}"
         );

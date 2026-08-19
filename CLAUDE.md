@@ -28,11 +28,13 @@ and `add-dev-authorize`:
     IDENTIKEY_CLIENT_ID=smoke
     IDENTIKEY_CLIENT_REDIRECT=http://127.0.0.1:9999/cb
     IDENTIKEY_ISSUER=http://127.0.0.1:8080
+    WEBAUTHN_RP_ID=localhost
+    WEBAUTHN_EXPECTED_ORIGIN=http://localhost
     DATABASE_URL=postgres://$USER@localhost:5432/identikey-core-sqlx
 
 The flag must be exactly `1`. `/authorize/dev` is unregistered without
 it. `/health` does not report the flag. The test user must already exist
 in `KeysStore` (no implicit signup). Pairwise salt and the EdDSA signing
-JWK are created under `IDENTIKEY_DATA_DIR` on first boot. OIDF Basic OP
-+ Config OP CI is `add-oidf-conformance` and still needs independent
-advise before it can be acted.
+JWK are created under `IDENTIKEY_DATA_DIR` on first boot. Boot fails
+closed without `WEBAUTHN_RP_ID` / `WEBAUTHN_EXPECTED_ORIGIN` (no
+wildcards). Config OP CI is `.github/workflows/oidf-config-op.yml`.
