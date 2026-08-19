@@ -38,10 +38,11 @@ pub mod subject;
 pub use discovery::DiscoveryDocument;
 pub use error::{AuthorizeError, OidcError};
 pub use export::PairwiseExport;
+pub use provider::parse_http_basic;
 pub use provider::{
     AuthorizeQuery, Introspection, PendingAuthorization, Provider, TokenRequest, TokenResponse,
     UserInfo, s256_challenge,
 };
 pub use salt::{PairwiseSalt, SaltError};
 pub use signing::{SigningError, SigningKey};
-pub use subject::{Client, SubjectError, SubjectType, subject};
+pub use subject::{Client, SubjectError, SubjectType, TokenEndpointAuthMethod, subject};

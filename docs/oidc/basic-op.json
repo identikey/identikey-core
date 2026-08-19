@@ -1,0 +1,22 @@
+{
+  "alias": "identikey-basic",
+  "description": "IdentiKey Core Basic OP (local only; not CI-gated)",
+  "server": {
+    "discoveryUrl": "http://host.docker.internal:8080/.well-known/openid-configuration"
+  },
+  "client": {
+    "client_id": "basic-1",
+    "client_secret": "basic-1-secret",
+    "redirect_uri": "https://127.0.0.1:8443/test/a/identikey-basic/callback"
+  },
+  "client2": {
+    "client_id": "basic-2",
+    "client_secret": "basic-2-secret",
+    "redirect_uri": "https://127.0.0.1:8443/test/a/identikey-basic/callback"
+  },
+  "client_secret_post": {
+    "client_id": "post-1",
+    "client_secret": "post-1-secret",
+    "redirect_uri": "https://127.0.0.1:8443/test/a/identikey-basic/callback"
+  }
+}

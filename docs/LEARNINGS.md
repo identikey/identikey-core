@@ -6,6 +6,10 @@ See morphist-tools `CONVENTIONS.md`.
 
 ---
 
+- 2026-08-19 — RFC 6749 §2.3.1 HTTP Basic encodes `client_id` and
+  `client_secret` with `application/x-www-form-urlencoded` *before*
+  Base64 (`:` in an id becomes `%3A`). Decode after split-on-first-colon,
+  not before. (`crates/identikey-oidc/src/provider.rs` `parse_http_basic`)
 - 2026-08-19 — `last_advise_verdict` sorts review filenames. `YYYY-MM-DD-advise.md`
   sorts *after* `YYYY-MM-DD-advise-2.md` (`-` < `.`), so a send-back kept
   blocking accept-with-nits until a later dated file existed.

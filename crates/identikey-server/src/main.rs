@@ -6,7 +6,8 @@
 //! Serves `/health` (liveness only), the convenience XID resolver
 //! (`GET /.well-known/xid/{xid}`), Related Origin Requests
 //! (`GET /.well-known/webauthn`, `identikey-core-2js`), and the OIDC
-//! code+PKCE surface (`add-oidc-endpoints`). Login at `/authorize` is
+//! code+PKCE surface (`add-oidc-endpoints`) including confidential
+//! clients (`add-confidential-clients`). Login at `/authorize` is
 //! `add-dev-authorize`. WebAuthn RP ID / origin allowlist fails closed
 //! at boot (`identikey-core-62j`).
 //!
@@ -28,7 +29,7 @@ use axum::{Json, Router};
 use identikey_keys::{KeysStore, Xid};
 use identikey_oidc::{
     AuthorizeError, AuthorizeQuery, Client, OidcError, PairwiseSalt, Provider, SigningKey,
-    TokenRequest,
+    TokenEndpointAuthMethod, TokenRequest, parse_http_basic,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -216,6 +217,7 @@ struct TokenForm {
     code: Option<String>,
     redirect_uri: Option<String>,
     client_id: Option<String>,
+    client_secret: Option<String>,
     code_verifier: Option<String>,
     refresh_token: Option<String>,
 }
@@ -382,7 +384,7 @@ async fn complete_dev_login(state: AppState, params: DevLoginParams) -> Response
     }
     let code = match state.provider.issue_code(&pending, xid) {
         Ok(code) => code,
-        Err(err) => return token_error(err),
+        Err(err) => return token_error(err, false),
     };
     redirect_with_code(&pending.redirect_uri, &code, pending.state.as_deref())
 }
@@ -413,18 +415,40 @@ fn redirect_with_code(uri: &str, code: &str, state: Option<&str>) -> Response {
     }
 }
 
-async fn token(State(state): State<AppState>, Form(form): Form<TokenForm>) -> Response {
+async fn token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<TokenForm>,
+) -> Response {
+    let basic = match headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(raw) => match parse_http_basic(raw) {
+            Ok(parsed) => parsed,
+            Err(err) => return token_error(err, true),
+        },
+        None => None,
+    };
+    let used_basic = basic.is_some();
+    let (basic_client_id, basic_client_secret) = match basic {
+        Some((id, secret)) => (Some(id), Some(secret)),
+        None => (None, None),
+    };
     let req = TokenRequest {
         grant_type: form.grant_type,
         code: form.code,
         redirect_uri: form.redirect_uri,
         client_id: form.client_id,
+        client_secret: form.client_secret,
+        basic_client_id,
+        basic_client_secret,
         code_verifier: form.code_verifier,
         refresh_token: form.refresh_token,
     };
     match state.provider.token(&req) {
         Ok(issued) => Json(issued).into_response(),
-        Err(err) => token_error(err),
+        Err(err) => token_error(err, used_basic),
     }
 }
 
@@ -465,12 +489,26 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .or_else(|| raw.strip_prefix("bearer "))
 }
 
-fn token_error(err: OidcError) -> Response {
+fn token_error(err: OidcError, used_basic: bool) -> Response {
     let status = if err.error == "invalid_client" {
         StatusCode::UNAUTHORIZED
     } else {
         StatusCode::BAD_REQUEST
     };
+    if err.error == "invalid_client" && used_basic {
+        return (
+            status,
+            [(
+                header::WWW_AUTHENTICATE,
+                HeaderValue::from_static("Basic realm=\"identikey\""),
+            )],
+            Json(serde_json::json!({
+                "error": err.error,
+                "error_description": err.description,
+            })),
+        )
+            .into_response();
+    }
     oauth_error(status, err.error, &err.description)
 }
 
@@ -512,17 +550,75 @@ fn redirect_with_error(uri: &str, error: &str, description: &str, state: Option<
     }
 }
 
-fn optional_client() -> Option<Client> {
-    let id = std::env::var("IDENTIKEY_CLIENT_ID").ok()?;
-    let redirect = std::env::var("IDENTIKEY_CLIENT_REDIRECT").ok()?;
-    if id.is_empty() || redirect.is_empty() {
-        return None;
-    }
-    let sector = url::Url::parse(&redirect)
+#[derive(Debug, Deserialize)]
+struct ClientJson {
+    id: String,
+    redirect: String,
+    #[serde(default)]
+    secret: Option<String>,
+    #[serde(default)]
+    auth: Option<String>,
+}
+
+fn sector_from_redirect(redirect: &str) -> String {
+    url::Url::parse(redirect)
         .ok()
         .and_then(|u| u.host_str().map(str::to_owned))
-        .unwrap_or_else(|| "default".into());
-    Some(Client::new(id, sector).with_redirect(redirect))
+        .unwrap_or_else(|| "default".into())
+}
+
+fn client_from_spec(
+    id: String,
+    redirect: String,
+    secret: Option<String>,
+    auth: Option<String>,
+) -> Result<Client, BoxError> {
+    if id.is_empty() || redirect.is_empty() {
+        return Err("OIDC client id and redirect are required".into());
+    }
+    let method = match (auth.as_deref(), secret.as_deref()) {
+        (Some(raw), _) => TokenEndpointAuthMethod::parse(raw).map_err(|e| e.to_string())?,
+        (None, Some(s)) if !s.is_empty() => TokenEndpointAuthMethod::ClientSecretBasic,
+        (None, _) => TokenEndpointAuthMethod::None,
+    };
+    let sector = sector_from_redirect(&redirect);
+    let client = Client::new(id, sector).with_redirect(redirect);
+    match (method, secret.as_deref().filter(|s| !s.is_empty())) {
+        (TokenEndpointAuthMethod::None, Some(_)) => {
+            Err("public client (token_endpoint_auth_method=none) must not have a secret".into())
+        }
+        (TokenEndpointAuthMethod::None, None) => Ok(client),
+        (confidential, Some(secret)) => Ok(client.with_secret(confidential, secret)),
+        (confidential, None) => Err(format!(
+            "confidential client {} requires a secret",
+            confidential.as_str()
+        )
+        .into()),
+    }
+}
+
+fn optional_client() -> Result<Option<Client>, BoxError> {
+    let id = match std::env::var("IDENTIKEY_CLIENT_ID") {
+        Ok(id) if !id.is_empty() => id,
+        _ => return Ok(None),
+    };
+    let redirect = std::env::var("IDENTIKEY_CLIENT_REDIRECT").unwrap_or_default();
+    let secret = std::env::var("IDENTIKEY_CLIENT_SECRET").ok();
+    let auth = std::env::var("IDENTIKEY_CLIENT_AUTH_METHOD").ok();
+    Ok(Some(client_from_spec(id, redirect, secret, auth)?))
+}
+
+fn extra_clients() -> Result<Vec<Client>, BoxError> {
+    let raw = match std::env::var("IDENTIKEY_CLIENTS") {
+        Ok(raw) if !raw.is_empty() => raw,
+        _ => return Ok(Vec::new()),
+    };
+    let specs: Vec<ClientJson> = serde_json::from_str(&raw)
+        .map_err(|e| format!("IDENTIKEY_CLIENTS is not valid JSON: {e}"))?;
+    specs
+        .into_iter()
+        .map(|spec| client_from_spec(spec.id, spec.redirect, spec.secret, spec.auth))
+        .collect()
 }
 
 /// The bind address used when `IDENTIKEY_BIND` is unset.
@@ -597,8 +693,20 @@ async fn main() -> Result<(), BoxError> {
     let issuer =
         std::env::var("IDENTIKEY_ISSUER").unwrap_or_else(|_| format!("http://{DEFAULT_BIND}"));
     let provider = Provider::new(issuer, signing, salt);
-    if let Some(client) = optional_client() {
-        tracing::info!(client_id = %client.id, "registered OIDC client");
+    if let Some(client) = optional_client()? {
+        tracing::info!(
+            client_id = %client.id,
+            auth = client.token_endpoint_auth_method.as_str(),
+            "registered OIDC client"
+        );
+        provider.register(client);
+    }
+    for client in extra_clients()? {
+        tracing::info!(
+            client_id = %client.id,
+            auth = client.token_endpoint_auth_method.as_str(),
+            "registered OIDC client"
+        );
         provider.register(client);
     }
 
@@ -872,6 +980,10 @@ mod tests {
                 .iter()
                 .any(|v| v == "token")
         );
+        assert_eq!(
+            doc["token_endpoint_auth_methods_supported"],
+            serde_json::json!(["none", "client_secret_basic", "client_secret_post"])
+        );
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
@@ -1103,6 +1215,115 @@ mod tests {
         assert_eq!(text, "ok");
         assert!(!text.to_ascii_lowercase().contains("dev"));
         assert!(!text.contains("IDENTIKEY"));
+    }
+
+    #[test]
+    fn confidential_spec_hashes_and_public_rejects_secret() {
+        let confidential = client_from_spec(
+            "basic-1".into(),
+            "http://127.0.0.1:9999/cb".into(),
+            Some("s3cret".into()),
+            Some("client_secret_basic".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            confidential.token_endpoint_auth_method,
+            TokenEndpointAuthMethod::ClientSecretBasic
+        );
+        let leaked = format!("{confidential:?}");
+        assert!(!leaked.contains("s3cret"), "spec leaked secret: {leaked}");
+
+        let two_basic_one_post = [
+            ("basic-1", "client_secret_basic"),
+            ("basic-2", "client_secret_basic"),
+            ("post-1", "client_secret_post"),
+        ];
+        for (id, auth) in two_basic_one_post {
+            let client = client_from_spec(
+                id.into(),
+                "http://127.0.0.1:9999/cb".into(),
+                Some(format!("{id}-secret")),
+                Some(auth.into()),
+            )
+            .unwrap();
+            assert_eq!(client.token_endpoint_auth_method.as_str(), auth);
+        }
+
+        assert!(
+            client_from_spec(
+                "smoke".into(),
+                "http://127.0.0.1:9999/cb".into(),
+                Some("nope".into()),
+                Some("none".into()),
+            )
+            .is_err()
+        );
+        assert!(
+            client_from_spec(
+                "basic-1".into(),
+                "http://127.0.0.1:9999/cb".into(),
+                None,
+                Some("client_secret_basic".into()),
+            )
+            .is_err()
+        );
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn token_basic_wrong_secret_is_unauthorized(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use identikey_keys::Xid;
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool);
+        let salt = PairwiseSalt::from_hex(&"ab".repeat(32)).unwrap();
+        let provider = Provider::generate("http://127.0.0.1:8080", salt).unwrap();
+        provider.register(
+            Client::new("basic-1", "127.0.0.1")
+                .with_redirect("http://127.0.0.1:9999/cb")
+                .with_secret(TokenEndpointAuthMethod::ClientSecretBasic, "basic-secret"),
+        );
+        let pending = provider
+            .validate_authorize(&AuthorizeQuery {
+                response_type: Some("code".into()),
+                client_id: Some("basic-1".into()),
+                redirect_uri: Some("http://127.0.0.1:9999/cb".into()),
+                code_challenge: Some(s256_challenge(VERIFIER)),
+                code_challenge_method: Some("S256".into()),
+                state: None,
+                nonce: None,
+                scope: Some("openid".into()),
+            })
+            .unwrap();
+        let code = provider
+            .issue_code(&pending, Xid::from_bytes([0x22; 32]))
+            .unwrap();
+        let app = router(store, Arc::new(provider), false, test_webauthn());
+        let form = format!(
+            "grant_type=authorization_code&code={code}&redirect_uri=http://127.0.0.1:9999/cb&code_verifier={VERIFIER}"
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/token")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::AUTHORIZATION, "Basic YmFzaWMtMTp3cm9uZw==")
+                    .body(Body::from(form))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().get(header::WWW_AUTHENTICATE).is_some());
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(err["error"], "invalid_client");
+        let desc = err["error_description"].as_str().unwrap_or("");
+        assert!(!desc.contains("wrong"), "must not echo the secret: {desc}");
     }
 
     const VERIFIER: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";

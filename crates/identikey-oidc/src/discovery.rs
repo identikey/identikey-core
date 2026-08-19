@@ -37,7 +37,11 @@ impl DiscoveryDocument {
             code_challenge_methods_supported: vec!["S256"],
             subject_types_supported: vec!["pairwise", "public"],
             id_token_signing_alg_values_supported: vec!["EdDSA"],
-            token_endpoint_auth_methods_supported: vec!["none"],
+            token_endpoint_auth_methods_supported: vec![
+                "none",
+                "client_secret_basic",
+                "client_secret_post",
+            ],
             scopes_supported: vec!["openid"],
         }
     }
@@ -65,5 +69,9 @@ mod tests {
         assert!(!json.contains("\"token\""));
         assert_eq!(doc.issuer, "https://auth.example");
         assert_eq!(doc.authorization_endpoint, "https://auth.example/authorize");
+        assert_eq!(
+            doc.token_endpoint_auth_methods_supported,
+            vec!["none", "client_secret_basic", "client_secret_post"]
+        );
     }
 }

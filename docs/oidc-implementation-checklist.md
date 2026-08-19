@@ -29,6 +29,7 @@ Discovery MUST advertise:
 - `code_challenge_methods_supported`: `["S256"]`
 - `subject_types_supported`: `["pairwise", "public"]` (ADR-009)
 - `id_token_signing_alg_values_supported`: `["EdDSA"]`
+- `token_endpoint_auth_methods_supported`: `["none", "client_secret_basic", "client_secret_post"]`
 
 Discovery MUST NOT advertise `token`, `id_token` as a standalone
 response type, or `password`.

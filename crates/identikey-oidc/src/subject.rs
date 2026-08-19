@@ -1,10 +1,12 @@
 //! The only place a token `sub` is computed (ADR-009).
 
+use std::fmt;
+
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hkdf::Hkdf;
 use identikey_keys::Xid;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 use crate::salt::PairwiseSalt;
 
@@ -17,13 +19,68 @@ pub enum SubjectType {
     Public,
 }
 
-/// Registered client. New clients default to pairwise.
-#[derive(Debug, Clone)]
+/// How this client authenticates at `/token` (RFC 6749 §2.3, RFC 7591).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TokenEndpointAuthMethod {
+    #[default]
+    None,
+    ClientSecretBasic,
+    ClientSecretPost,
+}
+
+impl TokenEndpointAuthMethod {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "none" => Ok(Self::None),
+            "client_secret_basic" => Ok(Self::ClientSecretBasic),
+            "client_secret_post" => Ok(Self::ClientSecretPost),
+            other => Err(format!("unknown token_endpoint_auth_method {other}")),
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::ClientSecretBasic => "client_secret_basic",
+            Self::ClientSecretPost => "client_secret_post",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_confidential(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
+/// Registered client. New clients default to pairwise and `none`.
+#[derive(Clone)]
 pub struct Client {
     pub id: String,
     pub subject_type: SubjectType,
     pub sector_identifier: String,
     pub redirect_uris: Vec<String>,
+    pub token_endpoint_auth_method: TokenEndpointAuthMethod,
+    secret_hash: Option<[u8; 32]>,
+}
+
+impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Client")
+            .field("id", &self.id)
+            .field("subject_type", &self.subject_type)
+            .field("sector_identifier", &self.sector_identifier)
+            .field("redirect_uris", &self.redirect_uris)
+            .field(
+                "token_endpoint_auth_method",
+                &self.token_endpoint_auth_method,
+            )
+            .field(
+                "secret_hash",
+                &self.secret_hash.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
 }
 
 impl Client {
@@ -34,6 +91,8 @@ impl Client {
             subject_type: SubjectType::Pairwise,
             sector_identifier: sector_identifier.into(),
             redirect_uris: Vec::new(),
+            token_endpoint_auth_method: TokenEndpointAuthMethod::None,
+            secret_hash: None,
         }
     }
 
@@ -42,6 +101,22 @@ impl Client {
         self.redirect_uris.push(uri.into());
         self
     }
+
+    /// Hash `secret` (SHA-256) and remember only the digest.
+    #[must_use]
+    pub fn with_secret(mut self, method: TokenEndpointAuthMethod, secret: &str) -> Self {
+        self.token_endpoint_auth_method = method;
+        self.secret_hash = Some(hash_client_secret(secret));
+        self
+    }
+
+    pub(crate) fn secret_hash(&self) -> Option<[u8; 32]> {
+        self.secret_hash
+    }
+}
+
+pub(crate) fn hash_client_secret(secret: &str) -> [u8; 32] {
+    Sha256::digest(secret.as_bytes()).into()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -88,6 +163,24 @@ mod tests {
     fn new_client_defaults_pairwise() {
         let client = Client::new("smoke", "127.0.0.1");
         assert_eq!(client.subject_type, SubjectType::Pairwise);
+        assert_eq!(
+            client.token_endpoint_auth_method,
+            TokenEndpointAuthMethod::None
+        );
+        assert!(client.secret_hash().is_none());
+    }
+
+    #[test]
+    fn secret_is_hashed_and_debug_redacts() {
+        let client = Client::new("basic-1", "127.0.0.1")
+            .with_secret(TokenEndpointAuthMethod::ClientSecretBasic, "s3cret");
+        assert_eq!(client.secret_hash(), Some(hash_client_secret("s3cret")));
+        let debug = format!("{client:?}");
+        assert!(
+            !debug.contains("s3cret"),
+            "Debug leaked the secret: {debug}"
+        );
+        assert!(debug.contains("[redacted]"));
     }
 
     #[test]

@@ -27,10 +27,20 @@ and `add-dev-authorize`:
     IDENTIKEY_DEV_LOGIN=1
     IDENTIKEY_CLIENT_ID=smoke
     IDENTIKEY_CLIENT_REDIRECT=http://127.0.0.1:9999/cb
+    IDENTIKEY_CLIENT_AUTH_METHOD=none
     IDENTIKEY_ISSUER=http://127.0.0.1:8080
     WEBAUTHN_RP_ID=localhost
     WEBAUTHN_EXPECTED_ORIGIN=http://localhost
     DATABASE_URL=postgres://$USER@localhost:5432/identikey-core-sqlx
+
+Confidential clients (optional extra registrations, secrets hashed at boot):
+
+    IDENTIKEY_CLIENT_SECRET=...                 # with IDENTIKEY_CLIENT_ID
+    IDENTIKEY_CLIENT_AUTH_METHOD=client_secret_basic
+    IDENTIKEY_CLIENTS='[{"id":"basic-1","redirect":"https://127.0.0.1:8443/test/a/identikey-basic/callback","secret":"...","auth":"client_secret_basic"}]'
+
+See `docs/oidc/README.md` for `oidcc-basic-certification-test-plan`. That
+plan is not a required CI job.
 
 The flag must be exactly `1`. `/authorize/dev` is unregistered without
 it. `/health` does not report the flag. The test user must already exist

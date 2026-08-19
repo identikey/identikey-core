@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use identikey_keys::Xid;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -14,7 +14,7 @@ use crate::discovery::DiscoveryDocument;
 use crate::error::{AuthorizeError, OidcError};
 use crate::salt::PairwiseSalt;
 use crate::signing::SigningKey;
-use crate::subject::{Client, subject};
+use crate::subject::{Client, TokenEndpointAuthMethod, hash_client_secret, subject};
 
 const CODE_TTL: Duration = Duration::from_secs(600);
 const ACCESS_TTL: Duration = Duration::from_secs(3600);
@@ -45,14 +45,42 @@ pub struct AuthorizeQuery {
     pub scope: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Default)]
 pub struct TokenRequest {
     pub grant_type: Option<String>,
     pub code: Option<String>,
     pub redirect_uri: Option<String>,
     pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub basic_client_id: Option<String>,
+    pub basic_client_secret: Option<String>,
     pub code_verifier: Option<String>,
     pub refresh_token: Option<String>,
+}
+
+impl std::fmt::Debug for TokenRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenRequest")
+            .field("grant_type", &self.grant_type)
+            .field("code", &self.code)
+            .field("redirect_uri", &self.redirect_uri)
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "[redacted]"),
+            )
+            .field("basic_client_id", &self.basic_client_id)
+            .field(
+                "basic_client_secret",
+                &self.basic_client_secret.as_ref().map(|_| "[redacted]"),
+            )
+            .field("code_verifier", &self.code_verifier)
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -292,6 +320,42 @@ impl Provider {
         }
     }
 
+    /// Authenticate the client named by the token request (body and/or Basic).
+    fn authenticate(&self, req: &TokenRequest, client_id: &str) -> Result<Client, OidcError> {
+        let client = self
+            .client(client_id)
+            .ok_or_else(|| OidcError::invalid_client("unknown client_id"))?;
+        let presented = presented_auth(req)?;
+        match (client.token_endpoint_auth_method, presented) {
+            (TokenEndpointAuthMethod::None, PresentedAuth::None) => Ok(client),
+            (TokenEndpointAuthMethod::None, _) => Err(OidcError::invalid_client(
+                "public client must not send a client secret",
+            )),
+            (TokenEndpointAuthMethod::ClientSecretBasic, PresentedAuth::Basic { id, secret }) => {
+                if id != client.id {
+                    return Err(OidcError::invalid_client(
+                        "client_id does not match Authorization",
+                    ));
+                }
+                verify_secret(&client, &secret)?;
+                Ok(client)
+            }
+            (TokenEndpointAuthMethod::ClientSecretPost, PresentedAuth::Post { id, secret }) => {
+                if id != client.id {
+                    return Err(OidcError::invalid_client("client_id mismatch"));
+                }
+                verify_secret(&client, &secret)?;
+                Ok(client)
+            }
+            (TokenEndpointAuthMethod::ClientSecretBasic, _) => {
+                Err(OidcError::invalid_client("client_secret_basic is required"))
+            }
+            (TokenEndpointAuthMethod::ClientSecretPost, _) => {
+                Err(OidcError::invalid_client("client_secret_post is required"))
+            }
+        }
+    }
+
     pub fn userinfo(&self, access_token: &str) -> Result<UserInfo, OidcError> {
         let grant = self
             .lookup_access(access_token)?
@@ -337,16 +401,14 @@ impl Provider {
     }
 
     fn exchange_code(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
+        let client_id = request_client_id(req)?;
+        let client = self.authenticate(req, client_id)?;
         let code = req
             .code
             .as_deref()
             .filter(|s| !s.is_empty())
             .ok_or_else(|| OidcError::invalid_request("code is required"))?;
-        let client_id = req
-            .client_id
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| OidcError::invalid_client("client_id is required"))?;
+        let client_id = client.id.as_str();
         let redirect = req.redirect_uri.as_deref().unwrap_or("");
 
         let mut codes = lock(&self.codes)?;
@@ -415,16 +477,31 @@ impl Provider {
             .as_deref()
             .filter(|s| !s.is_empty())
             .ok_or_else(|| OidcError::invalid_request("refresh_token is required"))?;
-        let mut refresh = lock(&self.refresh)?;
-        let grant = refresh
-            .remove(&hash_token(presented))
-            .ok_or_else(|| OidcError::invalid_grant("unknown or revoked refresh token"))?;
-        drop(refresh);
-        if let Some(client_id) = req.client_id.as_deref() {
+        let presented_id = optional_request_client_id(req)?;
+        let hashed = hash_token(presented);
+        let grant = {
+            let refresh = lock(&self.refresh)?;
+            refresh
+                .get(&hashed)
+                .map(|g| RefreshGrant {
+                    client_id: g.client_id.clone(),
+                    xid: g.xid,
+                    sub: g.sub.clone(),
+                })
+                .ok_or_else(|| OidcError::invalid_grant("unknown or revoked refresh token"))?
+        };
+        if let Some(client_id) = presented_id {
             if client_id != grant.client_id {
                 return Err(OidcError::invalid_grant(
                     "refresh token belongs to another client",
                 ));
+            }
+        }
+        self.authenticate(req, &grant.client_id)?;
+        {
+            let mut refresh = lock(&self.refresh)?;
+            if refresh.remove(&hashed).is_none() {
+                return Err(OidcError::invalid_grant("unknown or revoked refresh token"));
             }
         }
         self.mint_tokens(&grant.client_id, grant.xid, None)
@@ -513,6 +590,159 @@ impl Provider {
                 })
             }
         }))
+    }
+}
+
+enum PresentedAuth {
+    None,
+    Basic { id: String, secret: String },
+    Post { id: String, secret: String },
+}
+
+fn presented_auth(req: &TokenRequest) -> Result<PresentedAuth, OidcError> {
+    let has_basic = req
+        .basic_client_id
+        .as_deref()
+        .is_some_and(|s| !s.is_empty())
+        || req
+            .basic_client_secret
+            .as_deref()
+            .is_some_and(|s| !s.is_empty());
+    let has_post = req.client_secret.as_deref().is_some_and(|s| !s.is_empty());
+    if has_basic && has_post {
+        return Err(OidcError::invalid_client(
+            "multiple client authentication methods",
+        ));
+    }
+    if has_basic {
+        let id = req
+            .basic_client_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| OidcError::invalid_client("malformed client authentication"))?;
+        let secret = req
+            .basic_client_secret
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| OidcError::invalid_client("malformed client authentication"))?;
+        return Ok(PresentedAuth::Basic {
+            id: id.to_owned(),
+            secret: secret.to_owned(),
+        });
+    }
+    if has_post {
+        let id = req
+            .client_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| OidcError::invalid_client("client_id is required"))?;
+        let secret = req
+            .client_secret
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| OidcError::invalid_client("malformed client authentication"))?;
+        return Ok(PresentedAuth::Post {
+            id: id.to_owned(),
+            secret: secret.to_owned(),
+        });
+    }
+    Ok(PresentedAuth::None)
+}
+
+fn optional_request_client_id(req: &TokenRequest) -> Result<Option<&str>, OidcError> {
+    match (
+        req.basic_client_id.as_deref().filter(|s| !s.is_empty()),
+        req.client_id.as_deref().filter(|s| !s.is_empty()),
+    ) {
+        (Some(basic), Some(body)) if basic != body => Err(OidcError::invalid_client(
+            "client_id does not match Authorization",
+        )),
+        (Some(basic), _) => Ok(Some(basic)),
+        (None, Some(body)) => Ok(Some(body)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn request_client_id(req: &TokenRequest) -> Result<&str, OidcError> {
+    optional_request_client_id(req)?
+        .ok_or_else(|| OidcError::invalid_client("client_id is required"))
+}
+
+fn verify_secret(client: &Client, presented: &str) -> Result<(), OidcError> {
+    let Some(stored) = client.secret_hash() else {
+        return Err(OidcError::invalid_client("client authentication failed"));
+    };
+    let computed = hash_client_secret(presented);
+    if ct_eq(&computed, &stored) {
+        Ok(())
+    } else {
+        Err(OidcError::invalid_client("client authentication failed"))
+    }
+}
+
+/// RFC 6749 §2.3.1 HTTP Basic. `None` if the header is absent or not Basic.
+pub fn parse_http_basic(header: &str) -> Result<Option<(String, String)>, OidcError> {
+    let trimmed = header.trim();
+    let Some((scheme, param)) = trimmed.split_once(' ') else {
+        return Ok(None);
+    };
+    if !scheme.eq_ignore_ascii_case("Basic") {
+        return Ok(None);
+    }
+    let param = param.trim();
+    if param.is_empty() {
+        return Err(OidcError::invalid_client("malformed client authentication"));
+    }
+    let decoded = STANDARD
+        .decode(param)
+        .map_err(|_| OidcError::invalid_client("malformed client authentication"))?;
+    let decoded = String::from_utf8(decoded)
+        .map_err(|_| OidcError::invalid_client("malformed client authentication"))?;
+    let Some((id, secret)) = decoded.split_once(':') else {
+        return Err(OidcError::invalid_client("malformed client authentication"));
+    };
+    Ok(Some((www_form_decode(id)?, www_form_decode(secret)?)))
+}
+
+fn www_form_decode(input: &str) -> Result<String, OidcError> {
+    let mut out = Vec::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes.get(i).copied() {
+            Some(b'+') => {
+                out.push(b' ');
+                i += 1;
+            }
+            Some(b'%') => {
+                let h1 = bytes.get(i + 1).copied().and_then(from_hex_digit);
+                let h2 = bytes.get(i + 2).copied().and_then(from_hex_digit);
+                match (h1, h2) {
+                    (Some(a), Some(b)) => {
+                        out.push((a << 4) | b);
+                        i += 3;
+                    }
+                    _ => {
+                        return Err(OidcError::invalid_client("malformed client authentication"));
+                    }
+                }
+            }
+            Some(b) => {
+                out.push(b);
+                i += 1;
+            }
+            None => break,
+        }
+    }
+    String::from_utf8(out).map_err(|_| OidcError::invalid_client("malformed client authentication"))
+}
+
+fn from_hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -685,6 +915,9 @@ mod tests {
             code: Some(code),
             redirect_uri: Some(pending.redirect_uri.clone()),
             client_id: Some("smoke".into()),
+            client_secret: None,
+            basic_client_id: None,
+            basic_client_secret: None,
             code_verifier: Some(VERIFIER.into()),
             refresh_token: None,
         };
@@ -707,6 +940,9 @@ mod tests {
                 code: Some(missing_verifier),
                 redirect_uri: Some(pending.redirect_uri.clone()),
                 client_id: Some("smoke".into()),
+                client_secret: None,
+                basic_client_id: None,
+                basic_client_secret: None,
                 code_verifier: None,
                 refresh_token: None,
             })
@@ -720,6 +956,9 @@ mod tests {
                 code: Some(no_challenge),
                 redirect_uri: Some(pending.redirect_uri),
                 client_id: Some("smoke".into()),
+                client_secret: None,
+                basic_client_id: None,
+                basic_client_secret: None,
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
             })
@@ -737,6 +976,10 @@ mod tests {
         assert!(json.contains("\"code\""));
         assert!(json.contains("S256"));
         assert!(!json.contains("password"));
+        assert_eq!(
+            p.discovery().token_endpoint_auth_methods_supported,
+            vec!["none", "client_secret_basic", "client_secret_post"]
+        );
     }
 
     #[test]
@@ -750,6 +993,9 @@ mod tests {
                 code: Some(code),
                 redirect_uri: Some(pending.redirect_uri),
                 client_id: Some("smoke".into()),
+                client_secret: None,
+                basic_client_id: None,
+                basic_client_secret: None,
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
             })
@@ -763,6 +1009,9 @@ mod tests {
                 code: None,
                 redirect_uri: None,
                 client_id: Some("smoke".into()),
+                client_secret: None,
+                basic_client_id: None,
+                basic_client_secret: None,
                 code_verifier: None,
                 refresh_token: Some(t1.clone()),
             })
@@ -777,6 +1026,9 @@ mod tests {
                 code: None,
                 redirect_uri: None,
                 client_id: Some("smoke".into()),
+                client_secret: None,
+                basic_client_id: None,
+                basic_client_secret: None,
                 code_verifier: None,
                 refresh_token: Some(t1),
             })
@@ -795,6 +1047,9 @@ mod tests {
                 code: Some(code),
                 redirect_uri: Some(pending.redirect_uri),
                 client_id: Some("smoke".into()),
+                client_secret: None,
+                basic_client_id: None,
+                basic_client_secret: None,
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
             })
@@ -809,10 +1064,191 @@ mod tests {
                 code: None,
                 redirect_uri: None,
                 client_id: Some("smoke".into()),
+                client_secret: None,
+                basic_client_id: None,
+                basic_client_secret: None,
                 code_verifier: None,
                 refresh_token: Some(refresh),
             })
             .unwrap_err();
         assert_eq!(err.error, "invalid_grant");
+    }
+
+    fn confidential_provider() -> Provider {
+        let p = provider();
+        p.register(
+            Client::new("basic-1", "127.0.0.1")
+                .with_redirect("http://127.0.0.1:9999/cb")
+                .with_secret(TokenEndpointAuthMethod::ClientSecretBasic, "basic-secret"),
+        );
+        p.register(
+            Client::new("basic-2", "127.0.0.1")
+                .with_redirect("http://127.0.0.1:9999/cb")
+                .with_secret(TokenEndpointAuthMethod::ClientSecretBasic, "basic-secret-2"),
+        );
+        p.register(
+            Client::new("post-1", "127.0.0.1")
+                .with_redirect("http://127.0.0.1:9999/cb")
+                .with_secret(TokenEndpointAuthMethod::ClientSecretPost, "post-secret"),
+        );
+        p
+    }
+
+    fn pending_for(p: &Provider, client_id: &str) -> PendingAuthorization {
+        p.validate_authorize(&AuthorizeQuery {
+            response_type: Some("code".into()),
+            client_id: Some(client_id.into()),
+            redirect_uri: Some("http://127.0.0.1:9999/cb".into()),
+            code_challenge: Some(s256_challenge(VERIFIER)),
+            code_challenge_method: Some("S256".into()),
+            state: None,
+            nonce: None,
+            scope: Some("openid".into()),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn two_basic_and_one_post_register() {
+        let p = confidential_provider();
+        assert!(p.client("basic-1").is_some());
+        assert!(p.client("basic-2").is_some());
+        assert!(p.client("post-1").is_some());
+        assert_eq!(
+            p.client("basic-1").unwrap().token_endpoint_auth_method,
+            TokenEndpointAuthMethod::ClientSecretBasic
+        );
+        assert_eq!(
+            p.client("post-1").unwrap().token_endpoint_auth_method,
+            TokenEndpointAuthMethod::ClientSecretPost
+        );
+    }
+
+    #[test]
+    fn wrong_secret_is_refused() {
+        let p = confidential_provider();
+        let pending = pending_for(&p, "basic-1");
+        let code = p.issue_code(&pending, xid()).unwrap();
+        let err = p
+            .token(&TokenRequest {
+                grant_type: Some("authorization_code".into()),
+                code: Some(code.clone()),
+                redirect_uri: Some(pending.redirect_uri.clone()),
+                client_id: Some("basic-1".into()),
+                client_secret: None,
+                basic_client_id: Some("basic-1".into()),
+                basic_client_secret: Some("wrong".into()),
+                code_verifier: Some(VERIFIER.into()),
+                refresh_token: None,
+            })
+            .unwrap_err();
+        assert_eq!(err.error, "invalid_client");
+        // Code was not consumed: the right secret still works.
+        let issued = p
+            .token(&TokenRequest {
+                grant_type: Some("authorization_code".into()),
+                code: Some(code),
+                redirect_uri: Some(pending.redirect_uri),
+                client_id: Some("basic-1".into()),
+                client_secret: None,
+                basic_client_id: Some("basic-1".into()),
+                basic_client_secret: Some("basic-secret".into()),
+                code_verifier: Some(VERIFIER.into()),
+                refresh_token: None,
+            })
+            .unwrap();
+        assert!(!issued.access_token.is_empty());
+    }
+
+    #[test]
+    fn public_client_still_uses_pkce_only() {
+        let p = confidential_provider();
+        let pending = pending_for(&p, "smoke");
+        let code = p.issue_code(&pending, xid()).unwrap();
+        let issued = p
+            .token(&TokenRequest {
+                grant_type: Some("authorization_code".into()),
+                code: Some(code),
+                redirect_uri: Some(pending.redirect_uri),
+                client_id: Some("smoke".into()),
+                client_secret: None,
+                basic_client_id: None,
+                basic_client_secret: None,
+                code_verifier: Some(VERIFIER.into()),
+                refresh_token: None,
+            })
+            .unwrap();
+        assert!(!issued.access_token.is_empty());
+    }
+
+    #[test]
+    fn public_client_sending_secret_is_refused() {
+        let p = confidential_provider();
+        let pending = pending_for(&p, "smoke");
+        let code = p.issue_code(&pending, xid()).unwrap();
+        let err = p
+            .token(&TokenRequest {
+                grant_type: Some("authorization_code".into()),
+                code: Some(code),
+                redirect_uri: Some(pending.redirect_uri),
+                client_id: Some("smoke".into()),
+                client_secret: Some("not-a-secret".into()),
+                basic_client_id: None,
+                basic_client_secret: None,
+                code_verifier: Some(VERIFIER.into()),
+                refresh_token: None,
+            })
+            .unwrap_err();
+        assert_eq!(err.error, "invalid_client");
+    }
+
+    #[test]
+    fn confidential_still_requires_pkce() {
+        let p = confidential_provider();
+        let pending = pending_for(&p, "post-1");
+        let code = p.issue_code(&pending, xid()).unwrap();
+        let err = p
+            .token(&TokenRequest {
+                grant_type: Some("authorization_code".into()),
+                code: Some(code),
+                redirect_uri: Some(pending.redirect_uri),
+                client_id: Some("post-1".into()),
+                client_secret: Some("post-secret".into()),
+                basic_client_id: None,
+                basic_client_secret: None,
+                code_verifier: None,
+                refresh_token: None,
+            })
+            .unwrap_err();
+        assert_eq!(err.error, "invalid_request");
+    }
+
+    #[test]
+    fn client_secret_post_succeeds() {
+        let p = confidential_provider();
+        let pending = pending_for(&p, "post-1");
+        let code = p.issue_code(&pending, xid()).unwrap();
+        let issued = p
+            .token(&TokenRequest {
+                grant_type: Some("authorization_code".into()),
+                code: Some(code),
+                redirect_uri: Some(pending.redirect_uri),
+                client_id: Some("post-1".into()),
+                client_secret: Some("post-secret".into()),
+                basic_client_id: None,
+                basic_client_secret: None,
+                code_verifier: Some(VERIFIER.into()),
+                refresh_token: None,
+            })
+            .unwrap();
+        assert!(!issued.access_token.is_empty());
+    }
+
+    #[test]
+    fn parse_basic_decodes_form_urlencoded() {
+        let raw = format!("Basic {}", STANDARD.encode("client%3Aid:sec%3Aret"));
+        let (id, secret) = parse_http_basic(&raw).unwrap().unwrap();
+        assert_eq!(id, "client:id");
+        assert_eq!(secret, "sec:ret");
     }
 }
