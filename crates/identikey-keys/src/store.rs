@@ -9,7 +9,10 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::MIGRATOR;
-use crate::ceremony::{CeremonyError, check_resolution, validate_c2_to_c3};
+use crate::ceremony::{
+    CeremonyError, check_resolution, parse_successor_digest, validate_c2_to_c3,
+    verify_successor_digest,
+};
 use crate::consent::{ConsentHashInput, ConsentResult, ProofKind, hash_consent_entry, hash_proof};
 use crate::privilege::{PrivilegeError, authorize_elect, is_c2};
 use crate::rung::{AccessLevel, CustodyRung};
@@ -241,12 +244,18 @@ impl KeysStore {
     }
 
     /// C2→C3 exit. One UPDATE of document + NULL blob + `rung = c3`.
+    ///
+    /// `successor_digest` on the row is the pre-rotation slot (32-byte
+    /// SHA-256, or NULL). v1 leaves it NULL. When set, the locally
+    /// generated successor key material must match before the climb is
+    /// treated as complete (`identikey-core-4qd`).
     pub async fn migrate_c2_to_c3(
         &self,
         new_document: &XIDDocument,
         elect_signature: &Signature,
         signer: &impl PublicKeysProvider,
         consent: ConsentAppend<'_>,
+        local_successor_public_or_cbor: Option<&[u8]>,
     ) -> Result<(), StoreError> {
         match (consent.access_level, consent.proof_kind) {
             (
@@ -265,7 +274,8 @@ impl KeysStore {
 
         let xid_bytes = xid.as_bytes().as_slice();
         let row = sqlx::query!(
-            "SELECT xid_document, rung FROM custody_records WHERE xid = $1 FOR UPDATE",
+            "SELECT xid_document, rung, successor_digest
+             FROM custody_records WHERE xid = $1 FOR UPDATE",
             xid_bytes
         )
         .fetch_optional(&mut *tx)
@@ -278,6 +288,16 @@ impl KeysStore {
             .parse()
             .map_err(|e: crate::ParseRungError| StoreError::Document(e.to_string()))?;
         let stored = decode_document(&row.xid_document)?;
+        let published = match row.successor_digest.as_deref() {
+            None => None,
+            Some(bytes) => Some(parse_successor_digest(bytes)?),
+        };
+        // ADR-011: Elect-gated by the user. Still verify a published
+        // digest when the column is set. NULL skips (v1 default).
+        verify_successor_digest(
+            published.as_ref(),
+            local_successor_public_or_cbor.unwrap_or(&[]),
+        )?;
         validate_c2_to_c3(
             stored_rung,
             &stored,
@@ -682,7 +702,7 @@ mod tests {
         let bytes = encode_document(&c3).unwrap();
         let sig = user.sign(&bytes).unwrap();
         store
-            .migrate_c2_to_c3(&c3, &sig, &user, climb_consent(xid))
+            .migrate_c2_to_c3(&c3, &sig, &user, climb_consent(xid), None)
             .await
             .unwrap();
 
@@ -715,7 +735,7 @@ mod tests {
         let bytes = encode_document(&c3).unwrap();
         let sig = user.sign(&bytes).unwrap();
         let err = store
-            .migrate_c2_to_c3(&c3, &sig, &user, climb_consent(xid))
+            .migrate_c2_to_c3(&c3, &sig, &user, climb_consent(xid), None)
             .await
             .unwrap_err();
         assert!(
@@ -745,7 +765,7 @@ mod tests {
         let bytes = encode_document(&c3).unwrap();
         let sig = ours.sign(&bytes).unwrap();
         let err = store
-            .migrate_c2_to_c3(&c3, &sig, &ours, climb_consent(xid))
+            .migrate_c2_to_c3(&c3, &sig, &ours, climb_consent(xid), None)
             .await
             .unwrap_err();
         assert!(
@@ -771,13 +791,114 @@ mod tests {
         let bytes = encode_document(&doc).unwrap();
         let sig = ours.sign(&bytes).unwrap();
         let err = store
-            .migrate_c2_to_c3(&doc, &sig, &ours, climb_consent(xid))
+            .migrate_c2_to_c3(&doc, &sig, &ours, climb_consent(xid), None)
             .await
             .unwrap_err();
         assert!(
             matches!(err, StoreError::Ceremony(CeremonyError::NotC2)),
             "unexpected error: {err}"
         );
+    }
+
+    async fn set_row_successor_digest(store: &KeysStore, xid: Xid, digest: &[u8]) {
+        sqlx::query("UPDATE custody_records SET successor_digest = $2 WHERE xid = $1")
+            .bind(xid.as_bytes().as_slice())
+            .bind(digest)
+            .execute(store.pool())
+            .await
+            .unwrap();
+    }
+
+    #[sqlx::test]
+    async fn migrate_skips_successor_digest_when_unset(pool: PgPool) {
+        use bc_components::Signer;
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &blob())
+            .await
+            .unwrap();
+        let c3 = c3_doc(&doc, &user, &ours);
+        let bytes = encode_document(&c3).unwrap();
+        let sig = user.sign(&bytes).unwrap();
+        store
+            .migrate_c2_to_c3(&c3, &sig, &user, climb_consent(xid), Some(b"unused"))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get_custody(xid).await.unwrap().unwrap().rung,
+            CustodyRung::C3
+        );
+    }
+
+    #[sqlx::test]
+    async fn migrate_accepts_matching_successor_digest(pool: PgPool) {
+        use bc_components::Signer;
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &blob())
+            .await
+            .unwrap();
+        let local = b"successor-public-or-cbor";
+        set_row_successor_digest(&store, xid, &crate::successor_digest(local)).await;
+        let c3 = c3_doc(&doc, &user, &ours);
+        let bytes = encode_document(&c3).unwrap();
+        let sig = user.sign(&bytes).unwrap();
+        store
+            .migrate_c2_to_c3(&c3, &sig, &user, climb_consent(xid), Some(local))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get_custody(xid).await.unwrap().unwrap().rung,
+            CustodyRung::C3
+        );
+    }
+
+    #[sqlx::test]
+    async fn migrate_refuses_mismatched_successor_digest(pool: PgPool) {
+        use bc_components::Signer;
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &blob())
+            .await
+            .unwrap();
+        set_row_successor_digest(&store, xid, &crate::successor_digest(b"generated-here")).await;
+        let c3 = c3_doc(&doc, &user, &ours);
+        let bytes = encode_document(&c3).unwrap();
+        let sig = user.sign(&bytes).unwrap();
+        let err = store
+            .migrate_c2_to_c3(
+                &c3,
+                &sig,
+                &user,
+                climb_consent(xid),
+                Some(b"suggested-by-us"),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                StoreError::Ceremony(CeremonyError::SuccessorDigestMismatch)
+            ),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            store.get_custody(xid).await.unwrap().unwrap().rung,
+            CustodyRung::C2
+        );
+        assert_eq!(store.has_managed_key(xid).await.unwrap(), Some(true));
     }
 
     #[sqlx::test]
@@ -860,7 +981,7 @@ mod tests {
         let bytes = encode_document(&c3).unwrap();
         let sig = user.sign(&bytes).unwrap();
         store
-            .migrate_c2_to_c3(&c3, &sig, user, climb_consent(xid))
+            .migrate_c2_to_c3(&c3, &sig, user, climb_consent(xid), None)
             .await
             .unwrap();
         c3

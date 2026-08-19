@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT xid_document, rung, successor_digest\n             FROM custody_records WHERE xid = $1 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "xid_document",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "custody_records",
+            "name": "xid_document"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "rung",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "custody_records",
+            "name": "rung"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "successor_digest",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "custody_records",
+            "name": "successor_digest"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "f7d79ff525e1b8d1b7a6612d9ce58c1b70aeaf081a6689f524bb719a72b3413f"
+}

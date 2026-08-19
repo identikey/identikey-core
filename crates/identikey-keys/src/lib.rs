@@ -80,7 +80,10 @@ pub mod rung;
 pub mod store;
 pub mod xid;
 
-pub use ceremony::{CeremonyError, check_resolution, held_publics, validate_c2_to_c3};
+pub use ceremony::{
+    CeremonyError, SUCCESSOR_DIGEST_LEN, check_resolution, held_publics, parse_successor_digest,
+    successor_digest, validate_c2_to_c3, verify_successor_digest,
+};
 pub use consent::{
     CONSENT_HASH_V1, ConsentHashInput, ConsentResult, ProofKind, hash_consent_entry, hash_proof,
 };
@@ -490,6 +493,44 @@ mod tests {
             err.to_string().contains("append-only"),
             "unexpected error: {err}"
         );
+    }
+
+    #[sqlx::test]
+    async fn successor_digest_must_be_32_bytes(pool: PgPool) {
+        insert_account(&pool, xid(13)).await;
+        let err = sqlx::query(
+            "INSERT INTO custody_records
+                (xid, rung, xid_document, managed_key_blob, successor_digest)
+             VALUES ($1, 'c2', $2, $3, $4)",
+        )
+        .bind(xid(13).as_bytes().as_slice())
+        .bind([1u8].as_slice())
+        .bind([9u8; 8].as_slice())
+        .bind([0u8; 31].as_slice())
+        .execute(&pool)
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("custody_successor_digest_len"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[sqlx::test]
+    async fn successor_digest_of_32_bytes_is_accepted(pool: PgPool) {
+        insert_account(&pool, xid(14)).await;
+        sqlx::query(
+            "INSERT INTO custody_records
+                (xid, rung, xid_document, managed_key_blob, successor_digest)
+             VALUES ($1, 'c2', $2, $3, $4)",
+        )
+        .bind(xid(14).as_bytes().as_slice())
+        .bind([1u8].as_slice())
+        .bind([9u8; 8].as_slice())
+        .bind([0u8; 32].as_slice())
+        .execute(&pool)
+        .await
+        .unwrap();
     }
 
     #[sqlx::test]

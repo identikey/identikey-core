@@ -1,16 +1,27 @@
 //! C2→C3 fail-closed checks (ADR-011). Persistence is [`crate::store`].
+//!
+//! Pre-rotation is off in v1 (`identikey-core-29v`). The 32-byte
+//! `custody_records.successor_digest` column is the commitment slot.
+//! A next-key digest assertion can be added to the XID document later
+//! without a format version bump: `bc-xid` preserves unrecognised
+//! assertions (`XIDDocument::extra_assertions`).
 
 use std::collections::HashSet;
 use std::net::IpAddr;
 
 use bc_components::{PublicKeys, PublicKeysProvider, Signature, Verifier};
 use bc_xid::{Privilege, XIDDocument};
+use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::privilege::{PrivilegeError, authorize_elect, is_c2, key_allows};
 use crate::rung::CustodyRung;
 use crate::xid::Xid;
 use bc_components::XIDProvider;
+
+/// Length of `custody_records.successor_digest`. Matches
+/// `CONSTRAINT custody_successor_digest_len CHECK (octet_length = 32)`.
+pub const SUCCESSOR_DIGEST_LEN: usize = 32;
 
 /// eTLD+1 we operate. A sibling or CNAME under these is still us.
 const OPERATOR_ETLD1: [&str; 2] = ["identikey.me", "identikey.io"];
@@ -53,6 +64,53 @@ pub enum CeremonyError {
     ProvenanceRequired,
     #[error("submitted document must not carry a provenance generator")]
     GeneratorNotAllowed,
+    #[error("successor digest must be {SUCCESSOR_DIGEST_LEN} bytes")]
+    SuccessorDigestLength,
+    #[error("published successor digest does not match the local successor key")]
+    SuccessorDigestMismatch,
+}
+
+/// SHA-256 of successor public-key bytes or their CBOR.
+///
+/// Same 32 bytes the column CHECK stores. A later next-key assertion on
+/// the XID document can carry this digest without a version bump.
+#[must_use]
+pub fn successor_digest(local_successor_public_or_cbor: &[u8]) -> [u8; SUCCESSOR_DIGEST_LEN] {
+    Sha256::digest(local_successor_public_or_cbor).into()
+}
+
+/// Accept only a 32-byte digest — the same rule as
+/// `CONSTRAINT custody_successor_digest_len`.
+///
+/// ```
+/// use identikey_keys::{parse_successor_digest, SUCCESSOR_DIGEST_LEN};
+/// assert!(parse_successor_digest(&[0u8; SUCCESSOR_DIGEST_LEN]).is_ok());
+/// assert!(parse_successor_digest(&[0u8; 31]).is_err());
+/// assert!(parse_successor_digest(&[0u8; 33]).is_err());
+/// ```
+pub fn parse_successor_digest(bytes: &[u8]) -> Result<[u8; SUCCESSOR_DIGEST_LEN], CeremonyError> {
+    bytes
+        .try_into()
+        .map_err(|_| CeremonyError::SuccessorDigestLength)
+}
+
+/// Client check before treating C2→C3 as complete (`identikey-core-4qd`).
+///
+/// ADR-011: the climb is Elect-gated by the user, not our key — still
+/// verify a published digest when one is set. `None` skips: v1 ships
+/// without pre-rotation (ADR-008).
+pub fn verify_successor_digest(
+    published: Option<&[u8; SUCCESSOR_DIGEST_LEN]>,
+    local_successor_public_or_cbor: &[u8],
+) -> Result<(), CeremonyError> {
+    let Some(published) = published else {
+        return Ok(());
+    };
+    if successor_digest(local_successor_public_or_cbor) == *published {
+        Ok(())
+    } else {
+        Err(CeremonyError::SuccessorDigestMismatch)
+    }
 }
 
 /// Sign+Auth keys on a C2 document are the keys we hold (blob is opaque).
@@ -198,6 +256,11 @@ fn check_provenance(stored: &XIDDocument, new_doc: &XIDDocument) -> Result<(), C
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "panicking on failure is the assertion in a test"
+)]
 mod tests {
     use super::*;
 
@@ -217,5 +280,43 @@ mod tests {
         assert!(is_local_or_private("10.0.0.1"));
         assert!(is_local_or_private("192.168.1.1"));
         assert!(!is_local_or_private("resolver.example"));
+    }
+
+    #[test]
+    fn successor_digest_column_length_is_32_bytes() {
+        assert_eq!(SUCCESSOR_DIGEST_LEN, 32);
+        assert!(parse_successor_digest(&[0u8; 32]).is_ok());
+        assert!(matches!(
+            parse_successor_digest(&[0u8; 31]),
+            Err(CeremonyError::SuccessorDigestLength)
+        ));
+        assert!(matches!(
+            parse_successor_digest(&[0u8; 33]),
+            Err(CeremonyError::SuccessorDigestLength)
+        ));
+        assert!(matches!(
+            parse_successor_digest(&[]),
+            Err(CeremonyError::SuccessorDigestLength)
+        ));
+    }
+
+    #[test]
+    fn verify_successor_digest_match_ok() {
+        let local = b"successor-public-or-cbor";
+        let published = successor_digest(local);
+        assert!(verify_successor_digest(Some(&published), local).is_ok());
+    }
+
+    #[test]
+    fn verify_successor_digest_mismatch_err() {
+        let published = successor_digest(b"generated-here");
+        let err = verify_successor_digest(Some(&published), b"suggested-by-us").unwrap_err();
+        assert_eq!(err, CeremonyError::SuccessorDigestMismatch);
+    }
+
+    #[test]
+    fn verify_successor_digest_none_skips() {
+        assert!(verify_successor_digest(None, b"anything").is_ok());
+        assert!(verify_successor_digest(None, &[]).is_ok());
     }
 }
