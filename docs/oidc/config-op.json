@@ -1,0 +1,7 @@
+{
+  "alias": "identikey",
+  "description": "IdentiKey Core Config OP",
+  "server": {
+    "discoveryUrl": "http://host.docker.internal:8080/.well-known/openid-configuration"
+  }
+}

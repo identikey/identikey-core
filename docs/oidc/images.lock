@@ -1,0 +1,13 @@
+# OIDF conformance-suite images. Re-pin is a deliberate commit.
+# Source: registry.gitlab.com/openid/conformance-suite
+# Compose shape: upstream docker-compose-prebuilt.yml
+
+TAG=release-v5.1.43
+SUITE=registry.gitlab.com/openid/conformance-suite
+NGINX=registry.gitlab.com/openid/conformance-suite/nginx
+MONGO=mongo:6.0.13
+
+# Digests from `docker pull` of TAG on 2026-08-19. Do not use :latest.
+SUITE_DIGEST=sha256:f6b1bb02bc746dd216506f773bc19997b113072fd22dec515f7e3357e218d950
+NGINX_DIGEST=sha256:6a13e1c9ae2d19f2d0fea0a371905d580d61b960e0da84c01d5006729a5f1426
+MONGO_DIGEST=sha256:b415b12f638e2685d06c58ab7fb5943577c50fadec6d9340ef67d21aeac72070

@@ -15,12 +15,12 @@
       localhost. No suite redirect URIs.
 - [x] Red Config OP fails the GitHub job. `continue-on-error`
       forbidden. That is in-scope property-red.
-- [ ] Documented Docker / `run-test-plan.py` command in-repo
-- [ ] CI runs `oidcc-config-certification-test-plan` against
+- [x] Documented Docker / `run-test-plan.py` command in-repo
+- [x] CI runs `oidcc-config-certification-test-plan` against
       local identikey-server
-- [ ] Suite is not a Cargo dependency
-- [ ] Job fails the build when Config OP is red
-- [ ] Tag + sha256 digest of suite and nginx images committed
+- [x] Suite is not a Cargo dependency
+- [x] Job fails the build when Config OP is red
+- [x] Tag + sha256 digest of suite and nginx images committed
 
 Not owed here (bullets, not boxes):
 
