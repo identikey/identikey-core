@@ -3,10 +3,11 @@
 Living truth for the OIDC projection in `identikey-oidc` and the
 routes on `identikey-server`. Folded from `add-pairwise-salt`,
 `add-sub-seam`, `add-oidc-endpoints`, `add-dev-authorize`,
-`add-refresh-lifecycle`, and `add-pairwise-export` (2026-08-18).
+`add-refresh-lifecycle`, and `add-pairwise-export` (2026-08-18),
+and `add-oidf-conformance` (2026-08-19).
 
 The refuse-list is `docs/oidc-implementation-checklist.md`. OIDF
-Basic OP + Config OP CI is still `add-oidf-conformance`.
+Basic OP waits on confidential clients.
 
 ### Requirement: Pairwise salt is install-generated and non-rotating
 
@@ -142,3 +143,26 @@ returned to clients. Export SHALL NOT write the salt to logs.
 - GIVEN a pairwise `sub` S issued to client C for XID H
 - WHEN a successor computes `sub` from the user’s export for C
 - THEN the result equals S
+
+### Requirement: Config OP is CI-gated
+
+CI SHALL run the OpenID Foundation **OIDC Config OP** plan
+(`oidcc-config-certification-test-plan`) against a local
+`identikey-server`. The suite SHALL NOT be a Rust crate
+dependency. A failing Config OP plan SHALL fail the build. CI
+SHALL NOT run OIDC Basic OP until confidential-client
+authentication exists.
+
+#### Scenario: Config OP hits discovery
+
+- GIVEN CI of this repository
+- WHEN the conformance job runs
+- THEN the Config OP plan GETs the server’s
+  `/.well-known/openid-configuration` from a URL reachable
+  inside the suite container
+
+#### Scenario: A red Config OP plan fails the build
+
+- GIVEN a Config OP test failure
+- WHEN the job finishes
+- THEN the workflow is failed

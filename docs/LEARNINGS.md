@@ -6,6 +6,10 @@ See morphist-tools `CONVENTIONS.md`.
 
 ---
 
+- 2026-08-19 — `last_advise_verdict` sorts review filenames. `YYYY-MM-DD-advise.md`
+  sorts *after* `YYYY-MM-DD-advise-2.md` (`-` < `.`), so a send-back kept
+  blocking accept-with-nits until a later dated file existed.
+  (`openspec/changes/archive/` after fold; ready `advise_status.py`)
 - 2026-08-18 — Advise send-back does not un-fold. First stop is classify
   which assumption died: instrument-only → amend the in-flight change
   (`/change` on that id); a folded SHALL is false → new change with
