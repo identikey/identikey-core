@@ -1,20 +1,24 @@
 ## ADDED Requirements
 
-### Requirement: Basic OP and Config OP are CI-gated
+### Requirement: Config OP is CI-gated
 
-CI SHALL run the OpenID Foundation **OIDC Basic OP** and **OIDC
-Config OP** plans against a local `identikey-server`. The suite SHALL
-NOT be a Rust crate dependency. A failing plan SHALL fail the build.
+CI SHALL run the OpenID Foundation **OIDC Config OP** plan
+(`oidcc-config-certification-test-plan`) against a local
+`identikey-server`. The suite SHALL NOT be a Rust crate
+dependency. A failing Config OP plan SHALL fail the build. CI
+SHALL NOT run OIDC Basic OP until confidential-client
+authentication exists.
 
 #### Scenario: Config OP hits discovery
 
 - GIVEN CI of this repository
 - WHEN the conformance job runs
-- THEN the Config OP plan executes against the server’s
-  `/.well-known/openid-configuration`
+- THEN the Config OP plan GETs the server’s
+  `/.well-known/openid-configuration` from a URL reachable
+  inside the suite container
 
-#### Scenario: A red plan fails the build
+#### Scenario: A red Config OP plan fails the build
 
-- GIVEN a Basic OP test failure
+- GIVEN a Config OP test failure
 - WHEN the job finishes
 - THEN the workflow is failed
