@@ -1,7 +1,8 @@
 # Tasks
 
-- [ ] Grant wire format written or cited (`identikey-protocol`
-      standards, or a draft path named here)
+- [ ] Grant wire format cited:
+      `identikey-protocol/docs/standards/identikey-oidc-urn-grant-v1.md`
+      (depend on `identikey-auth`; do not fork the wire)
 - [ ] `/token` accepts the URN grant with an `identikey-auth`
       `Response`
 - [ ] A WebAuthn assertion at this grant is refused; no tokens

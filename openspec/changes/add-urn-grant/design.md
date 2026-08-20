@@ -15,11 +15,12 @@ verifies the Response and mints; custody stays in `identikey-keys`
 
 ## Spec first
 
-The bead requires the grant spec in
-`identikey-protocol/docs/standards/` before implementation. If that
-file is not in this repo, this change's first owed box is to write
-or cite it (sibling repo or a draft under `docs/` that the protocol
-repo will take). Do not invent a second wire format.
+Grant spec is
+`identikey-protocol/docs/standards/identikey-oidc-urn-grant-v1.md`
+(2026-08-19). Proof bytes are
+`identikey-auth-challenge-v1.md` §8.1 (wallet or managed operator).
+Do not invent a second wire format. First owed box is cite-and-depend,
+not a new draft.
 
 ## Token minting
 

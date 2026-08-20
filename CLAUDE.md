@@ -49,13 +49,20 @@ JWK are created under `IDENTIKEY_DATA_DIR` on first boot. Boot fails
 closed without `WEBAUTHN_RP_ID` / `WEBAUTHN_EXPECTED_ORIGIN` (no
 wildcards). Config OP CI is `.github/workflows/oidf-config-op.yml`.
 
-Managed-key authentication (A4) is **not** code+PKCE. It is the URN
-grant `urn:identikey:params:oauth:grant-type:challenge-response`
-(`add-urn-grant` / `ccf.5`, still PENDING). Proof is an
-`identikey-auth` `Response` only (ADR-005); WebAuthn never satisfies
-it. The challenge spec already lives in sibling
-`identikey-protocol/docs/standards/identikey-auth-challenge-v1.md`;
-this repo does not yet depend on `identikey-auth`. C2 browser login
-to the OP is A3 passkeys (`add-passkey-ceremonies` / `5gh.1`), not
-the URN grant. `IDENTIKEY_DEV_LOGIN` is a stand-in for both. The
-stored `managed_key_blob` is not used to Sign yet.
+Two ways to get OIDC tokens, one proof format:
+
+- **Managed (C1/C2):** we hold Sign. A browser RP uses authorization-code
+  + PKCE. The user authenticates *to us* with A3 passkeys
+  (`add-passkey-ceremonies` / `5gh.1`). After that we may sign an
+  `identikey-auth` `Response` with `managed_key_blob`. Consent for that
+  use is the access credential, never our own Sign.
+- **Self-custody (C3/C4):** the wallet signs the `Response`. The RP
+  (or native client) presents it as
+  `grant_type=urn:identikey:params:oauth:grant-type:challenge-response`
+  (`add-urn-grant` / `ccf.5`, still PENDING).
+
+Protocol: sibling `identikey-protocol`
+`docs/standards/identikey-auth-challenge-v1.md` (§8.1 dual signer) and
+`docs/standards/identikey-oidc-urn-grant-v1.md`. This repo does not
+yet depend on `identikey-auth`. `IDENTIKEY_DEV_LOGIN` stands in for
+managed `/authorize`. The blob is not used to Sign yet.
