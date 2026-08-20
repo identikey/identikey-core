@@ -39,9 +39,9 @@ migrates, and refuses an Elect-denied document write. C2→C3 is
 `revoke_device`, no `devices` table, no `device_trust` / `is_master`.
 `identikey-oidc` is a code+PKCE OP (folded 2026-08-18): pairwise salt at
 boot, one `sub()` seam (HKDF-SHA-256), discovery/JWKS/authorize/token,
-hashed rotating refresh, and export of the salt. Login at `/authorize`
-is flag-gated (`IDENTIKEY_DEV_LOGIN=1`); production passkeys are
-`5gh.1`. Confidential clients authenticate at `/token` with
+hashed rotating refresh, and export of the salt. Login at `/authorize` is passkey assertion (folded
+`add-passkey-ceremonies` 2026-08-20); `/authorize/dev` remains
+flag-gated (`IDENTIKEY_DEV_LOGIN=1`). Confidential clients authenticate at `/token` with
 `client_secret_basic` / `client_secret_post` (secrets hashed;
 folded `add-confidential-clients` 2026-08-19). The URN grant
 `urn:identikey:params:oauth:grant-type:challenge-response` accepts

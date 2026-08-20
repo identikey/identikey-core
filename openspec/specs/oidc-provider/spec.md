@@ -5,7 +5,8 @@ routes on `identikey-server`. Folded from `add-pairwise-salt`,
 `add-sub-seam`, `add-oidc-endpoints`, `add-dev-authorize`,
 `add-refresh-lifecycle`, and `add-pairwise-export` (2026-08-18),
 `add-oidf-conformance`, `add-confidential-clients`, and
-`add-urn-grant` (2026-08-19).
+`add-urn-grant` (2026-08-19), and `add-passkey-ceremonies`
+(2026-08-20).
 
 The refuse-list is `docs/oidc-implementation-checklist.md`. OIDF
 Basic OP is documented locally and is not a required CI job.
@@ -216,3 +217,17 @@ seam. `identikey-oidc` SHALL NOT hold a user private key.
 - GIVEN a WebAuthn assertion bound to a passkey on the account
 - WHEN `/token` is called with the URN grant and that assertion
 - THEN the request fails and no tokens are issued
+
+### Requirement: Passkey assertion can finish /authorize
+
+When a user completes WebAuthn assertion during `/authorize` with
+valid PKCE, the system SHALL issue an authorization code to the
+registered redirect for that account's XID. A WebAuthn assertion
+SHALL NOT satisfy the URN grant.
+
+#### Scenario: Assertion issues a code
+
+- GIVEN a registered passkey on a stored XID and a valid authorize
+  request with PKCE S256
+- WHEN assertion verifies
+- THEN a code is issued to the registered redirect
