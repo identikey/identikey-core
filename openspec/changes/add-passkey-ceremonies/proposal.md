@@ -1,8 +1,8 @@
 # add-passkey-ceremonies
 
-> **PENDING**
+> **ACTIVE BUILD**
 
-Drafted from `identikey-core-5gh.1`. Unblocked: ADR-004 (`pdt`) and
+Activated from `identikey-core-5gh.1`. Unblocked: ADR-004 (`pdt`) and
 boot config (`62j`) / related origins (`2js`) have landed.
 
 **Rigor:** change
