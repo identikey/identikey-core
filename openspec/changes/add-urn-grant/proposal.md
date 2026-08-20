@@ -1,8 +1,8 @@
 # add-urn-grant
 
-> **PENDING**
+> **ACTIVE BUILD**
 
-Drafted from `identikey-core-ccf.5`. Unblocked: `identikey-core-h4p`
+Activated from `identikey-core-ccf.5`. Unblocked: `identikey-core-h4p`
 is closed (ADR-005).
 
 **Rigor:** change
