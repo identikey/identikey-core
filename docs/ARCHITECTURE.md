@@ -43,7 +43,10 @@ hashed rotating refresh, and export of the salt. Login at `/authorize`
 is flag-gated (`IDENTIKEY_DEV_LOGIN=1`); production passkeys are
 `5gh.1`. Confidential clients authenticate at `/token` with
 `client_secret_basic` / `client_secret_post` (secrets hashed;
-folded `add-confidential-clients` 2026-08-19). OIDF **Config OP**
+folded `add-confidential-clients` 2026-08-19). The URN grant
+`urn:identikey:params:oauth:grant-type:challenge-response` accepts
+only an `identikey-auth` `Response` (ADR-005; folded `add-urn-grant`
+2026-08-19); a WebAuthn assertion is refused. OIDF **Config OP**
 runs in CI (`.github/workflows/oidf-config-op.yml`). Basic OP is
 documented (`docs/oidc/basic-op.json`) and is not a required CI job.
 `web/` is *not* yet in place — the SvelteKit

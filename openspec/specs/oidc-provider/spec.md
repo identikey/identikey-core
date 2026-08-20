@@ -4,7 +4,8 @@ Living truth for the OIDC projection in `identikey-oidc` and the
 routes on `identikey-server`. Folded from `add-pairwise-salt`,
 `add-sub-seam`, `add-oidc-endpoints`, `add-dev-authorize`,
 `add-refresh-lifecycle`, and `add-pairwise-export` (2026-08-18),
-`add-oidf-conformance` and `add-confidential-clients` (2026-08-19).
+`add-oidf-conformance`, `add-confidential-clients`, and
+`add-urn-grant` (2026-08-19).
 
 The refuse-list is `docs/oidc-implementation-checklist.md`. OIDF
 Basic OP is documented locally and is not a required CI job.
@@ -194,3 +195,24 @@ PKCE `S256` SHALL still be required.
 - GIVEN a public client registered with `none`
 - WHEN `/token` is called with a valid code and matching verifier
 - THEN tokens are issued without a client secret
+
+### Requirement: URN grant accepts only identikey-auth Response
+
+`/token` SHALL accept
+`grant_type=urn:identikey:params:oauth:grant-type:challenge-response`
+with an `identikey-auth` `Response`. It SHALL refuse a WebAuthn
+assertion for this grant and SHALL NOT mint tokens in that case.
+Every issued `sub` SHALL be computed by the existing `subject()`
+seam. `identikey-oidc` SHALL NOT hold a user private key.
+
+#### Scenario: Valid Response mints tokens
+
+- GIVEN a stored XID and a valid `identikey-auth` Response for it
+- WHEN `/token` is called with the URN grant
+- THEN access and ID tokens are issued with `sub` from `subject()`
+
+#### Scenario: WebAuthn assertion is refused
+
+- GIVEN a WebAuthn assertion bound to a passkey on the account
+- WHEN `/token` is called with the URN grant and that assertion
+- THEN the request fails and no tokens are issued
