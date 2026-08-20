@@ -25,7 +25,7 @@ code (8628) is listed only to refuse it.
 Discovery MUST advertise:
 
 - `response_types_supported`: `["code"]`
-- `grant_types_supported`: `["authorization_code", "refresh_token"]`
+- `grant_types_supported`: `["authorization_code", "refresh_token", "urn:identikey:params:oauth:grant-type:challenge-response"]`
 - `code_challenge_methods_supported`: `["S256"]`
 - `subject_types_supported`: `["pairwise", "public"]` (ADR-009)
 - `id_token_signing_alg_values_supported`: `["EdDSA"]`
@@ -49,7 +49,7 @@ Quoted from RFC 9700 unless noted.
 | Open redirectors | **MUST NOT** (§2.1) |
 | Device code (RFC 8628) | Not this slice (hooking an app does not need it) |
 | Hybrid (`code id_token`, `code token`) | Not this slice |
-| URN grant | `ccf.5` — A4 only, never a WebAuthn assertion (ADR-005) |
+| URN grant | Implemented: identikey-auth `Response` only, never a WebAuthn assertion (ADR-005) |
 
 ## Pairwise KDF (ADR-009 left this open)
 

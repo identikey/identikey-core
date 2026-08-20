@@ -33,7 +33,11 @@ impl DiscoveryDocument {
             revocation_endpoint: format!("{base}/revoke"),
             introspection_endpoint: format!("{base}/introspect"),
             response_types_supported: vec!["code"],
-            grant_types_supported: vec!["authorization_code", "refresh_token"],
+            grant_types_supported: vec![
+                "authorization_code",
+                "refresh_token",
+                crate::provider::CHALLENGE_RESPONSE_GRANT,
+            ],
             code_challenge_methods_supported: vec!["S256"],
             subject_types_supported: vec!["pairwise", "public"],
             id_token_signing_alg_values_supported: vec!["EdDSA"],
@@ -72,6 +76,10 @@ mod tests {
         assert_eq!(
             doc.token_endpoint_auth_methods_supported,
             vec!["none", "client_secret_basic", "client_secret_post"]
+        );
+        assert!(
+            doc.grant_types_supported
+                .contains(&crate::provider::CHALLENGE_RESPONSE_GRANT)
         );
     }
 }

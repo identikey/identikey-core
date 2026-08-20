@@ -17,6 +17,9 @@ all-features = true
 # Deliberately permissive-plus-weak-copyleft. See the bans below for the line.
 allow = [
     "Apache-2.0",
+    # identikey-auth optional Linux TPM (tss-esapi-sys). Not compiled into
+    # identikey-oidc (enclave feature off). cargo-deny uses all-features.
+    "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-2-Clause-Patent",
     "BSD-3-Clause",
@@ -141,3 +144,6 @@ ignore = [
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+allow-git = [
+    "https://github.com/identikey/identikey-protocol",
+]

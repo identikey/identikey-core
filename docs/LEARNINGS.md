@@ -6,6 +6,11 @@ See morphist-tools `CONVENTIONS.md`.
 
 ---
 
+- 2026-08-19 — `identikey-auth` is a git dep on identikey-protocol (rev pin).
+  `cargo deny` `[sources] unknown-git = deny` needs an `allow-git` for that
+  repo. The Linux TPM stack is an `enclave` feature so CI does not need
+  libtss2; `all-features` still sees `Apache-2.0 WITH LLVM-exception`.
+  (`Cargo.toml`, `deny.toml`)
 - 2026-08-19 — RFC 6749 §2.3.1 HTTP Basic encodes `client_id` and
   `client_secret` with `application/x-www-form-urlencoded` *before*
   Base64 (`:` in an id becomes `%3A`). Decode after split-on-first-colon,

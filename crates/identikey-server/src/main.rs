@@ -13,7 +13,8 @@
 //!
 //! Not yet wired, each blocking on its own issue:
 //!
-//! - The URN grant (`identikey-core-ccf.5`).
+//! URN grant: `POST /challenge` then `POST /token` with
+//! `urn:identikey:params:oauth:grant-type:challenge-response`.
 //! - Static asset serving for `web/`.
 
 mod webauthn;
@@ -67,6 +68,7 @@ fn router(
         .route("/.well-known/jwks.json", get(jwks))
         .route("/.well-known/webauthn", get(well_known_webauthn))
         .route("/authorize", get(authorize))
+        .route("/challenge", get(challenge).post(challenge))
         .route("/token", post(token))
         .route("/userinfo", get(userinfo).post(userinfo))
         .route("/introspect", post(introspect))
@@ -220,6 +222,7 @@ struct TokenForm {
     client_secret: Option<String>,
     code_verifier: Option<String>,
     refresh_token: Option<String>,
+    response: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,6 +232,18 @@ struct TokenBody {
 
 async fn discovery(State(state): State<AppState>) -> Response {
     Json(state.provider.discovery()).into_response()
+}
+
+async fn challenge(State(state): State<AppState>) -> Response {
+    match state.provider.issue_challenge() {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/cbor")],
+            bytes,
+        )
+            .into_response(),
+        Err(err) => token_error(err, false),
+    }
 }
 
 async fn jwks(State(state): State<AppState>) -> Response {
@@ -445,6 +460,7 @@ async fn token(
         basic_client_secret,
         code_verifier: form.code_verifier,
         refresh_token: form.refresh_token,
+        response: form.response,
     };
     match state.provider.token(&req) {
         Ok(issued) => Json(issued).into_response(),
@@ -1324,6 +1340,98 @@ mod tests {
         assert_eq!(err["error"], "invalid_client");
         let desc = err["error_description"].as_str().unwrap_or("");
         assert!(!desc.contains("wrong"), "must not echo the secret: {desc}");
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn challenge_is_cbor(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let response = test_router(KeysStore::from_pool(pool))
+            .oneshot(
+                Request::builder()
+                    .uri("/challenge")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/cbor"
+        );
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(
+            identikey_auth::Challenge::from_bytes(&body).is_ok(),
+            "challenge body must be an identikey-auth Challenge"
+        );
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn token_urn_grant_mints_and_refuses_replay(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use identikey_auth::{Challenge, Signer, SoftwareSigner};
+        use identikey_keys::Xid;
+        use identikey_oidc::CHALLENGE_RESPONSE_GRANT;
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool);
+        let salt = PairwiseSalt::from_hex(&"ab".repeat(32)).unwrap();
+        let provider = Provider::generate("http://127.0.0.1:8080", salt).unwrap();
+        provider
+            .register(Client::new("smoke", "127.0.0.1").with_redirect("http://127.0.0.1:9999/cb"));
+        let signer = SoftwareSigner::generate_ed25519();
+        let xid = Xid::from_bytes([0x11; 32]);
+        provider.register_subject(&signer.classical_public_key(), xid);
+        let chal = Challenge::from_bytes(&provider.issue_challenge().unwrap()).unwrap();
+        let encoded = {
+            use base64::Engine;
+            use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+            URL_SAFE_NO_PAD.encode(signer.respond(&chal).unwrap().to_bytes())
+        };
+        let app = router(store, Arc::new(provider), false, test_webauthn());
+        let form =
+            format!("grant_type={CHALLENGE_RESPONSE_GRANT}&client_id=smoke&response={encoded}");
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/token")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(form.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let body = body::to_bytes(first.into_body(), usize::MAX).await.unwrap();
+        let issued: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(issued["access_token"].as_str().unwrap().len() > 8);
+        assert!(issued["id_token"].as_str().unwrap().contains('.'));
+
+        let replay = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/token")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(form))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(replay.status(), StatusCode::BAD_REQUEST);
+        let replay_body = body::to_bytes(replay.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: serde_json::Value = serde_json::from_slice(&replay_body).unwrap();
+        assert_eq!(err["error"], "invalid_grant");
     }
 
     const VERIFIER: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";

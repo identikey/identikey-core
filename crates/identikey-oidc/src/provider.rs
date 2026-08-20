@@ -2,10 +2,14 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use identikey_auth::{
+    AuthError, ChallengeIssuer, ClassicalPublicKey, InMemoryNonceStore, VerifyPolicy,
+    verify_response,
+};
 use identikey_keys::Xid;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -19,6 +23,12 @@ use crate::subject::{Client, TokenEndpointAuthMethod, hash_client_secret, subjec
 const CODE_TTL: Duration = Duration::from_secs(600);
 const ACCESS_TTL: Duration = Duration::from_secs(3600);
 const ACCESS_TTL_SECS: u64 = 3600;
+const CHALLENGE_TTL_SECS: u64 = 120;
+const CHALLENGE_SKEW_SECS: u64 = 30;
+
+/// RFC 6749 grant_type for an identikey-auth Response.
+pub const CHALLENGE_RESPONSE_GRANT: &str =
+    "urn:identikey:params:oauth:grant-type:challenge-response";
 
 /// Validated `/authorize` request. Completing login (`issue_code`) is
 /// `add-dev-authorize`; this change only validates and can mint a code
@@ -56,6 +66,8 @@ pub struct TokenRequest {
     pub basic_client_secret: Option<String>,
     pub code_verifier: Option<String>,
     pub refresh_token: Option<String>,
+    /// Unpadded base64url of identikey-auth Response bytes (URN grant).
+    pub response: Option<String>,
 }
 
 impl std::fmt::Debug for TokenRequest {
@@ -79,6 +91,7 @@ impl std::fmt::Debug for TokenRequest {
                 "refresh_token",
                 &self.refresh_token.as_ref().map(|_| "[redacted]"),
             )
+            .field("response", &self.response.as_ref().map(|_| "[redacted]"))
             .finish()
     }
 }
@@ -141,6 +154,10 @@ pub struct Provider {
     access: Mutex<HashMap<String, AccessGrant>>,
     /// SHA-256 of the refresh token → grant. The raw token is never stored.
     refresh: Mutex<HashMap<[u8; 32], RefreshGrant>>,
+    challenges: ChallengeIssuer,
+    nonces: Mutex<InMemoryNonceStore>,
+    /// identikey-auth public key (alg + bytes) → XID. Never a user private key.
+    subjects: Mutex<HashMap<Vec<u8>, Xid>>,
 }
 
 impl std::fmt::Debug for Provider {
@@ -156,14 +173,18 @@ impl std::fmt::Debug for Provider {
 impl Provider {
     #[must_use]
     pub fn new(issuer: impl Into<String>, signing: SigningKey, salt: PairwiseSalt) -> Self {
+        let issuer = issuer.into().trim_end_matches('/').to_owned();
         Self {
-            issuer: issuer.into().trim_end_matches('/').to_owned(),
+            challenges: ChallengeIssuer::new(issuer.clone(), CHALLENGE_TTL_SECS),
+            issuer,
             signing,
             salt,
             clients: Mutex::new(HashMap::new()),
             codes: Mutex::new(HashMap::new()),
             access: Mutex::new(HashMap::new()),
             refresh: Mutex::new(HashMap::new()),
+            nonces: Mutex::new(InMemoryNonceStore::new()),
+            subjects: Mutex::new(HashMap::new()),
         }
     }
 
@@ -176,6 +197,23 @@ impl Provider {
         if let Ok(mut clients) = self.clients.lock() {
             clients.insert(client.id.clone(), client);
         }
+    }
+
+    /// Bind an identikey-auth public key to a stored XID. The OP still
+    /// never holds the matching private key.
+    pub fn register_subject(&self, public_key: &ClassicalPublicKey, xid: Xid) {
+        if let Ok(mut subjects) = self.subjects.lock() {
+            subjects.insert(subject_key(public_key), xid);
+        }
+    }
+
+    /// Issue a verifier-owned Challenge (`aud` = this issuer). Bytes are
+    /// canonical dCBOR per identikey-auth-challenge-v1.
+    pub fn issue_challenge(&self) -> Result<Vec<u8>, OidcError> {
+        let now = unix_now()?;
+        let mut nonces = lock(&self.nonces)?;
+        let challenge = self.challenges.issue(&mut *nonces, now);
+        Ok(challenge.to_bytes())
     }
 
     #[must_use]
@@ -316,6 +354,7 @@ impl Provider {
                 "resource owner password is refused",
             )),
             Some("refresh_token") => self.exchange_refresh(req),
+            Some(CHALLENGE_RESPONSE_GRANT) => self.exchange_urn(req),
             _ => Err(OidcError::invalid_request("grant_type is required")),
         }
     }
@@ -398,6 +437,46 @@ impl Provider {
         let mut refresh = lock(&self.refresh)?;
         refresh.remove(&hash_token(token));
         Ok(())
+    }
+
+    fn exchange_urn(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
+        let client_id = request_client_id(req)?;
+        let client = self.authenticate(req, client_id)?;
+        let encoded = req
+            .response
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| OidcError::invalid_request("response is required"))?;
+        let bytes = URL_SAFE_NO_PAD.decode(encoded.as_bytes()).map_err(|_| {
+            OidcError::invalid_grant("response is not a valid identikey-auth Response")
+        })?;
+        let parsed = identikey_auth::Response::from_bytes(&bytes).map_err(|_| {
+            OidcError::invalid_grant("response is not a valid identikey-auth Response")
+        })?;
+        let now = unix_now()?;
+        let mut nonces = lock(&self.nonces)?;
+        let verified = verify_response(
+            &parsed,
+            &self.issuer,
+            now,
+            CHALLENGE_SKEW_SECS,
+            VerifyPolicy::PqOptional,
+            &mut *nonces,
+        )
+        .map_err(auth_to_oidc)?;
+        drop(nonces);
+        let xid = self
+            .subject_for(&verified.public_key)
+            .ok_or_else(|| OidcError::invalid_grant("unknown subject"))?;
+        self.mint_tokens(&client.id, xid, None)
+    }
+
+    fn subject_for(&self, public_key: &ClassicalPublicKey) -> Option<Xid> {
+        self.subjects
+            .lock()
+            .ok()?
+            .get(&subject_key(public_key))
+            .copied()
     }
 
     fn exchange_code(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
@@ -746,6 +825,32 @@ fn from_hex_digit(b: u8) -> Option<u8> {
     }
 }
 
+fn unix_now() -> Result<u64, OidcError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|_| OidcError::server_error("clock before epoch"))
+}
+
+fn subject_key(public_key: &ClassicalPublicKey) -> Vec<u8> {
+    let tag = public_key.alg.tag().as_bytes();
+    let mut key = Vec::with_capacity(tag.len() + 1 + public_key.bytes.len());
+    key.extend_from_slice(tag);
+    key.push(0);
+    key.extend_from_slice(&public_key.bytes);
+    key
+}
+
+fn auth_to_oidc(err: AuthError) -> OidcError {
+    match err {
+        AuthError::NonceReplay => OidcError::invalid_grant("nonce replay"),
+        AuthError::Audience | AuthError::TimeWindow | AuthError::BadSignature => {
+            OidcError::invalid_grant("identikey-auth verification failed")
+        }
+        _ => OidcError::invalid_grant("response is not a valid identikey-auth Response"),
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, OidcError> {
     mutex
         .lock()
@@ -920,6 +1025,7 @@ mod tests {
             basic_client_secret: None,
             code_verifier: Some(VERIFIER.into()),
             refresh_token: None,
+            response: None,
         };
         let first = p.token(&req).unwrap();
         assert!(!first.access_token.is_empty());
@@ -945,6 +1051,7 @@ mod tests {
                 basic_client_secret: None,
                 code_verifier: None,
                 refresh_token: None,
+                response: None,
             })
             .unwrap_err();
         assert_eq!(err.error, "invalid_request");
@@ -961,6 +1068,7 @@ mod tests {
                 basic_client_secret: None,
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
+                response: None,
             })
             .unwrap_err();
         assert_eq!(err.error, "invalid_grant");
@@ -998,6 +1106,7 @@ mod tests {
                 basic_client_secret: None,
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
+                response: None,
             })
             .unwrap();
         let t1 = first.refresh_token.clone().unwrap();
@@ -1014,6 +1123,7 @@ mod tests {
                 basic_client_secret: None,
                 code_verifier: None,
                 refresh_token: Some(t1.clone()),
+                response: None,
             })
             .unwrap();
         let t2 = second.refresh_token.clone().unwrap();
@@ -1031,6 +1141,7 @@ mod tests {
                 basic_client_secret: None,
                 code_verifier: None,
                 refresh_token: Some(t1),
+                response: None,
             })
             .unwrap_err();
         assert_eq!(replay.error, "invalid_grant");
@@ -1052,6 +1163,7 @@ mod tests {
                 basic_client_secret: None,
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
+                response: None,
             })
             .unwrap();
         let refresh = issued.refresh_token.unwrap();
@@ -1069,6 +1181,7 @@ mod tests {
                 basic_client_secret: None,
                 code_verifier: None,
                 refresh_token: Some(refresh),
+                response: None,
             })
             .unwrap_err();
         assert_eq!(err.error, "invalid_grant");
@@ -1140,6 +1253,7 @@ mod tests {
                 basic_client_secret: Some("wrong".into()),
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
+                response: None,
             })
             .unwrap_err();
         assert_eq!(err.error, "invalid_client");
@@ -1155,6 +1269,7 @@ mod tests {
                 basic_client_secret: Some("basic-secret".into()),
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
+                response: None,
             })
             .unwrap();
         assert!(!issued.access_token.is_empty());
@@ -1176,6 +1291,7 @@ mod tests {
                 basic_client_secret: None,
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
+                response: None,
             })
             .unwrap();
         assert!(!issued.access_token.is_empty());
@@ -1197,6 +1313,7 @@ mod tests {
                 basic_client_secret: None,
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
+                response: None,
             })
             .unwrap_err();
         assert_eq!(err.error, "invalid_client");
@@ -1218,6 +1335,7 @@ mod tests {
                 basic_client_secret: None,
                 code_verifier: None,
                 refresh_token: None,
+                response: None,
             })
             .unwrap_err();
         assert_eq!(err.error, "invalid_request");
@@ -1239,6 +1357,7 @@ mod tests {
                 basic_client_secret: None,
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
+                response: None,
             })
             .unwrap();
         assert!(!issued.access_token.is_empty());
@@ -1250,5 +1369,59 @@ mod tests {
         let (id, secret) = parse_http_basic(&raw).unwrap().unwrap();
         assert_eq!(id, "client:id");
         assert_eq!(secret, "sec:ret");
+    }
+
+    fn urn_signed(p: &Provider) -> (identikey_auth::SoftwareSigner, String) {
+        use identikey_auth::{Challenge, Signer};
+        let signer = identikey_auth::SoftwareSigner::generate_ed25519();
+        p.register_subject(&signer.classical_public_key(), xid());
+        let chal = Challenge::from_bytes(&p.issue_challenge().unwrap()).unwrap();
+        let resp = signer.respond(&chal).unwrap();
+        (signer, URL_SAFE_NO_PAD.encode(resp.to_bytes()))
+    }
+
+    fn urn_req(encoded: String) -> TokenRequest {
+        TokenRequest {
+            grant_type: Some(CHALLENGE_RESPONSE_GRANT.into()),
+            client_id: Some("smoke".into()),
+            response: Some(encoded),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn urn_grant_mints_through_subject_seam() {
+        let p = provider();
+        let (_signer, encoded) = urn_signed(&p);
+        let issued = p.token(&urn_req(encoded)).unwrap();
+        let expected = subject(
+            &PairwiseSalt::from_hex(&"ab".repeat(32)).unwrap(),
+            xid(),
+            &Client::new("smoke", "127.0.0.1").with_redirect("http://127.0.0.1:9999/cb"),
+        )
+        .unwrap();
+        let info = p.userinfo(&issued.access_token).unwrap();
+        assert_eq!(info.sub, expected);
+    }
+
+    #[test]
+    fn urn_grant_refuses_webauthn_assertion() {
+        let p = provider();
+        let fake = URL_SAFE_NO_PAD.encode(
+            br#"{"id":"cred","response":{"authenticatorData":"AA","clientDataJSON":"AA","signature":"AA"}}"#,
+        );
+        let err = p.token(&urn_req(fake)).unwrap_err();
+        assert_eq!(err.error, "invalid_grant");
+    }
+
+    #[test]
+    fn urn_grant_refuses_nonce_replay() {
+        let p = provider();
+        let (_signer, encoded) = urn_signed(&p);
+        let first = p.token(&urn_req(encoded.clone())).unwrap();
+        assert!(!first.access_token.is_empty());
+        let replay = p.token(&urn_req(encoded)).unwrap_err();
+        assert_eq!(replay.error, "invalid_grant");
+        assert!(replay.description.contains("replay"));
     }
 }
