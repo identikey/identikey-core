@@ -4,10 +4,10 @@ Living truth for the OIDC projection in `identikey-oidc` and the
 routes on `identikey-server`. Folded from `add-pairwise-salt`,
 `add-sub-seam`, `add-oidc-endpoints`, `add-dev-authorize`,
 `add-refresh-lifecycle`, and `add-pairwise-export` (2026-08-18),
-and `add-oidf-conformance` (2026-08-19).
+`add-oidf-conformance` and `add-confidential-clients` (2026-08-19).
 
 The refuse-list is `docs/oidc-implementation-checklist.md`. OIDF
-Basic OP waits on confidential clients.
+Basic OP is documented locally and is not a required CI job.
 
 ### Requirement: Pairwise salt is install-generated and non-rotating
 
@@ -62,7 +62,9 @@ NOT be used as a database primary key.
 token-signing key. Discovery SHALL advertise `response_types_supported`
 containing `code` only, `code_challenge_methods_supported` containing
 `S256`, and `subject_types_supported` containing `pairwise` and
-`public`. It SHALL NOT advertise implicit or password grants.
+`public`. It SHALL advertise `token_endpoint_auth_methods_supported`
+containing `none`, `client_secret_basic`, and `client_secret_post`.
+It SHALL NOT advertise implicit or password grants.
 
 #### Scenario: Discovery names code and S256
 
@@ -70,6 +72,13 @@ containing `code` only, `code_challenge_methods_supported` containing
 - WHEN `GET /.well-known/openid-configuration` is called
 - THEN the document includes `authorization_endpoint`, `token_endpoint`,
   `jwks_uri`, `code`, and `S256`, and does not list `token` or `password`
+
+#### Scenario: Discovery names confidential client auth
+
+- GIVEN a booted server
+- WHEN discovery is fetched
+- THEN `token_endpoint_auth_methods_supported` includes
+  `client_secret_basic` and `client_secret_post`
 
 ### Requirement: Authorization code with PKCE
 
@@ -150,8 +159,8 @@ CI SHALL run the OpenID Foundation **OIDC Config OP** plan
 (`oidcc-config-certification-test-plan`) against a local
 `identikey-server`. The suite SHALL NOT be a Rust crate
 dependency. A failing Config OP plan SHALL fail the build. CI
-SHALL NOT run OIDC Basic OP until confidential-client
-authentication exists.
+SHALL NOT run OIDC Basic OP as a required job until that plan
+is green locally.
 
 #### Scenario: Config OP hits discovery
 
@@ -166,3 +175,22 @@ authentication exists.
 - GIVEN a Config OP test failure
 - WHEN the job finishes
 - THEN the workflow is failed
+
+### Requirement: Confidential clients authenticate at /token
+
+A confidential client SHALL present its secret via HTTP Basic or
+`client_secret_post`. The system SHALL store only a hash of the
+secret. A wrong or missing secret SHALL fail as `invalid_client`.
+PKCE `S256` SHALL still be required.
+
+#### Scenario: Wrong secret is refused
+
+- GIVEN a confidential client
+- WHEN `/token` is called with a valid code and the wrong secret
+- THEN the response is `invalid_client` and no tokens are issued
+
+#### Scenario: Public client still uses PKCE only
+
+- GIVEN a public client registered with `none`
+- WHEN `/token` is called with a valid code and matching verifier
+- THEN tokens are issued without a client secret

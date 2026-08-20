@@ -41,9 +41,11 @@ migrates, and refuses an Elect-denied document write. C2→C3 is
 boot, one `sub()` seam (HKDF-SHA-256), discovery/JWKS/authorize/token,
 hashed rotating refresh, and export of the salt. Login at `/authorize`
 is flag-gated (`IDENTIKEY_DEV_LOGIN=1`); production passkeys are
-`5gh.1`. OIDF **Config OP** runs in CI
-(`.github/workflows/oidf-config-op.yml`, folded `add-oidf-conformance`
-2026-08-19). Basic OP waits on confidential clients.
+`5gh.1`. Confidential clients authenticate at `/token` with
+`client_secret_basic` / `client_secret_post` (secrets hashed;
+folded `add-confidential-clients` 2026-08-19). OIDF **Config OP**
+runs in CI (`.github/workflows/oidf-config-op.yml`). Basic OP is
+documented (`docs/oidc/basic-op.json`) and is not a required CI job.
 `web/` is *not* yet in place — the SvelteKit
 app is still at the repository root, frozen at tag `pre-rust-pivot`. Relocating
 it is `identikey-core-ccf.11`.
