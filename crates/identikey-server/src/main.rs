@@ -8,7 +8,8 @@
 //! (`GET /.well-known/webauthn`, `identikey-core-2js`), and the OIDC
 //! code+PKCE surface (`add-oidc-endpoints`) including confidential
 //! clients (`add-confidential-clients`). Login at `/authorize` is
-//! `add-dev-authorize`. WebAuthn RP ID / origin allowlist fails closed
+//! passkey assertion (`add-passkey-ceremonies`); `/authorize/dev` is
+//! flag-gated. WebAuthn RP ID / origin allowlist fails closed
 //! at boot (`identikey-core-62j`).
 //!
 //! Not yet wired, each blocking on its own issue:
@@ -17,6 +18,7 @@
 //! `urn:identikey:params:oauth:grant-type:challenge-response`.
 //! - Static asset serving for `web/`.
 
+mod ceremonies;
 mod webauthn;
 
 use std::net::SocketAddr;
@@ -44,8 +46,8 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 struct AppState {
     store: KeysStore,
     provider: Arc<Provider>,
-    dev_login: bool,
     webauthn: WebAuthnConfig,
+    ceremonies: Arc<ceremonies::CeremonyHub>,
 }
 
 /// Liveness only. This must not grow into a readiness check that reports on the
@@ -61,6 +63,7 @@ fn router(
     dev_login: bool,
     webauthn: WebAuthnConfig,
 ) -> Router {
+    let ceremonies = Arc::new(ceremonies::CeremonyHub::from_config(&webauthn));
     let mut routes = Router::new()
         .route("/health", get(health))
         .route("/.well-known/xid/{xid}", get(xid_document))
@@ -68,6 +71,14 @@ fn router(
         .route("/.well-known/jwks.json", get(jwks))
         .route("/.well-known/webauthn", get(well_known_webauthn))
         .route("/authorize", get(authorize))
+        .route(
+            "/authorize/passkey",
+            get(passkey_login_page).post(passkey_login_finish),
+        )
+        .route("/webauthn/register/begin", post(register_begin))
+        .route("/webauthn/register/finish", post(register_finish))
+        .route("/webauthn/assert/begin", post(assert_begin))
+        .route("/webauthn/assert/finish", post(assert_finish))
         .route("/challenge", get(challenge).post(challenge))
         .route("/token", post(token))
         .route("/userinfo", get(userinfo).post(userinfo))
@@ -83,8 +94,8 @@ fn router(
     routes.with_state(AppState {
         store,
         provider,
-        dev_login,
         webauthn,
+        ceremonies,
     })
 }
 
@@ -234,6 +245,175 @@ async fn discovery(State(state): State<AppState>) -> Response {
     Json(state.provider.discovery()).into_response()
 }
 
+fn ceremony_http(err: ceremonies::CeremonyError) -> Response {
+    oauth_error(StatusCode::BAD_REQUEST, "invalid_request", &err.to_string())
+}
+
+async fn register_begin(
+    State(state): State<AppState>,
+    Json(body): Json<ceremonies::RegisterBegin>,
+) -> Response {
+    let Ok(xid) = Xid::from_hex(&body.xid) else {
+        return ceremony_http(ceremonies::CeremonyError::UnknownAccount);
+    };
+    match state.ceremonies.begin_register(&state.store, xid).await {
+        Ok((session, public_key)) => Json(ceremonies::CeremonyOptions {
+            session,
+            public_key,
+        })
+        .into_response(),
+        Err(err) => ceremony_http(err),
+    }
+}
+
+async fn register_finish(
+    State(state): State<AppState>,
+    Json(body): Json<ceremonies::RegisterFinish>,
+) -> Response {
+    let Ok(xid) = Xid::from_hex(&body.xid) else {
+        return ceremony_http(ceremonies::CeremonyError::UnknownAccount);
+    };
+    match state
+        .ceremonies
+        .finish_register(&state.store, &body.session, xid, body.credential)
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => ceremony_http(err),
+    }
+}
+
+async fn assert_begin(
+    State(state): State<AppState>,
+    Json(body): Json<ceremonies::AssertBegin>,
+) -> Response {
+    let xid = match body.xid.as_deref() {
+        Some(hex) => match Xid::from_hex(hex) {
+            Ok(xid) => Some(xid),
+            Err(_) => return ceremony_http(ceremonies::CeremonyError::UnknownAccount),
+        },
+        None => None,
+    };
+    match state.ceremonies.begin_assert(&state.store, xid, None).await {
+        Ok((session, public_key)) => Json(ceremonies::CeremonyOptions {
+            session,
+            public_key,
+        })
+        .into_response(),
+        Err(err) => ceremony_http(err),
+    }
+}
+
+async fn assert_finish(
+    State(state): State<AppState>,
+    Json(body): Json<ceremonies::AssertFinish>,
+) -> Response {
+    match state
+        .ceremonies
+        .finish_assert(&state.store, &body.session, body.credential)
+        .await
+    {
+        Ok((xid, pending)) => {
+            if let Some(pending) = pending {
+                return issue_authorize_code(&state, pending, xid);
+            }
+            Json(serde_json::json!({ "xid": xid.to_string() })).into_response()
+        }
+        Err(err) => ceremony_http(err),
+    }
+}
+
+fn issue_authorize_code(
+    state: &AppState,
+    pending: identikey_oidc::PendingAuthorization,
+    xid: Xid,
+) -> Response {
+    match state.provider.issue_code(&pending, xid) {
+        Ok(code) => redirect_with_code(&pending.redirect_uri, &code, pending.state.as_deref()),
+        Err(err) => token_error(err, false),
+    }
+}
+
+async fn passkey_login_page(
+    State(state): State<AppState>,
+    Query(params): Query<AuthorizeParams>,
+) -> Response {
+    let query = authorize_query(&params);
+    let pending = match state.provider.validate_authorize(&query) {
+        Ok(pending) => pending,
+        Err(AuthorizeError::Redirect {
+            uri,
+            error,
+            description,
+            state,
+        }) => return redirect_with_error(&uri, error, &description, state.as_deref()),
+        Err(AuthorizeError::Deny { error, description }) => {
+            return oauth_error(StatusCode::BAD_REQUEST, error, &description);
+        }
+    };
+    let xid = params_xid_from_query(&params);
+    match state
+        .ceremonies
+        .begin_assert(&state.store, xid, Some(pending))
+        .await
+    {
+        Ok((session, public_key)) => {
+            let options = serde_json::json!({
+                "session": session,
+                "publicKey": public_key,
+            });
+            let body = format!(
+                "<!doctype html><html><body>\
+                 <p>Use your passkey</p>\
+                 <pre id=\"opts\">{}</pre>\
+                 <script>\
+                 const opts = JSON.parse(document.getElementById('opts').textContent);\
+                 const decode = t => Uint8Array.from(atob(t.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0));\
+                 const pk = opts.publicKey;\
+                 pk.challenge = decode(pk.challenge);\
+                 if (pk.allowCredentials) for (const c of pk.allowCredentials) c.id = decode(c.id);\
+                 navigator.credentials.get({{ publicKey: pk }}).then(async cred => {{\
+                   const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');\
+                   const body = {{\
+                     session: opts.session,\
+                     credential: {{\
+                       id: cred.id, rawId: b64(cred.rawId), type: cred.type,\
+                       response: {{\
+                         clientDataJSON: b64(cred.response.clientDataJSON),\
+                         authenticatorData: b64(cred.response.authenticatorData),\
+                         signature: b64(cred.response.signature),\
+                         userHandle: cred.response.userHandle ? b64(cred.response.userHandle) : null\
+                       }}\
+                     }}\
+                   }};\
+                   const res = await fetch('/webauthn/assert/finish', {{ method: 'POST', headers: {{'content-type':'application/json'}}, body: JSON.stringify(body), redirect: 'follow' }});\
+                   if (res.redirected) location = res.url; else document.body.textContent = await res.text();\
+                 }}).catch(e => {{ document.body.textContent = e; }});\
+                 </script></body></html>",
+                html_escape(&options.to_string()),
+            );
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                body,
+            )
+                .into_response()
+        }
+        Err(err) => ceremony_http(err),
+    }
+}
+
+async fn passkey_login_finish(
+    State(state): State<AppState>,
+    Json(body): Json<ceremonies::AssertFinish>,
+) -> Response {
+    assert_finish(State(state), Json(body)).await
+}
+
+fn params_xid_from_query(_params: &AuthorizeParams) -> Option<Xid> {
+    None
+}
+
 async fn challenge(State(state): State<AppState>) -> Response {
     match state.provider.issue_challenge() {
         Ok(bytes) => (
@@ -263,9 +443,9 @@ async fn authorize(
 ) -> Response {
     let query = authorize_query(&params);
     match state.provider.validate_authorize(&query) {
-        Ok(_) if state.dev_login => {
+        Ok(_) => {
             let suffix = uri.query().unwrap_or("");
-            let location = format!("/authorize/dev?{suffix}");
+            let location = format!("/authorize/passkey?{suffix}");
             match HeaderValue::from_str(&location) {
                 Ok(value) => (StatusCode::FOUND, [(header::LOCATION, value)]).into_response(),
                 Err(_) => oauth_error(
@@ -275,7 +455,6 @@ async fn authorize(
                 ),
             }
         }
-        Ok(_) => (StatusCode::UNAUTHORIZED, "authentication required").into_response(),
         Err(AuthorizeError::Redirect {
             uri,
             error,
@@ -1432,6 +1611,323 @@ mod tests {
             .unwrap();
         let err: serde_json::Value = serde_json::from_slice(&replay_body).unwrap();
         assert_eq!(err["error"], "invalid_grant");
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn authorize_with_pkce_redirects_to_passkey(pool: sqlx::PgPool) {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let challenge = s256_challenge(VERIFIER);
+        let response = test_router(KeysStore::from_pool(pool))
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/authorize?{}", authorize_qs(&challenge)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FOUND);
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            location.starts_with("/authorize/passkey?"),
+            "expected passkey login redirect, got {location}"
+        );
+        assert!(location.contains("code_challenge="));
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn register_begin_unknown_xid_creates_nothing(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use identikey_keys::Xid;
+        use tower::ServiceExt;
+
+        let missing = Xid::from_bytes([0xAB; 32]);
+        let store = KeysStore::from_pool(pool);
+        let app = test_router(store.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webauthn/register/begin")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"xid":"{missing}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(store.get_account(missing).await.unwrap().is_none());
+        let _ = body::to_bytes(response.into_body(), usize::MAX).await;
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn register_options_match_rp_id_and_stable_user_id(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use bc_components::PrivateKeyBase;
+        use identikey_keys::{CustodyRung, c2_native};
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &[0x51, 0x47])
+            .await
+            .unwrap();
+        let app = test_router(store);
+        let body = format!(r#"{{"xid":"{xid}"}}"#);
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webauthn/register/begin")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_json: serde_json::Value =
+            serde_json::from_slice(&body::to_bytes(first.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(first_json["publicKey"]["rp"]["id"], "auth.identikey.me");
+        assert_eq!(first_json["publicKey"]["rp"]["name"], "IdentiKey");
+        let user_id = first_json["publicKey"]["user"]["id"].clone();
+        assert!(!user_id.is_null());
+
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webauthn/register/begin")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let second_json: serde_json::Value = serde_json::from_slice(
+            &body::to_bytes(second.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(second_json["publicKey"]["user"]["id"], user_id);
+        assert_ne!(first_json["session"], second_json["session"]);
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn register_finish_garbage_does_not_store(pool: sqlx::PgPool) {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use bc_components::PrivateKeyBase;
+        use identikey_keys::{CustodyRung, c2_native};
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &[0x51, 0x47])
+            .await
+            .unwrap();
+        let app = test_router(store.clone());
+        let begin = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webauthn/register/begin")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"xid":"{xid}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let begin_json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(begin.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let session = begin_json["session"].as_str().unwrap();
+        let finish = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webauthn/register/finish")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"session":"{session}","xid":"{xid}","credential":{{"id":"x","rawId":"AA","type":"public-key","response":{{"clientDataJSON":"e30","attestationObject":"AA"}}}}}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(finish.status(), StatusCode::BAD_REQUEST);
+        assert!(store.list_passkeys(xid).await.unwrap().is_empty());
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn assert_unknown_credential_creates_no_account(pool: sqlx::PgPool) {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use identikey_keys::Xid;
+        use tower::ServiceExt;
+
+        let missing = Xid::from_bytes([0xCD; 32]);
+        let store = KeysStore::from_pool(pool);
+        let app = test_router(store.clone());
+        let begin = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webauthn/assert/begin")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(begin.status(), StatusCode::OK);
+        let begin_json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(begin.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let session = begin_json["session"].as_str().unwrap();
+        let finish = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webauthn/assert/finish")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"session":"{session}","credential":{{"id":"nope","rawId":"AA","type":"public-key","response":{{"clientDataJSON":"e30","authenticatorData":"AA","signature":"AA"}}}}}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(finish.status(), StatusCode::BAD_REQUEST);
+        assert!(store.get_account(missing).await.unwrap().is_none());
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn passkey_register_and_assert_issues_authorize_code(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use bc_components::PrivateKeyBase;
+        use identikey_keys::{CustodyRung, c2_native};
+        use identikey_oidc::AuthorizeQuery;
+        use tower::ServiceExt;
+        use url::Url;
+        use webauthn_authenticator_rs::prelude::WebauthnAuthenticator;
+        use webauthn_authenticator_rs::softpasskey::SoftPasskey;
+        use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse};
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &[0x51, 0x47])
+            .await
+            .unwrap();
+        let origin = Url::parse("https://auth.identikey.me").unwrap();
+        let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
+        let app = test_router(store.clone());
+
+        let begin = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webauthn/register/begin")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"xid":"{xid}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(begin.status(), StatusCode::OK);
+        let begin_json: serde_json::Value =
+            serde_json::from_slice(&body::to_bytes(begin.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let session = begin_json["session"].as_str().unwrap().to_owned();
+        let ccr = CreationChallengeResponse {
+            public_key: serde_json::from_value(begin_json["publicKey"].clone()).unwrap(),
+        };
+        let cred = authenticator.do_registration(origin.clone(), ccr).unwrap();
+        let finish = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webauthn/register/finish")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "session": session,
+                            "xid": xid.to_string(),
+                            "credential": cred,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(finish.status(), StatusCode::NO_CONTENT);
+        assert_eq!(store.list_passkeys(xid).await.unwrap().len(), 1);
+
+        let provider = test_provider();
+        let pending = provider
+            .validate_authorize(&AuthorizeQuery {
+                response_type: Some("code".into()),
+                client_id: Some("smoke".into()),
+                redirect_uri: Some("http://127.0.0.1:9999/cb".into()),
+                code_challenge: Some(s256_challenge(VERIFIER)),
+                code_challenge_method: Some("S256".into()),
+                state: None,
+                nonce: None,
+                scope: Some("openid".into()),
+            })
+            .unwrap();
+        let hub = ceremonies::CeremonyHub::from_config(&test_webauthn());
+        let (session, options) = hub
+            .begin_assert(&store, Some(xid), Some(pending))
+            .await
+            .unwrap();
+        let rcr = RequestChallengeResponse {
+            public_key: serde_json::from_value(options).unwrap(),
+            mediation: None,
+        };
+        let assertion = authenticator.do_authentication(origin, rcr).unwrap();
+        let (got_xid, pending) = hub
+            .finish_assert(&store, &session, assertion)
+            .await
+            .unwrap();
+        assert_eq!(got_xid, xid);
+        let pending = pending.unwrap();
+        let code = provider.issue_code(&pending, got_xid).unwrap();
+        assert!(!code.is_empty());
     }
 
     const VERIFIER: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";

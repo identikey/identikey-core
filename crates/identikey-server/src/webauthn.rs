@@ -16,6 +16,28 @@ pub struct WebAuthnConfig {
 }
 
 impl WebAuthnConfig {
+    /// `webauthn-rs` verifier for this RP ID / origin allowlist.
+    pub fn verifier(&self) -> Result<webauthn_rs::Webauthn, Error> {
+        let urls: Result<Vec<url::Url>, _> = self
+            .expected_origins
+            .iter()
+            .map(|origin| url::Url::parse(origin).map_err(|_| Error::InvalidOrigin))
+            .collect();
+        let urls = urls?;
+        let Some(primary) = urls.iter().find(|u| u.domain().is_some()) else {
+            return Err(Error::InvalidOrigin);
+        };
+        let mut builder = webauthn_rs::WebauthnBuilder::new(&self.rp_id, primary)
+            .map_err(|_| Error::InvalidOrigin)?
+            .rp_name("IdentiKey");
+        for extra in &urls {
+            if extra.as_str() != primary.as_str() {
+                builder = builder.append_allowed_origin(extra);
+            }
+        }
+        builder.build().map_err(|_| Error::InvalidOrigin)
+    }
+
     /// Related Origin Requests list: https expected origins only.
     ///
     /// Profile / user-content origins never appear here — they cannot pass

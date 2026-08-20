@@ -1,13 +1,13 @@
 # Tasks
 
-- [ ] Registration: create options + verify attestation via
+- [x] Registration: create options + verify attestation via
       `webauthn-rs`; persist passkey credential
-- [ ] Assertion: request options + verify; update sign counter
-- [ ] Verified assertion can complete `/authorize` with a code
-- [ ] Uses `62j` RP ID / origin config; no wildcards
-- [ ] Differential tests against `pre-rust-pivot` TS where
+- [x] Assertion: request options + verify; update sign counter
+- [x] Verified assertion can complete `/authorize` with a code
+- [x] Uses `62j` RP ID / origin config; no wildcards
+- [x] Differential tests against `pre-rust-pivot` TS where
       fixtures apply
-- [ ] URN grant still refuses a WebAuthn assertion (or is absent)
+- [x] URN grant still refuses a WebAuthn assertion (or is absent)
 
 Not owed here (bullets, not boxes):
 

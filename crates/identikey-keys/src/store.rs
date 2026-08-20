@@ -40,6 +40,8 @@ pub enum StoreError {
     Ceremony(#[from] CeremonyError),
     #[error("consent proof must be A3 or A4")]
     ConsentProofNotAccess,
+    #[error("stored XID is not 32 bytes")]
+    BadXid,
 }
 
 #[derive(Clone)]
@@ -66,6 +68,15 @@ pub struct PublishedDocument {
     pub updated_at: OffsetDateTime,
 }
 
+/// Stored passkey row. `passkey_json` is the serialised `webauthn-rs` Passkey.
+#[derive(Debug, Clone)]
+pub struct StoredPasskey {
+    pub xid: Xid,
+    pub credential_id: Vec<u8>,
+    pub passkey_json: Vec<u8>,
+    pub sign_counter: i64,
+}
+
 /// A credential listed as a device. No public keys, no trust flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceRecord {
@@ -74,6 +85,20 @@ pub struct DeviceRecord {
     pub nickname: Option<String>,
     pub created_at: OffsetDateTime,
     pub last_used_at: Option<OffsetDateTime>,
+}
+
+fn stored_passkey(
+    xid: Vec<u8>,
+    webauthn_credential_id: Option<Vec<u8>>,
+    cose_public_key: Option<Vec<u8>>,
+    sign_counter: Option<i64>,
+) -> Result<StoredPasskey, StoreError> {
+    Ok(StoredPasskey {
+        xid: Xid::try_from_slice(&xid).map_err(|_| StoreError::BadXid)?,
+        credential_id: webauthn_credential_id.ok_or(StoreError::NotFound)?,
+        passkey_json: cose_public_key.ok_or(StoreError::NotFound)?,
+        sign_counter: sign_counter.ok_or(StoreError::NotFound)?,
+    })
 }
 
 pub struct ConsentAppend<'a> {
@@ -360,6 +385,77 @@ impl KeysStore {
         .fetch_one(&self.pool)
         .await?;
         Ok(rec.id)
+    }
+
+    pub async fn get_passkey_by_credential_id(
+        &self,
+        webauthn_credential_id: &[u8],
+    ) -> Result<Option<StoredPasskey>, StoreError> {
+        let row = sqlx::query!(
+            "SELECT xid, webauthn_credential_id, cose_public_key, sign_counter
+             FROM credentials
+             WHERE webauthn_credential_id = $1
+               AND kind = 'passkey'
+               AND revoked_at IS NULL",
+            webauthn_credential_id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|rec| {
+            stored_passkey(
+                rec.xid,
+                rec.webauthn_credential_id,
+                rec.cose_public_key,
+                rec.sign_counter,
+            )
+        })
+        .transpose()
+    }
+
+    pub async fn list_passkeys(&self, xid: Xid) -> Result<Vec<StoredPasskey>, StoreError> {
+        let rows = sqlx::query!(
+            "SELECT xid, webauthn_credential_id, cose_public_key, sign_counter
+             FROM credentials
+             WHERE xid = $1
+               AND kind = 'passkey'
+               AND revoked_at IS NULL
+             ORDER BY created_at ASC",
+            xid.as_bytes().as_slice()
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|rec| {
+                stored_passkey(
+                    rec.xid,
+                    rec.webauthn_credential_id,
+                    rec.cose_public_key,
+                    rec.sign_counter,
+                )
+            })
+            .collect()
+    }
+
+    pub async fn update_passkey_sign_counter(
+        &self,
+        webauthn_credential_id: &[u8],
+        sign_counter: i64,
+    ) -> Result<(), StoreError> {
+        let result = sqlx::query!(
+            "UPDATE credentials
+             SET sign_counter = $2, last_used_at = now()
+             WHERE webauthn_credential_id = $1
+               AND kind = 'passkey'
+               AND revoked_at IS NULL",
+            webauthn_credential_id,
+            sign_counter
+        )
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::NotFound);
+        }
+        Ok(())
     }
 
     /// Non-revoked credentials for this XID. Ids + kind + nickname + timestamps only.

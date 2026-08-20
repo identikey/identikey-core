@@ -95,7 +95,7 @@ pub use resolve::{FetchedDocument, ResolutionTier, ResolveError, WinningDoc, res
 pub use rung::{AccessLevel, CustodyRung, ParseRungError};
 pub use store::{
     ConsentAppend, DeviceRecord, KeysStore, PublishedDocument, StoreError, StoredAccount,
-    StoredCustody,
+    StoredCustody, StoredPasskey,
 };
 pub use xid::{Xid, XidError};
 
@@ -550,6 +550,43 @@ mod tests {
         assert!(
             err.to_string().contains("accounts_email_lower_unique"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[sqlx::test]
+    async fn passkey_lookup_and_counter_update(pool: PgPool) {
+        let id = xid(21);
+        insert_account(&pool, id).await;
+        let store = KeysStore::from_pool(pool);
+        let cred = [0xAAu8, 0xBB, 0xCC];
+        store
+            .insert_passkey(id, &cred, &[0x01, 0x02], 3)
+            .await
+            .unwrap();
+        let got = store
+            .get_passkey_by_credential_id(&cred)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.xid, id);
+        assert_eq!(got.sign_counter, 3);
+        assert_eq!(store.list_passkeys(id).await.unwrap().len(), 1);
+        store.update_passkey_sign_counter(&cred, 4).await.unwrap();
+        assert_eq!(
+            store
+                .get_passkey_by_credential_id(&cred)
+                .await
+                .unwrap()
+                .unwrap()
+                .sign_counter,
+            4
+        );
+        assert!(
+            store
+                .get_passkey_by_credential_id(&[0x00])
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 }

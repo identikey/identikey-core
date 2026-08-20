@@ -6,6 +6,10 @@ See morphist-tools `CONVENTIONS.md`.
 
 ---
 
+- 2026-08-20 — `webauthn-rs` user.id is a UUID. Map XID → UUID v5
+  (`NAMESPACE_URL` + xid bytes) so the handle is stable across
+  registration options, matching the TS suite's "same userId → same
+  user.id". (`crates/identikey-server/src/ceremonies.rs`)
 - 2026-08-19 — `identikey-auth` is a git dep on identikey-protocol (rev pin).
   `cargo deny` `[sources] unknown-git = deny` needs an `allow-git` for that
   repo. The Linux TPM stack is an `enclave` feature so CI does not need

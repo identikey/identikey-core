@@ -31,9 +31,12 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
+webauthn-rs.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 bc-components.workspace = true
 bc-xid.workspace = true
 identikey-auth.workspace = true
 base64 = "0.22"
+webauthn-authenticator-rs = { version = "0.5", features = ["softpasskey"] }

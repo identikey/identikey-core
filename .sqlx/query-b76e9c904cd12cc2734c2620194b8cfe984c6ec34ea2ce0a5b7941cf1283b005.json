@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT xid, webauthn_credential_id, cose_public_key, sign_counter\n             FROM credentials\n             WHERE webauthn_credential_id = $1\n               AND kind = 'passkey'\n               AND revoked_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "xid",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "credentials",
+            "name": "xid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "webauthn_credential_id",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "credentials",
+            "name": "webauthn_credential_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "cose_public_key",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "credentials",
+            "name": "cose_public_key"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "sign_counter",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "credentials",
+            "name": "sign_counter"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "b76e9c904cd12cc2734c2620194b8cfe984c6ec34ea2ce0a5b7941cf1283b005"
+}

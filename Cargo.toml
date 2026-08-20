@@ -46,7 +46,10 @@ josekit = "0.10"
 
 # --- WebAuthn / access level A3 (ADR-004, identikey-core-5gh.1) -----------
 # MPL-2.0. Deliberately allowed by deny.toml — see the licence note there.
-webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
+webauthn-rs = { version = "0.5", features = [
+    "danger-allow-state-serialisation",
+    "conditional-ui",
+] }
 
 # --- Serialisation, errors, observability --------------------------------
 serde = { version = "1", features = ["derive"] }
@@ -54,7 +57,7 @@ serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 time = { version = "0.3", features = ["serde"] }
 sha2 = "0.10"
 url = "2"

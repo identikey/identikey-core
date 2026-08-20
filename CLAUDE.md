@@ -65,4 +65,7 @@ Protocol: sibling `identikey-protocol`
 `docs/standards/identikey-auth-challenge-v1.md` (§8.1 dual signer) and
 `docs/standards/identikey-oidc-urn-grant-v1.md`. This repo does not
 yet depend on `identikey-auth`. `IDENTIKEY_DEV_LOGIN` stands in for
-managed `/authorize`. The blob is not used to Sign yet.
+managed `/authorize` at `/authorize/dev`. Production login is passkey
+assertion: `/authorize` redirects to `/authorize/passkey`. Register
+an existing XID at `POST /webauthn/register/begin` then `finish`.
+The blob is not used to Sign yet.
