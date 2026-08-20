@@ -48,3 +48,14 @@ in `KeysStore` (no implicit signup). Pairwise salt and the EdDSA signing
 JWK are created under `IDENTIKEY_DATA_DIR` on first boot. Boot fails
 closed without `WEBAUTHN_RP_ID` / `WEBAUTHN_EXPECTED_ORIGIN` (no
 wildcards). Config OP CI is `.github/workflows/oidf-config-op.yml`.
+
+Managed-key authentication (A4) is **not** code+PKCE. It is the URN
+grant `urn:identikey:params:oauth:grant-type:challenge-response`
+(`add-urn-grant` / `ccf.5`, still PENDING). Proof is an
+`identikey-auth` `Response` only (ADR-005); WebAuthn never satisfies
+it. The challenge spec already lives in sibling
+`identikey-protocol/docs/standards/identikey-auth-challenge-v1.md`;
+this repo does not yet depend on `identikey-auth`. C2 browser login
+to the OP is A3 passkeys (`add-passkey-ceremonies` / `5gh.1`), not
+the URN grant. `IDENTIKEY_DEV_LOGIN` is a stand-in for both. The
+stored `managed_key_blob` is not used to Sign yet.
