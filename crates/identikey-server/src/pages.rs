@@ -81,17 +81,19 @@ function credToJson(cred){
 async function postJson(url,body){
   return fetch(url,{
     method:'POST',
-    headers:{'content-type':'application/json'},
-    body:JSON.stringify(body),
-    redirect:'manual'
+    headers:{'content-type':'application/json','accept':'application/json'},
+    body:JSON.stringify(body)
   });
 }
-function followRedirect(res){
-  if(res.status>=300&&res.status<400){
-    const loc=res.headers.get('Location');
-    if(loc){location.assign(loc);return true;}
+async function followRedirect(res){
+  const ct=res.headers.get('content-type')||'';
+  if(ct.includes('json')){
+    const data=await res.clone().json().catch(()=>null);
+    if(data&&data.redirect){location.assign(data.redirect);return true;}
   }
-  if(res.redirected&&res.url){location.assign(res.url);return true;}
+  const loc=res.headers.get('Location');
+  if(loc){location.assign(loc);return true;}
+  if(res.redirected&&res.url&&res.url!==location.href){location.assign(res.url);return true;}
   return false;
 }
 async function canConditional(){
@@ -131,28 +133,31 @@ pub fn passkey_login(ceremony_json: &str) -> String {
              <p>Use your passkey. No username.</p>\
              <p id=\"status\" class=\"status\"></p>\
              <button type=\"button\" id=\"go\">Continue with passkey</button>\
-             <p style=\"margin-top:1.25rem\">New here? <a href=\"/signup\">Create an account</a></p>\
+             <p style=\"margin-top:1.25rem\">New here? <a id=\"signup\" href=\"/signup\">Create an account</a></p>\
              <script type=\"application/json\" id=\"ceremony\">{json}</script>\
              <script>{WEBAUTHN_JS}\
              const opts=JSON.parse(document.getElementById('ceremony').textContent);\
+             const signup=document.getElementById('signup');\
+             if(signup)signup.href='/signup'+location.search;\
              async function assertPasskey(modal){{\
                const btn=document.getElementById('go');\
                btn.disabled=true;\
-               setStatus('');\
+               if(modal)setStatus('');\
                try{{\
                  const pk=decodePublicKey(structuredClone(opts.publicKey));\
                  const getOpts={{publicKey:pk}};\
                  if(!modal&&await canConditional())getOpts.mediation='conditional';\
                  const cred=await navigator.credentials.get(getOpts);\
-                 if(!cred){{setStatus('No passkey selected.');btn.disabled=false;return;}}\
+                 if(!cred){{if(modal)setStatus('No passkey selected.');btn.disabled=false;return;}}\
                  const res=await postJson('/webauthn/assert/finish',{{\
                    session:opts.session,\
                    credential:credToJson(cred)\
                  }});\
-                 if(followRedirect(res))return;\
-                 const text=await res.text();\
-                 setStatus(text||('Sign-in failed ('+res.status+').'));\
-               }}catch(e){{setStatus(e&&e.message?e.message:String(e));}}\
+                 if(await followRedirect(res))return;\
+                 if(modal)setStatus((await res.text())||('Sign-in failed ('+res.status+').'));\
+               }}catch(e){{\
+                 if(modal)setStatus(e&&e.message?e.message:String(e));\
+               }}\
                btn.disabled=false;\
              }}\
              document.getElementById('go').addEventListener('click',()=>assertPasskey(true));\
@@ -197,7 +202,11 @@ pub fn signup() -> String {
                    setStatus(await res.text()||('Could not save the passkey ('+res.status+').'));\
                    btn.disabled=false;return;\
                  }}\
-                 setStatus('Passkey saved. Return to the app you were signing into and use it.',true);\
+                 if(location.search.indexOf('client_id=')>=0){{\
+                   location.assign('/authorize/passkey'+location.search);\
+                   return;\
+                 }}\
+                 setStatus('Passkey saved. You can sign in now.',true);\
                  btn.textContent='Done';\
                  return;\
                }}catch(e){{setStatus(e&&e.message?e.message:String(e));}}\

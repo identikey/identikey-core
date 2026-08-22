@@ -333,7 +333,7 @@ fn issue_authorize_code(
     xid: Xid,
 ) -> Response {
     match state.provider.issue_code(&pending, xid) {
-        Ok(code) => redirect_with_code(&pending.redirect_uri, &code, pending.state.as_deref()),
+        Ok(code) => json_redirect(&pending.redirect_uri, &code, pending.state.as_deref()),
         Err(err) => token_error(err, false),
     }
 }
@@ -593,6 +593,32 @@ async fn complete_dev_login(state: AppState, params: DevLoginParams) -> Response
         Err(err) => return token_error(err, false),
     };
     redirect_with_code(&pending.redirect_uri, &code, pending.state.as_deref())
+}
+
+/// Fetch-based WebAuthn cannot follow a 302 to the RP: `redirect:manual`
+/// is opaque and hides `Location`. Return a JSON body the page can assign.
+fn json_redirect(uri: &str, code: &str, state: Option<&str>) -> Response {
+    let Ok(mut parsed) = url::Url::parse(uri) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "redirect_uri is not a URI",
+        );
+    };
+    {
+        let mut pairs = parsed.query_pairs_mut();
+        pairs.append_pair("code", code);
+        if let Some(state) = state {
+            pairs.append_pair("state", state);
+        }
+    }
+    let location = parsed.to_string();
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::json!({ "redirect": location }).to_string(),
+    )
+        .into_response()
 }
 
 fn redirect_with_code(uri: &str, code: &str, state: Option<&str>) -> Response {
