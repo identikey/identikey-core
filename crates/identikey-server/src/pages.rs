@@ -139,29 +139,45 @@ pub fn passkey_login(ceremony_json: &str) -> String {
              const opts=JSON.parse(document.getElementById('ceremony').textContent);\
              const signup=document.getElementById('signup');\
              if(signup)signup.href='/signup'+location.search;\
+             let phase='idle';\
+             let abort=null;\
              async function assertPasskey(modal){{\
+               if(phase==='finishing')return;\
+               if(phase==='getting'){{\
+                 if(!modal)return;\
+                 if(abort)abort.abort();\
+               }}\
+               phase='getting';\
                const btn=document.getElementById('go');\
                btn.disabled=true;\
-               if(modal)setStatus('');\
+               setStatus('');\
+               abort=new AbortController();\
                try{{\
                  const pk=decodePublicKey(structuredClone(opts.publicKey));\
-                 const getOpts={{publicKey:pk}};\
+                 const getOpts={{publicKey:pk,signal:abort.signal}};\
                  if(!modal&&await canConditional())getOpts.mediation='conditional';\
                  const cred=await navigator.credentials.get(getOpts);\
-                 if(!cred){{if(modal)setStatus('No passkey selected.');btn.disabled=false;return;}}\
+                 if(!cred){{setStatus(modal?'No passkey selected.':'');phase='idle';btn.disabled=false;return;}}\
+                 phase='finishing';\
                  const res=await postJson('/webauthn/assert/finish',{{\
                    session:opts.session,\
                    credential:credToJson(cred)\
                  }});\
                  if(await followRedirect(res))return;\
-                 if(modal)setStatus((await res.text())||('Sign-in failed ('+res.status+').'));\
+                 const text=await res.text();\
+                 let expired=false;\
+                 try{{expired=JSON.parse(text).error_description==='unknown or expired ceremony';}}catch(_){{}}\
+                 if(expired){{setStatus('That sign-in expired. Trying again…');location.reload();return;}}\
+                 setStatus(text||('Sign-in failed ('+res.status+').'));\
+                 phase='idle';\
                }}catch(e){{\
-                 if(modal)setStatus(e&&e.message?e.message:String(e));\
+                 if(e&&e.name==='AbortError'){{phase='idle';btn.disabled=false;return;}}\
+                 setStatus(e&&e.message?e.message:String(e));\
+                 phase='idle';\
                }}\
                btn.disabled=false;\
              }}\
              document.getElementById('go').addEventListener('click',()=>assertPasskey(true));\
-             assertPasskey(false);\
              </script>"
         ),
     )
