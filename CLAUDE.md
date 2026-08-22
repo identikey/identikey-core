@@ -66,6 +66,9 @@ Protocol: sibling `identikey-protocol`
 `docs/standards/identikey-oidc-urn-grant-v1.md`. This repo does not
 yet depend on `identikey-auth`. `IDENTIKEY_DEV_LOGIN` stands in for
 managed `/authorize` at `/authorize/dev`. Production login is passkey
-assertion: `/authorize` redirects to `/authorize/passkey`. Register
-an existing XID at `POST /webauthn/register/begin` then `finish`.
-The blob is not used to Sign yet.
+assertion: `/authorize` redirects to `/authorize/passkey`. First
+account: `GET`/`POST /signup` (`c2_native` + `create_managed`) then
+`POST /webauthn/register/finish`. Register an existing XID at
+`POST /webauthn/register/begin` then `finish`. Assertion of an
+unknown credential still inserts no account. The blob is not used
+to Sign yet. Elect-key export at signup is not this surface.

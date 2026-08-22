@@ -308,3 +308,12 @@ pub struct CeremonyOptions {
     #[serde(rename = "publicKey")]
     pub public_key: serde_json::Value,
 }
+
+/// Registration options after hosted signup created the C2 account.
+#[derive(Debug, Serialize)]
+pub struct SignupOptions {
+    pub xid: String,
+    pub session: String,
+    #[serde(rename = "publicKey")]
+    pub public_key: serde_json::Value,
+}

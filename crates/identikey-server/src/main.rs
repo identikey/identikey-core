@@ -9,7 +9,8 @@
 //! code+PKCE surface (`add-oidc-endpoints`) including confidential
 //! clients (`add-confidential-clients`). Login at `/authorize` is
 //! passkey assertion (`add-passkey-ceremonies`); `/authorize/dev` is
-//! flag-gated. WebAuthn RP ID / origin allowlist fails closed
+//! flag-gated. Hosted signup is `GET`/`POST /signup` (`add-hosted-login-ui`).
+//! WebAuthn RP ID / origin allowlist fails closed
 //! at boot (`identikey-core-62j`).
 //!
 //! Not yet wired, each blocking on its own issue:
@@ -19,6 +20,7 @@
 //! - Static asset serving for `web/`.
 
 mod ceremonies;
+mod pages;
 mod webauthn;
 
 use std::net::SocketAddr;
@@ -29,7 +31,8 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use identikey_keys::{KeysStore, Xid};
+use bc_components::PrivateKeyBase;
+use identikey_keys::{CustodyRung, KeysStore, Xid, c2_native};
 use identikey_oidc::{
     AuthorizeError, AuthorizeQuery, Client, OidcError, PairwiseSalt, Provider, SigningKey,
     TokenEndpointAuthMethod, TokenRequest, parse_http_basic,
@@ -75,6 +78,7 @@ fn router(
             "/authorize/passkey",
             get(passkey_login_page).post(passkey_login_finish),
         )
+        .route("/signup", get(signup_page).post(signup))
         .route("/webauthn/register/begin", post(register_begin))
         .route("/webauthn/register/finish", post(register_finish))
         .route("/webauthn/assert/begin", post(assert_begin))
@@ -362,36 +366,7 @@ async fn passkey_login_page(
                 "session": session,
                 "publicKey": public_key,
             });
-            let body = format!(
-                "<!doctype html><html><body>\
-                 <p>Use your passkey</p>\
-                 <pre id=\"opts\">{}</pre>\
-                 <script>\
-                 const opts = JSON.parse(document.getElementById('opts').textContent);\
-                 const decode = t => Uint8Array.from(atob(t.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0));\
-                 const pk = opts.publicKey;\
-                 pk.challenge = decode(pk.challenge);\
-                 if (pk.allowCredentials) for (const c of pk.allowCredentials) c.id = decode(c.id);\
-                 navigator.credentials.get({{ publicKey: pk }}).then(async cred => {{\
-                   const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');\
-                   const body = {{\
-                     session: opts.session,\
-                     credential: {{\
-                       id: cred.id, rawId: b64(cred.rawId), type: cred.type,\
-                       response: {{\
-                         clientDataJSON: b64(cred.response.clientDataJSON),\
-                         authenticatorData: b64(cred.response.authenticatorData),\
-                         signature: b64(cred.response.signature),\
-                         userHandle: cred.response.userHandle ? b64(cred.response.userHandle) : null\
-                       }}\
-                     }}\
-                   }};\
-                   const res = await fetch('/webauthn/assert/finish', {{ method: 'POST', headers: {{'content-type':'application/json'}}, body: JSON.stringify(body), redirect: 'follow' }});\
-                   if (res.redirected) location = res.url; else document.body.textContent = await res.text();\
-                 }}).catch(e => {{ document.body.textContent = e; }});\
-                 </script></body></html>",
-                html_escape(&options.to_string()),
-            );
+            let body = pages::passkey_login(&options.to_string());
             (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
@@ -412,6 +387,58 @@ async fn passkey_login_finish(
 
 fn params_xid_from_query(_params: &AuthorizeParams) -> Option<Xid> {
     None
+}
+
+fn html_page(body: String) -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
+async fn signup_page() -> Response {
+    html_page(pages::signup())
+}
+
+async fn signup(State(state): State<AppState>) -> Response {
+    let user = PrivateKeyBase::new();
+    let ours = PrivateKeyBase::new();
+    let doc = match c2_native(&user, &ours) {
+        Ok(doc) => doc,
+        Err(err) => {
+            return oauth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                &err.to_string(),
+            );
+        }
+    };
+    let blob = ours.as_bytes().to_vec();
+    let xid = match state
+        .store
+        .create_managed(CustodyRung::C2, &doc, &blob)
+        .await
+    {
+        Ok(xid) => xid,
+        Err(err) => {
+            return oauth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                &err.to_string(),
+            );
+        }
+    };
+    match state.ceremonies.begin_register(&state.store, xid).await {
+        Ok((session, public_key)) => Json(ceremonies::SignupOptions {
+            xid: xid.to_string(),
+            session,
+            public_key,
+        })
+        .into_response(),
+        Err(err) => ceremony_http(err),
+    }
 }
 
 async fn challenge(State(state): State<AppState>) -> Response {
@@ -467,28 +494,13 @@ async fn authorize(
     }
 }
 
-fn html_escape(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for c in raw.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 fn hidden(name: &str, value: Option<&str>) -> String {
     let Some(value) = value.filter(|s| !s.is_empty()) else {
         return String::new();
     };
     format!(
         "<input type=\"hidden\" name=\"{name}\" value=\"{}\" />\n",
-        html_escape(value)
+        pages::html_escape(value)
     )
 }
 
@@ -1644,6 +1656,144 @@ mod tests {
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn passkey_login_page_is_html_product_surface(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let challenge = s256_challenge(VERIFIER);
+        let response = test_router(KeysStore::from_pool(pool))
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/authorize/passkey?{}", authorize_qs(&challenge)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            content_type.starts_with("text/html"),
+            "expected text/html, got {content_type}"
+        );
+        let body = String::from_utf8(
+            body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(body.contains("navigator.credentials.get"));
+        assert!(!body.contains("<pre"));
+        assert!(!body.contains("name=\"username\""));
+        assert!(body.contains("Continue with passkey"));
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn signup_then_register_stores_passkey(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use identikey_keys::{CustodyRung, Xid, is_c2};
+        use tower::ServiceExt;
+        use url::Url;
+        use webauthn_authenticator_rs::prelude::WebauthnAuthenticator;
+        use webauthn_authenticator_rs::softpasskey::SoftPasskey;
+        use webauthn_rs::prelude::CreationChallengeResponse;
+
+        let store = KeysStore::from_pool(pool);
+        let app = test_router(store.clone());
+
+        let get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/signup")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get.status(), StatusCode::OK);
+        assert!(
+            get.headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("text/html")
+        );
+        let get_body = String::from_utf8(
+            body::to_bytes(get.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(get_body.contains("navigator.credentials.create"));
+
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/signup")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        let created_json: serde_json::Value = serde_json::from_slice(
+            &body::to_bytes(created.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let xid = Xid::from_hex(created_json["xid"].as_str().unwrap()).unwrap();
+        let session = created_json["session"].as_str().unwrap().to_owned();
+        assert!(created_json["publicKey"].is_object());
+        assert!(store.get_account(xid).await.unwrap().is_some());
+        let custody = store.get_custody(xid).await.unwrap().unwrap();
+        assert_eq!(custody.rung, CustodyRung::C2);
+        assert!(is_c2(&custody.document));
+        assert_eq!(store.has_managed_key(xid).await.unwrap(), Some(true));
+        assert!(store.list_passkeys(xid).await.unwrap().is_empty());
+
+        let origin = Url::parse("https://auth.identikey.me").unwrap();
+        let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
+        let ccr = CreationChallengeResponse {
+            public_key: serde_json::from_value(created_json["publicKey"].clone()).unwrap(),
+        };
+        let cred = authenticator.do_registration(origin, ccr).unwrap();
+        let finish = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webauthn/register/finish")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "session": session,
+                            "xid": xid.to_string(),
+                            "credential": cred,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(finish.status(), StatusCode::NO_CONTENT);
+        assert_eq!(store.list_passkeys(xid).await.unwrap().len(), 1);
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
     async fn register_begin_unknown_xid_creates_nothing(pool: sqlx::PgPool) {
         use axum::body::{self, Body};
         use axum::http::{Request, StatusCode};
@@ -1827,6 +1977,16 @@ mod tests {
             .unwrap();
         assert_eq!(finish.status(), StatusCode::BAD_REQUEST);
         assert!(store.get_account(missing).await.unwrap().is_none());
+        let accounts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(accounts, 0);
+        let credentials: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM credentials")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(credentials, 0);
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
