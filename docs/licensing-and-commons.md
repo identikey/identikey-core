@@ -280,8 +280,10 @@ churning them buys nothing.
 2. **Write test vectors for `identikey-auth`.** Highest-leverage single artifact in this
    document. A spec without test vectors gets read; a spec with test vectors gets implemented.
 3. **Set `identikey-protocol` to `Apache-2.0 OR BSD-2-Clause-Patent`** (§5c, decided) and keep it free
-   of any AGPL dependency — this is why `identikey-storage-auth` (AGPL-3.0-or-later, depends
-   on `recrypt-core`/`recrypt-wire`) must not move into the protocol workspace.
+   of any AGPL dependency — this is why `identikey-storage-auth` / `recrypt-storage-auth`
+   (AGPL-3.0-or-later, depends on `recrypt-core`/`recrypt-wire`) must not move into the
+   protocol workspace. **Running it as a sibling process is a different question** — see
+   §8.
 4. **Publish a trademark policy** that explicitly permits forks to state their origin.
 5. **Decide §5.** Blocks the protocol split only insofar as the license header must be right
    on the first public commit — so decide before publishing, not after.
@@ -299,3 +301,42 @@ first has only postponed the capture.
 
 The counter-example is already in the record: PGP passed neither, and OpenPGP passed both, and
 the difference was a specification.
+
+---
+
+## 8. Sibling process vs. linking (why storage-auth *should* run on a box)
+
+The 2026-07-28 learning — *"`identikey-storage-auth` is AGPL and must not share a
+workspace with the protocol tier"* — is about **Cargo linking**, not about **where the
+binary runs**.
+
+`recrypt-storage-auth` (née `identikey-storage-auth`) is a library. The deployable is
+`recrypt-server`, which links it. That binary is AGPL-3.0-or-later + commercial.
+Putting the crate into `identikey-protocol` or `identikey-keys` would make those
+workspaces AGPL. That is the entanglement we refuse.
+
+**HTTP to a sibling process is mere aggregation.** An Edgebox image, a Mjolnir guest,
+or a compose file that *runs* `recrypt-server` next to a MIT PHP dashboard does not
+make the dashboard AGPL. GPL/AGPL copyleft follows derivative works and (for AGPL §13)
+users of *that network service*. It does not infect a process that speaks HTTP at it.
+
+What *does* apply when we ship the appliance:
+
+- We (or MeAll, if they redistribute our image) must offer **source of the AGPL
+  binary** to people who receive it. That is our duty, not theirs to rewrite
+  `edgeboxctl`.
+- Keep the recipe in `apps/` as `image: …recrypt-server…`, not a vendored crate.
+- Enterprises that will not honor AGPL §13 buy `LICENSE-COMMERCIAL.md`. A household
+  box does not need that carve-out.
+
+So: **do put storage-auth on the box** — as `recrypt-server`. Do **not**
+`recrypt-storage-auth = { path = … }` from `identikey-core` or
+`identikey-protocol`. Consent-log in this repo copies the hash-chain *pattern*
+and reimplements it (`crates/identikey-keys/src/consent.rs`) for exactly that
+reason.
+
+Port collision to remember: Mjolnir's blob door already owns `10.200.0.1:7222`
+(unauthenticated CAS). `recrypt-server` defaults to 7222 too. On a Mjolnir guest
+the server listens *inside* the VM and uses `blob_door_url` as backend. On
+bare metal, pick one listener for the door and another for the server, or run
+the server with a local `blob/b3/` backend and no door.

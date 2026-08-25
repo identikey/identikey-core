@@ -155,6 +155,10 @@ mechanism recover a C3 key is a release blocker.
 > Can a user leave with identity, data, and connectivity intact, and stop paying, without
 > permission?
 
+Scope (narrowed 2026-07-28): the test protects the **substrate**, not the feature set.
+Losing convenience, managed infra, support, or hosted uptime on exit is fine — that is
+what paying buys. Losing keys or data is capture.
+
 At C2 this means an explicit, documented, self-service **custody migration ceremony**: the
 server's Sign material is destroyed (not exported), the user signs with a key we have never
 held, resolution moves to N≥2 with one resolver that is not us, and the account continues
@@ -164,6 +168,41 @@ exist, C2 is rent, not a service.
 **Build the C2 → C3 migration before, or at the same time as, C2 itself.** A managed-custody
 product without an exit is the exact thing this project exists to oppose, and it is much
 harder to add later than to design in.
+
+#### Where the OP runs does not change the test
+
+The exit test is about **keys and data**, not about whether a login UI exists. Three
+placements of `identikey-server`, same bar:
+
+| Where the OP runs | Passes? | Why |
+|---|---|---|
+| **Our cloud** | Yes, iff the climb exists | User stops paying us; they leave with XID + wallet (or ciphertext of data encrypted to it). They lose our uptime. That is allowed. |
+| **Their box** (Edgebox, Mjolnir guest, a Pi) | Yes — usually *more* easily | The gatekeeper is hardware they already hold. Stopping a subscription does not take the program with it. AGPL means they keep running it. |
+| **No OP — CLI / `ikey` / `identikey-auth` only** | Yes | C3/C4. The current door for people who will use a terminal. |
+
+**Self-custody is always an option, including when the OP is on the box.** Today that
+option is the CLI (`ikey`, `recrypt identity`, `migrate_c2_to_c3` in-library). Not
+every user will take it. That is not a failure of the test — it is why C2 exists.
+The failure would be: the only way to *be* this identity is a key we hold and will
+not destroy, on a server they cannot run. Keycloak-era `identikey-core` was that
+shape. This repo is not, provided I3's ceremony stays reachable.
+
+"The box running the program that gatekeeps the box" is therefore **not capture**.
+Capture is a key they cannot take. A household OP on household hardware is the
+managed rung *without* a landlord. The native app is how ordinary people climb
+(A4 + guardian ceremony); the CLI is how the option exists *before* that app
+ships. Do not delay shipping C2 on the box until the app exists — delay shipping
+C2 **without** the ceremony.
+
+#### What "leave with identity" means on a box
+
+- **Identity:** `wallet.ikeyw` / Elect key the user holds, or the C2→C3 ceremony
+  that makes one. XID is self-certifying; the OP's signing JWK is *our* key for
+  tokens, not theirs. Tokens die on leave. That is fine.
+- **Data:** ciphertext addressed by Blake3. Decrypt with keys they hold. A Recrypt
+  node they stop paying is an untrusted disk they can copy.
+- **Connectivity:** Cloudflare Tunnel / a hostname is convenience. `NodeAttestation`
+  binds identity to a transport NodeId; a new box proves it is the same person.
 
 ### I4. Downward moves are allowed and must be explicit
 

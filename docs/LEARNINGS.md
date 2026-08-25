@@ -35,6 +35,12 @@ See morphist-tools `CONVENTIONS.md`.
   `identikey-storage-auth` is `AGPL-3.0-or-later` and depends on `recrypt-core`/`recrypt-wire`.
   They must not share a workspace or the commercial product inherits AGPL entanglement.
   (recrypt/crates/*/Cargo.toml)
+- 2026-08-24 — That learning is about Cargo linking, not process placement.
+  Running `recrypt-server` (which links `recrypt-storage-auth`) as a sibling
+  HTTP process on a household box is mere aggregation; it does not AGPL the
+  dashboard. An OP on hardware the user holds does not fail the exit test —
+  keys they cannot take would. Self-custody remains an option (today: CLI).
+  (`docs/licensing-and-commons.md` §8, `docs/custody-ladder.md` I3)
 - 2026-07-28 — `bd dep add` rejects a non-epic blocking an epic ("epics can only block other
   epics"). Wire decision beads to the specific *task* they block, not the epic.
 - 2026-07-28 — a freshly-created `.beads/` may need `bd dolt commit` then `bd migrate` before
