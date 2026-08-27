@@ -39,8 +39,10 @@ migrates, and refuses an Elect-denied document write. C2→C3 is
 `revoke_device`, no `devices` table, no `device_trust` / `is_master`.
 `identikey-oidc` is a code+PKCE OP (folded 2026-08-18): pairwise salt at
 boot, one `sub()` seam (HKDF-SHA-256), discovery/JWKS/authorize/token,
-hashed rotating refresh, and export of the salt. Login at `/authorize` is passkey assertion (folded
-`add-passkey-ceremonies` 2026-08-20); `/authorize/dev` remains
+hashed rotating refresh, and export of the salt. Login at `/authorize` is the passkey HTML page (folded
+`add-hosted-login-ui` 2026-08-27; ceremonies 2026-08-20). `/signup`
+creates a C2 identity then registers a passkey; assertion still
+does not insert accounts. `/authorize/dev` remains
 flag-gated (`IDENTIKEY_DEV_LOGIN=1`). Confidential clients authenticate at `/token` with
 `client_secret_basic` / `client_secret_post` (secrets hashed;
 folded `add-confidential-clients` 2026-08-19). The URN grant

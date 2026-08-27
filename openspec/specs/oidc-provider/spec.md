@@ -5,8 +5,8 @@ routes on `identikey-server`. Folded from `add-pairwise-salt`,
 `add-sub-seam`, `add-oidc-endpoints`, `add-dev-authorize`,
 `add-refresh-lifecycle`, and `add-pairwise-export` (2026-08-18),
 `add-oidf-conformance`, `add-confidential-clients`, and
-`add-urn-grant` (2026-08-19), and `add-passkey-ceremonies`
-(2026-08-20).
+`add-urn-grant` (2026-08-19), `add-passkey-ceremonies`
+(2026-08-20), and `add-hosted-login-ui` (2026-08-27).
 
 The refuse-list is `docs/oidc-implementation-checklist.md`. OIDF
 Basic OP is documented locally and is not a required CI job.
@@ -231,3 +231,16 @@ SHALL NOT satisfy the URN grant.
   request with PKCE S256
 - WHEN assertion verifies
 - THEN a code is issued to the registered redirect
+
+### Requirement: Authorize login is the passkey page
+
+When `IDENTIKEY_DEV_LOGIN` is unset, completing `/authorize` SHALL
+send the user to `/authorize/passkey`. That page SHALL be the
+production login surface.
+
+#### Scenario: Authorize redirects to the passkey page
+
+- GIVEN a registered public client and valid PKCE
+- WHEN `GET /authorize` is called
+- THEN the response redirects to `/authorize/passkey`
+- AND that page is HTML for assertion, not the flag-gated dev form

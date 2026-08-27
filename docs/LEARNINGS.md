@@ -6,6 +6,12 @@ See morphist-tools `CONVENTIONS.md`.
 
 ---
 
+- 2026-08-27 — Two concurrent `navigator.credentials.get` (conditional +
+  button) finish the same ceremony; 1Password completes both and the
+  second is unknown/expired. One in-flight get. (`crates/identikey-server/src/pages.rs`)
+- 2026-08-27 — `fetch` + 302 hides `Location` as an opaque redirect.
+  Passkey finish returns the OIDC redirect as JSON; the page assigns
+  it. (`crates/identikey-server/src/pages.rs`)
 - 2026-08-20 — `webauthn-rs` user.id is a UUID. Map XID → UUID v5
   (`NAMESPACE_URL` + xid bytes) so the handle is stable across
   registration options, matching the TS suite's "same userId → same
