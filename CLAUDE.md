@@ -64,15 +64,18 @@ Mjolnir managed deploy (`mjolnir.toml`), first live 2026-08-27:
     # (mj secrets set 404s until the app is in the registry)
     mj deploy . --name identikey --memory 2048 --domain auth.identikey.me
 
-`mj deploy` defaults to `@base/deploy-node-bun`. That image has the
-`mjolnir-agent` *unit* and no binary (`mjolnir-bhcr`, regression of
-closed `mjolnir-0e8`). `spawn` waits 30s for a vsock ping that never
-comes (`VM.@default_await_boot_timeout`), then HTTP 500. First ship
-used rpc `base_image: "ubuntu-24.04"` (binary present; boots in ~5s).
-That image's June agent cannot unlock managed secrets — copy a
-current `mjolnir-agent` (taskmaster VM, Aug 22) into the release
-snapshot before Runtime.start. Mask `serial-getty@ttyS0` or systemd
-waits 90s.
+This OP runs on the maintained spawn image `@base/ubuntu-24.04`, not
+`deploy-node-bun`. Redeploy via rpc
+`base_image: "ubuntu-24.04"` until `mjolnir-6ee1` (manifest
+`base_image` / `mj deploy --base`). Do not `mj deploy` from the
+laptop against today's host — that still defaults to deploy-node-bun.
+
+Related Mjolnir beads from the first ship: `mjolnir-bhcr` (live
+deploy-node-bun has the agent unit and no binary), `mjolnir-hjnz`
+(inject_guest_agent silent no-op; June ubuntu agent cannot unlock
+managed secrets), `mjolnir-pj6t` (doctor misses this), `mjolnir-igi9`
+(bare `:boot_timeout`), `mjolnir-606w` (`serial-getty@ttyS0` 90s on
+snapshot boots).
 
 Apex `identikey.me` must be in **both** `MJOLNIR_GATEWAY_APEXES`
 (`/etc/mjolnir/env`, put_env is not durable) **and**
