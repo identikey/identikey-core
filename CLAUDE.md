@@ -53,11 +53,20 @@ Production OP origin (ADR-004): `https://auth.identikey.me`
 (issuer, WebAuthn RP ID, `WEBAUTHN_EXPECTED_ORIGIN`). Discovery:
 `https://auth.identikey.me/.well-known/openid-configuration`.
 `connect.identikey.io` is the Keycloak-era leftover, not this OP.
-As of 2026-08-27 `auth.identikey.me` returned Cloudflare 521 (origin
-not connected). This repo has no production deploy of
-`identikey-server`. Client redirects are env-registered exact match:
+Client redirects are env-registered exact match:
 `IDENTIKEY_CLIENT_ID` + `IDENTIKEY_CLIENT_REDIRECT` (https except
 loopback). Extra clients: `IDENTIKEY_CLIENTS` JSON.
+
+Mjolnir managed deploy (`mjolnir.toml`):
+
+    mix mjolnir.pg.tenant ensure identikey --slug identikey
+    mj secrets set identikey WEBAUTHN_RP_ID=auth.identikey.me
+    # IDENTIKEY_SIGNING_KEY / IDENTIKEY_PAIRWISE_SALT via --stdin
+    mj deploy . --name identikey --memory 2048 --domain auth.identikey.me
+
+Apex `identikey.me` must be in `MJOLNIR_GATEWAY_APEXES` (put_env is
+not durable). Bind is `0.0.0.0:8080` in `start_command` — `PORT` is
+ignored. Do not set `IDENTIKEY_DEV_LOGIN`. Host: `root@45.76.77.97`.
 
 First production RP (taskmaster-web ADR 0001): two confidential
 clients, never one. Pairwise sector is the redirect *host*.
@@ -67,9 +76,11 @@ clients, never one. Pairwise sector is the redirect *host*.
 | production | `https://taskmaster.dev/auth/callback` | `taskmaster.dev` |
 | laptop | `http://127.0.0.1:5173/auth/callback` | `127.0.0.1` |
 
-Taskmaster guest: `IDENTIKEY_ISSUER=https://auth.identikey.me`,
-`ORIGIN=https://taskmaster.dev` (RP derives redirect as
-`${ORIGIN}/auth/callback`). PKCE S256. `client_secret_basic`.
+Taskmaster guest already has `IDENTIKEY_ISSUER=https://auth.identikey.me`,
+`IDENTIKEY_CLIENT_ID=taskmaster`, `ORIGIN=https://taskmaster.dev`
+(RP derives redirect as `${ORIGIN}/auth/callback`). PKCE S256.
+`client_secret_basic`. Reuse the existing client secret; do not mint a
+second one and strand the RP.
 
 Two ways to get OIDC tokens, one proof format:
 

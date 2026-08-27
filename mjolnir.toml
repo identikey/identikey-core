@@ -1,0 +1,14 @@
+# IdentiKey OP. Detector cannot infer a Rust workspace.
+#   mj deploy . --name identikey --memory 2048 --domain auth.identikey.me
+#
+# Signing key and pairwise salt MUST be managed secrets (IDENTIKEY_SIGNING_KEY,
+# IDENTIKEY_PAIRWISE_SALT). Do not let first-boot generate them onto the
+# guest disk — cutover is a new VM and would mint a new issuer key / new
+# pairwise people. DATABASE_URL comes from `mix mjolnir.pg.tenant ensure`.
+runtime = "rust@1.96.0"
+steps = [
+  "command -v git >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git)",
+  "SQLX_OFFLINE=true mise exec -- cargo build --release -p identikey-server --locked",
+]
+start_command = "IDENTIKEY_BIND=0.0.0.0:8080 ./target/release/identikey-server"
+port = 8080
