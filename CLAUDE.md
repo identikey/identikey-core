@@ -49,6 +49,28 @@ JWK are created under `IDENTIKEY_DATA_DIR` on first boot. Boot fails
 closed without `WEBAUTHN_RP_ID` / `WEBAUTHN_EXPECTED_ORIGIN` (no
 wildcards). Config OP CI is `.github/workflows/oidf-config-op.yml`.
 
+Production OP origin (ADR-004): `https://auth.identikey.me`
+(issuer, WebAuthn RP ID, `WEBAUTHN_EXPECTED_ORIGIN`). Discovery:
+`https://auth.identikey.me/.well-known/openid-configuration`.
+`connect.identikey.io` is the Keycloak-era leftover, not this OP.
+As of 2026-08-27 `auth.identikey.me` returned Cloudflare 521 (origin
+not connected). This repo has no production deploy of
+`identikey-server`. Client redirects are env-registered exact match:
+`IDENTIKEY_CLIENT_ID` + `IDENTIKEY_CLIENT_REDIRECT` (https except
+loopback). Extra clients: `IDENTIKEY_CLIENTS` JSON.
+
+First production RP (taskmaster-web ADR 0001): two confidential
+clients, never one. Pairwise sector is the redirect *host*.
+
+| client | redirect (exact) | sector |
+|---|---|---|
+| production | `https://taskmaster.dev/auth/callback` | `taskmaster.dev` |
+| laptop | `http://127.0.0.1:5173/auth/callback` | `127.0.0.1` |
+
+Taskmaster guest: `IDENTIKEY_ISSUER=https://auth.identikey.me`,
+`ORIGIN=https://taskmaster.dev` (RP derives redirect as
+`${ORIGIN}/auth/callback`). PKCE S256. `client_secret_basic`.
+
 Two ways to get OIDC tokens, one proof format:
 
 - **Managed (C1/C2):** we hold Sign. A browser RP uses authorization-code
