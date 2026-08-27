@@ -57,16 +57,34 @@ Client redirects are env-registered exact match:
 `IDENTIKEY_CLIENT_ID` + `IDENTIKEY_CLIENT_REDIRECT` (https except
 loopback). Extra clients: `IDENTIKEY_CLIENTS` JSON.
 
-Mjolnir managed deploy (`mjolnir.toml`):
+Mjolnir managed deploy (`mjolnir.toml`), first live 2026-08-27:
 
-    mix mjolnir.pg.tenant ensure identikey --slug identikey
-    mj secrets set identikey WEBAUTHN_RP_ID=auth.identikey.me
-    # IDENTIKEY_SIGNING_KEY / IDENTIKEY_PAIRWISE_SALT via --stdin
+    mix mjolnir.pg.tenant ensure identikey --slug identikey   # on the host
+    # secrets file /var/lib/mjolnir/deploy/secrets/identikey.json
+    # (mj secrets set 404s until the app is in the registry)
     mj deploy . --name identikey --memory 2048 --domain auth.identikey.me
 
-Apex `identikey.me` must be in `MJOLNIR_GATEWAY_APEXES` (put_env is
-not durable). Bind is `0.0.0.0:8080` in `start_command` — `PORT` is
+`mj deploy` currently boots a `deploy-node-bun` build VM, which misses
+the 30s await_boot window. First ship used rpc
+`base_image: "ubuntu-24.04"`. That image's June guest agent cannot
+unlock managed secrets — copy a current `mjolnir-agent` (the one on
+the taskmaster VM, Aug 22) into the release snapshot before
+Runtime.start. Mask `serial-getty@ttyS0` or systemd waits 90s.
+
+Apex `identikey.me` must be in **both** `MJOLNIR_GATEWAY_APEXES`
+(`/etc/mjolnir/env`, put_env is not durable) **and**
+`/etc/mjolnir/gateway.toml` `[[domain]]` (else HTTP 400 "Invalid
+domain"). Bind is `0.0.0.0:8080` in `start_command` — `PORT` is
 ignored. Do not set `IDENTIKEY_DEV_LOGIN`. Host: `root@45.76.77.97`.
+
+Live (2026-08-27): app `identikey`, snapshot
+`deploy-2e6187d237ffb69bb6727c5122325ad4ff6e9547020403e94582957ddfca4af3`,
+service VM `2a39456f-b93e-4dcd-a0e2-b0a358a3ffd9`. Origin
+`http://auth.identikey.me/health` via `--resolve …:80:45.76.77.97`
+returns 200. Public `auth.identikey.me` is still Cloudflare-proxied
+(521) — the host CF token only covers `worldtree.network`. Point a
+DNS-only A record at `45.76.77.97`, then
+`mj cert issue auth.identikey.me`. Until then the z32 URL works.
 
 First production RP (taskmaster-web ADR 0001): two confidential
 clients, never one. Pairwise sector is the redirect *host*.

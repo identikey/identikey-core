@@ -1,10 +1,13 @@
 # IdentiKey OP. Detector cannot infer a Rust workspace.
 #   mj deploy . --name identikey --memory 2048 --domain auth.identikey.me
 #
-# Build on ubuntu-24.04 (rpc base_image). deploy-node-bun currently misses
-# the 30s boot window with the src virtiofs mount. ubuntu-24.04 has mise at
-# /root/.local/bin but no /usr/local/bin shim, so PATH is explicit and
-# `runtime` is omitted — that key prepends a bare `mise install`.
+# Build on ubuntu-24.04 (rpc `base_image`). `mj deploy` defaults to
+# deploy-node-bun, which currently misses the 30s await_boot window.
+# ubuntu-24.04 has mise at /root/.local/bin but no /usr/local/bin shim, so
+# PATH is explicit and `runtime` is omitted — that key prepends a bare
+# `mise install`. After cargo, the June guest agent on that image cannot
+# unlock managed secrets; a current mjolnir-agent must be on the snapshot
+# before Runtime.start. Mask serial-getty@ttyS0 or systemd waits 90s.
 #
 # Signing key and pairwise salt MUST be managed secrets (IDENTIKEY_SIGNING_KEY,
 # IDENTIKEY_PAIRWISE_SALT). Do not let first-boot generate them onto the
@@ -13,6 +16,7 @@
 steps = [
   "export PATH=/root/.local/bin:/usr/local/bin:$PATH; command -v git >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git)",
   "export PATH=/root/.cargo/bin:/root/.local/bin:/usr/local/bin:$PATH; mise install rust@1.96.0; . /root/.cargo/env; SQLX_OFFLINE=true cargo build --release -p identikey-server --locked",
+  "ln -sfn /dev/null /etc/systemd/system/serial-getty@ttyS0.service",
 ]
 start_command = "IDENTIKEY_BIND=0.0.0.0:8080 ./target/release/identikey-server"
 port = 8080
