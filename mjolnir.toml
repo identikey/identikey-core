@@ -12,7 +12,7 @@
 # pairwise people. DATABASE_URL comes from `mix mjolnir.pg.tenant ensure`.
 steps = [
   "export PATH=/root/.local/bin:/usr/local/bin:$PATH; command -v git >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git)",
-  "export PATH=/root/.local/bin:/usr/local/bin:$PATH; mise install rust@1.96.0 && SQLX_OFFLINE=true mise exec -- cargo build --release -p identikey-server --locked",
+  "export PATH=/root/.cargo/bin:/root/.local/bin:/usr/local/bin:$PATH; mise install rust@1.96.0; . /root/.cargo/env; SQLX_OFFLINE=true cargo build --release -p identikey-server --locked",
 ]
 start_command = "IDENTIKEY_BIND=0.0.0.0:8080 ./target/release/identikey-server"
 port = 8080
