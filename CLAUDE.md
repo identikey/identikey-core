@@ -79,12 +79,11 @@ ignored. Do not set `IDENTIKEY_DEV_LOGIN`. Host: `root@45.76.77.97`.
 
 Live (2026-08-27): app `identikey`, snapshot
 `deploy-2e6187d237ffb69bb6727c5122325ad4ff6e9547020403e94582957ddfca4af3`,
-service VM `2a39456f-b93e-4dcd-a0e2-b0a358a3ffd9`. Origin
-`http://auth.identikey.me/health` via `--resolve …:80:45.76.77.97`
-returns 200. Public `auth.identikey.me` is still Cloudflare-proxied
-(521) — the host CF token only covers `worldtree.network`. Point a
-DNS-only A record at `45.76.77.97`, then
-`mj cert issue auth.identikey.me`. Until then the z32 URL works.
+service VM `2a39456f-b93e-4dcd-a0e2-b0a358a3ffd9`. Public
+`https://auth.identikey.me` — DNS A `45.76.77.97` (grey-cloud), HTTP-01
+cert SAN `auth.identikey.me` until 2026-11-25, `/health` 200, discovery
+200, JWKS EdDSA kid `JZnOxfXDaklXwH9yyeEbqi6AMkD68zE74w3mv7_A3yk`.
+Bare `/authorize` is 400 (client_id required). `/signup` 200.
 
 First production RP (taskmaster-web ADR 0001): two confidential
 clients, never one. Pairwise sector is the redirect *host*.
