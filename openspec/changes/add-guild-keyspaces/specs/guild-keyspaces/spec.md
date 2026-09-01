@@ -1,105 +1,146 @@
 ## ADDED Requirements
 
-### Requirement: A keyspace is a distributed object
+### Requirement: Consume identikey-keyspace-v1
 
-A guild (product word) SHALL be a shared keyspace: the composition of the
-keys that comprise it. It SHALL NOT be housed at identikey-core, on a
-single mesh node, or in Postgres as source of truth. Admin-key holders
-SHALL keep it alive by replicating and signing. If no admin key continues
-to participate, the keyspace SHALL fade. The member XID SHALL remain
-who-I-am. Join and leave SHALL NOT be an Elect rewrite of the member XID.
+identikey-keys SHALL treat identikey-protocol
+`docs/standards/identikey-keyspace-v1.md` as the wire for shared
+keyspaces. It SHALL NOT invent a second keyspace identifier, an eighth
+op kind, a `guild.*` kind, or a merge rule for concurrent
+`epoch-begin` ops. The keyspace id SHALL be the identikey-log
+`content_hash` of the genesis op (outer: first admin `keyspace.join`;
+inner: `keyspace.nest`). Postgres, if present, SHALL be a cache of
+applied ops, not the source of truth.
 
-#### Scenario: Join does not rewrite the member XID
+#### Scenario: Genesis id is the join hash
+
+- GIVEN a first `keyspace.join` whose body lists an `admin: true`
+  roster entry and a PTK wrap-list
+- WHEN identikey-keys applies that op
+- THEN the keyspace id equals that op's identikey-log `content_hash`
+
+#### Scenario: Postgres cache is not the home
+
+- GIVEN holders of a keyspace and an optional identikey-core
+  materialization
+- WHEN the materialization is deleted
+- THEN holders who still have `admin: true` keys can continue the
+  keyspace from their log replicas
+
+### Requirement: Join does not Elect the member XID
+
+Join and leave SHALL NOT rewrite the member XID document.
+`authorize_elect` SHALL continue to gate XID document writes only.
+Keyspace ops SHALL be accepted only from an Ed25519 `Op.actor` that
+is `admin: true` on the applied roster, except outer genesis where
+the actor SHALL appear as `admin: true` in that same join body.
+
+#### Scenario: Join leaves the stored XID bytes unchanged
 
 - GIVEN an identikey whose XID document is stored
-- WHEN that identikey joins a keyspace
+- WHEN that identikey is added to a keyspace roster
 - THEN the stored member XID document bytes are unchanged
 
-#### Scenario: Postgres is not the home
-
-- GIVEN holders of a keyspace and an optional identikey-core materialization
-- WHEN the materialization is deleted
-- THEN holders who still have admin keys can continue the keyspace from
-  their replicas
-
-### Requirement: FOKS methods, identikey root
-
-The key hierarchy SHALL be device key → per-user key (PUK) → per-keyspace
-key (PTK). The PTK SHALL be encrypted to each member's latest PUK. Clients
-SHALL control key management. The system SHALL NOT run a FOKS server and
-SHALL NOT replace XID with `user@host`. A root identikey SHALL still Elect
-and rotate its own keys under ADR-001 and ADR-010.
-
-#### Scenario: Device revoke cascades the wrap-list
-
-- GIVEN a member with two device keys wrapping a PUK that wraps a PTK
-- WHEN one device is revoked
-- THEN the PTK wrap-list no longer includes that device's path, and the
-  member XID still Elects
-
-#### Scenario: IdentiKey Sign cannot Elect the member
+#### Scenario: IdentiKey Sign cannot author a keyspace op
 
 - GIVEN a stored C2 identity
-- WHEN IdentiKey's Sign key is used as signer on that member's XID document
-- THEN Elect is denied and the member document is unchanged
+- WHEN IdentiKey's Sign key is used as `Op.actor` on a `keyspace.*` op
+- THEN the op is refused and the roster is unchanged
 
-### Requirement: Radio join is not membership
+### Requirement: Wrap-target is the latest PUK
 
-Client SSID SHALL be a public radio name. Associating to that SSID SHALL
-NOT mint keyspace membership. Membership SHALL require an identikey
-ceremony. A radio PSK, if any, SHALL NOT be the keyspace secret.
+The PTK SHALL be wrapped to each member's latest PUK (Ed25519 via
+X25519, or P-256) per identikey-keyspace-v1 §5 and §7. The C2
+IdentiKey Sign+Auth key SHALL NOT be a wrap-target and SHALL NOT
+appear on the roster. A P-256-only member SHALL be wrap-target only
+and SHALL NOT author `keyspace.*` ops.
 
-#### Scenario: Open visitor network
+#### Scenario: C2 Sign key is absent from wraps
 
-- GIVEN factory client SSID ⚡, open
-- WHEN a phone associates
-- THEN it is not a keyspace member
+- GIVEN a C2 identity joining a house keyspace
+- WHEN wraps for the current epoch are applied
+- THEN no wrap recipient is IdentiKey's Sign+Auth public
 
-#### Scenario: Identikey login is the ceremony
+#### Scenario: P-256-only member cannot sign ops
 
-- GIVEN a phone already associated to the client SSID
-- WHEN the holder completes identikey login
-- THEN that identikey may be wrapped into the relevant keyspace, and the
-  association event is not that wrap
+- GIVEN a roster entry whose PUKs are P-256 only and that has no
+  Ed25519 `actor`
+- WHEN that member's key is used as `Op.actor`
+- THEN the op is refused
 
-### Requirement: Hybrid eviction
+### Requirement: Device revoke is not a keyspace op
 
-A kick SHALL take effect on an ACL/blacklist immediately. Cryptographic
-eviction SHALL be PTK rotation on a configurable epoch. Rotation SHALL
-rewrap envelopes (not rewrite every blob) and SHALL commit all-or-none as
-epoch ops on `identikey-log`. `identikey-log` SHALL surface concurrency
-and SHALL NOT merge. Postgres SHALL NOT be the coordinator of the epoch.
+Devices SHALL remain `credentials` rows. Revoking a device SHALL NOT
+by itself remove a PTK wrap. The cascade SHALL be: device revoke,
+then PUK rotation, then rewrap of the PTK to the latest PUK.
+
+#### Scenario: Device revoke does not edit the PTK wrap-list
+
+- GIVEN a member with two `credentials` rows and a PUK wrap of the PTK
+- WHEN one credential is revoked and the PUK is not rotated
+- THEN the PTK wrap-list is unchanged and the member XID still Elects
+
+#### Scenario: PUK rotate then rewrap
+
+- GIVEN a member whose device was revoked and whose PUK then rotates
+- WHEN a keyspace admin commits an epoch (or a rewrap to latest PUK)
+- THEN the PTK wrap-list targets the new PUK and not the old one
+
+### Requirement: Fade is administering, not remaining wraps
+
+When the last `admin: true` roster entry leaves, identikey-keys SHALL
+refuse further administering ops. Ciphertext keyed to the last PTK
+SHALL remain unwrap-able until a committed epoch replaces that PTK.
+
+#### Scenario: Last admin leave stops new ops
+
+- GIVEN a keyspace whose roster has one `admin: true` entry
+- WHEN that entry leaves
+- THEN a subsequent `keyspace.join` is refused
+
+#### Scenario: Last PTK still unwraps after fade
+
+- GIVEN that keyspace after the last admin left, with no epoch commit
+- WHEN a remaining member unwraps a blob keyed to the last PTK
+- THEN unwrap succeeds
+
+### Requirement: Hybrid eviction follows protocol §8
+
+A kick SHALL take effect on roster/blacklist immediately. Cryptographic
+eviction SHALL be `keyspace.epoch-begin` then `keyspace.epoch-commit`
+with the matching begin in parent hashes. identikey-keys SHALL NOT
+merge concurrent `epoch-begin` ops and SHALL NOT apply either until an
+admin nacks one or a later begin parents exactly one.
 
 #### Scenario: Kick without waiting for rotation
 
 - GIVEN a member on the roster
-- WHEN an admin kicks that member
-- THEN subsequent request-to-bytes for that member is denied before the
-  PTK epoch commits
+- WHEN an admin leaves or blacklists that member
+- THEN subsequent request-to-bytes for that member is denied before
+  epoch-commit
 
-#### Scenario: Epoch rotation is all-or-none
+#### Scenario: Concurrent epoch-begin is a conflict
 
-- GIVEN a wrap-list change that requires PTK rotation
-- WHEN epoch-commit is applied
-- THEN either every affected wrap in that epoch is committed or none is
+- GIVEN two `keyspace.epoch-begin` ops where neither is an ancestor
+  of the other
+- WHEN a holder applies the log
+- THEN neither begin is applied until an admin nacks one or a later
+  begin parents exactly one
 
-#### Scenario: Concurrent epoch ops are not merged by the log
+### Requirement: Two profiles, no OIDC guilds claim
 
-- GIVEN two concurrent `identikey-log` ops at the same HLC
-- WHEN a holder reads both
-- THEN the log reports them concurrent and does not pick a winner
+A house keyspace SHALL use protocol profile `"house"` (configurable
+epoch; kick MAY begin an epoch). An access-node keyspace SHALL use
+`"access-node"` (long epoch; join/leave SHALL NOT rotate the PTK on
+each event) and SHALL be nested after `keyspace.assign-node` then
+`keyspace.nest`. identikey-oidc SHALL NOT emit a claim named `guilds`.
+`keyspace.assign-node`'s `node` field SHALL be stored as opaque 32
+bytes.
 
-### Requirement: Protocol says keyspace, product says guild
+#### Scenario: Access-node join does not rotate PTK
 
-Op kinds and the protocol spec SHALL use the word `keyspace` (and nested
-keyspace). Lightning Mesh UI and Admin SHALL use the word `guild` for the
-same object. The system SHALL NOT emit an OIDC claim named `guilds`.
-
-#### Scenario: Op kind is keyspace.join
-
-- GIVEN a join op on `identikey-log`
-- WHEN the op is encoded
-- THEN its kind is a `keyspace.*` string, not `guild.*`
+- GIVEN an access-node keyspace at a long epoch
+- WHEN identikeys join and leave during that epoch
+- THEN the roster/blacklist updates and the PTK epoch is unchanged
 
 #### Scenario: No guilds claim on a token
 
@@ -107,32 +148,8 @@ same object. The system SHALL NOT emit an OIDC claim named `guilds`.
 - WHEN a relying party inspects claims
 - THEN there is no claim named `guilds`
 
-### Requirement: Nested profiles
+#### Scenario: Assign-node id is opaque
 
-A house/buyer keyspace SHALL use a configurable rotation epoch. An
-access-node keyspace SHALL be an inner keyspace created after a node is
-assigned to an outer keyspace, SHALL use a long epoch, SHALL accept high
-churn, and SHALL wrap on identikey login for local service-mesh comms
-rather than house secrets. Lightning Admin SHALL expose join/change,
-assign-node, and nest, and SHALL NOT expose rename. Apply-to-radio SHALL
-remain an explicit radio write.
-
-#### Scenario: Inner keyspace after assign
-
-- GIVEN a node assigned to an outer house keyspace
-- WHEN an access-node keyspace is created
-- THEN it is nested under that outer keyspace and has its own PTK epoch
-
-#### Scenario: Access-node wrap does not rotate per join
-
-- GIVEN an access-node keyspace with a long epoch
-- WHEN identikeys login and leave during the epoch
-- THEN the roster/blacklist updates and the PTK does not rotate on each
-  join or leave
-
-#### Scenario: No silent dual-write
-
-- GIVEN an admin changing a guild
-- WHEN that change is committed on the log
-- THEN client SSID is unchanged unless a separate `mjolnir-apply` radio
-  write runs
+- GIVEN a `keyspace.assign-node` body with a 32-byte `node` field
+- WHEN identikey-keys applies it
+- THEN the bytes are stored as given and not interpreted as an XID
