@@ -3,7 +3,13 @@
 Owed by this architecture activation (`nod-guild-keyspace-arch`) only:
 
 - [x] `openspec/changes/add-guild-keyspaces` proposal, design, deltas
-- [ ] Independent architecture read (advise; reader Grok 4.6)
+- [x] Independent architecture read (advise 2026-09-01: send-back)
+- [ ] Cite `identikey-keyspace-v1`; do not fork kinds / genesis id / admin field / epoch conflict
+- [ ] Map C2 Elect/Sign and `credentials` devices onto PUK wrap-targets (protocol §2.1 / §5)
+- [ ] Remove radio and Lightning Admin SHALLs from `guild-keyspaces` deltas
+- [ ] Fix device-revoke scenario: PUK rotate then rewrap; device is not on the PTK wrap-list
+- [ ] Distinguish fade (no admin) from remaining PTK wraps until epoch
+- [ ] Re-advise after those amends
 - [ ] ADR-012 in `docs/ARCHITECTURE.md` (act after advise accept)
 
 Not owed here (bullets, not boxes):

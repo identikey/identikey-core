@@ -1,0 +1,10 @@
+{
+  "permission": "read",
+  "change_id": "add-guild-keyspaces",
+  "disposition": "task-red",
+  "verdict": "send-back",
+  "summary": "Send-back: cite identikey-keyspace-v1; map C2 onto PUK; drop radio/Admin SHALLs; fix device cascade and fade.",
+  "signature": {
+    "content_hash": "sha256:e8f71a031565aff978220a649ced88f4bc91bc7958dbbec86efc25b9d9d56224"
+  }
+}
