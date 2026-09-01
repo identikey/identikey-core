@@ -982,6 +982,104 @@ the blob would make the ceremony optional — so that write is refused.
 
 ---
 
+## ADR-012: Guilds are identikey-keyspace-v1 keyspaces; identikey-keys is a replica, not the home ✅ Decided 2026-09-01
+
+**Context.** Lightning Mesh needs a shared secret (product word: **guild**) held by a roster
+of identikeys rather than one XID — a house, a family, an access-node's member set. The wire
+format for that object already exists: sibling repo identikey-protocol
+`docs/standards/identikey-keyspace-v1.md` (ADR-002 split that repo out). This ADR maps that
+protocol onto identikey-keys instead of re-specifying it here.
+
+**Decision.**
+
+1. **A guild is a keyspace (protocol), not a row.** Id is the identikey-log `content_hash`
+   of the genesis op (protocol §3): outer genesis is the first admin `keyspace.join`; inner
+   genesis is `keyspace.nest`. No second identifier, no eighth op kind, no guild-namespaced kind.
+   Kinds stay protocol §4.1 (`keyspace.join` / `change` / `leave` / `assign-node` / `nest` /
+   `epoch-begin` / `epoch-commit`). "Guild" is Lightning Mesh UI/Admin vocabulary only;
+   `identikey-keys` and `identikey-log` say `keyspace`.
+
+2. **Postgres is a cache, not the home.** identikey-core may materialize applied ops (roster,
+   wraps, nested ids) for query convenience, but a keyspace's holders can continue it from
+   their own log replicas if that materialization is deleted. `consent_log` stays C2
+   access-credential proofs; it is not reused as the keyspace log.
+
+3. **Admin is the protocol §6.1 roster boolean**, not a fork of it. After genesis, only a
+   current admin's Ed25519 `Op.actor` may append administering kinds, with the genesis
+   exception that the first joiner is valid iff `admin: true` in that same join body. Join
+   and leave do **not** Elect — they never touch the member XID document.
+   `authorize_elect` continues to gate XID document writes only (ADR-001, ADR-010); keyspace
+   join does not call it.
+
+4. **Wrap-target is each member's latest PUK**, not IdentiKey Sign+Auth. Per protocol §5/§7
+   the PTK is wrapped to the member's current identity key (Ed25519 via X25519, or P-256).
+   The C2 IdentiKey Sign+Auth key is **not** a wrap-target and **must not** appear on the
+   roster or author `keyspace.*` ops — Sign+Auth is our operational key, not the user's
+   identity key, and putting it on a roster would let us silently read guild content. A
+   P-256-only member is wrap-target only and cannot author ops; its admin companion (if any)
+   must be Ed25519.
+
+5. **Device revoke, PUK rotation, and PTK rewrap are three separate steps**, not one. Revoking
+   a `credentials` row does not by itself edit the PTK wrap-list. The cascade is: device
+   revoke → user rotates PUK → keyspace rewraps the PTK to the latest PUK. There is no
+   dedicated rewrap kind; a wrap-list change is `keyspace.epoch-begin` then
+   `keyspace.epoch-commit`.
+
+6. **Fade is administering, not remaining wraps.** If the last `admin: true` entry leaves,
+   further administering ops (protocol §6.1) stop verifying — the keyspace cannot accept new
+   joins or leaves. Ciphertext keyed to the last-committed PTK keeps decrypting until an
+   epoch commits; fade is a liveness property of who can change the object, not cryptographic
+   death of what already exists.
+
+7. **Eviction is hybrid (protocol §8).** A kick takes effect on the roster/blacklist
+   immediately (instant, non-cryptographic). Cryptographic eviction is
+   `keyspace.epoch-begin` then `keyspace.epoch-commit`, all-or-none, with the commit's
+   parent matching the begin. Concurrent `epoch-begin` ops that are not ancestors of one
+   another do not merge and neither applies until an admin nacks one or a later begin
+   parents exactly one. identikey-keys implements that consumer rule; it does not invent a
+   merge strategy of its own.
+
+8. **Two profiles, no OIDC guilds claim.** Protocol `profile` is `"house"` (configurable
+   epoch; a kick MAY begin an epoch) or `"access-node"` (long epoch; join/leave MUST NOT
+   rotate the PTK per event, nested after `keyspace.assign-node` then `keyspace.nest`).
+   `keyspace.assign-node`'s `node` field is stored as opaque 32 bytes — Lightning Mesh fills
+   it with its own node id, identikey-keys does not interpret it as an XID. identikey-oidc
+   must not emit a claim named `guilds`; today's tokens stay iss/sub/aud/iat/exp + optional
+   nonce, userinfo `{sub}`.
+
+**Rationale.** The protocol repo already answers "what is the wire, what is a genesis id,
+what is admin, how do epochs conflict" — restating any of that here would let this crate's
+copy drift from identikey-protocol's. The two words matter because Lightning Mesh's product
+surface (guild) and the wire-level object (keyspace) have different audiences and different
+stability guarantees; collapsing them into one vocabulary would tempt a guild-namespaced kind
+that forks the protocol. Refusing Sign+Auth as a wrap-target keeps the C2 privilege split
+(ADR-010) intact inside guilds: we may act as the user's Sign+Auth *operator*, but a guild's
+content must not be readable through *our* key just because we host the account.
+
+**Consequences.**
+
+- identikey-keys becomes a **replica and optional cache**, not a source of truth, for guild
+  keyspaces. Deleting its Postgres materialization loses convenience, not data — holders'
+  own log replicas remain authoritative.
+- Implementing `keyspace.*` apply/wrap/rotate against this mapping is `add-keyspace-runtime`,
+  not this ADR. Access-node wrap-on-login is `identikey-core-trr.2`. Fleet client SSID and
+  Lightning Admin verbs are tracked separately (`client-network-name`,
+  `mjolnir-mesh-st1.3`, `add-lightning-admin-guild`) — D1 radio/SSID orthogonality is
+  unaffected: SSID is a public network name, association is not keyspace membership.
+- Identity (XID + keyspace membership), agency (Biscuit), and data (Recrypt) stay three
+  uncollapsed layers; a keyspace op must not double as an agency grant or a data-layer key.
+
+**Actions this decision commits us to:**
+
+1. `add-keyspace-runtime` implements apply of `keyspace.*` ops from holders' replicas,
+   optional Postgres materialization of roster/epoch/wraps, and refuses IdentiKey Sign as
+   keyspace admin or wrap-target, leaving `authorize_elect` on the member XID path alone.
+2. Do not add a dedicated rewrap kind, a guild-namespaced op kind, or a second keyspace
+   identifier in any implementation node under this capability.
+3. identikey-oidc changes in this area are reviewed against "no `guilds` claim" before merge.
+
+---
+
 ## Open questions
 
 1. **Pre-rotation.** ~~Open~~ — decided as **ADR-008** (adopt). Whether `bc-xid` implements it
