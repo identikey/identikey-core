@@ -1,0 +1,15 @@
+{
+  "permission": "read",
+  "change_id": "add-guild-keyspaces",
+  "disposition": "pass",
+  "verdict": "accept-with-nits",
+  "summary": "Accept-with-nits: protocol cited; C2 mapped to PUK; radio/Admin SHALLs gone. Nits: nest via outer admin (\u00a76.1); no rewrap kind; request-to-bytes is roster deny.",
+  "nits": [
+    "Nest is signed by an outer admin (protocol \u00a76.1); do not authorize against the inner roster.",
+    "Wrap-list change is keyspace.epoch-begin/commit; do not add keyspace.rewrap.",
+    "Kick is applied roster/blacklist; do not invent a request-to-bytes guardian in identikey-keys."
+  ],
+  "signature": {
+    "content_hash": "sha256:6365eb80483e77a0955015e6018b2333718ced084e5dcd94280432dd8eec8bc1"
+  }
+}

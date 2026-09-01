@@ -9,7 +9,7 @@ Owed by this architecture activation (`nod-guild-keyspace-arch`) only:
 - [x] Remove radio and Lightning Admin SHALLs from `guild-keyspaces` deltas
 - [x] Fix device-revoke scenario: PUK rotate then rewrap; device is not on the PTK wrap-list
 - [x] Distinguish fade (no admin) from remaining PTK wraps until epoch
-- [ ] Re-advise after those amends
+- [x] Re-advise after those amends (advise 2026-09-01: accept-with-nits)
 - [ ] ADR-012 in `docs/ARCHITECTURE.md` (act after advise accept)
 
 Not owed here (bullets, not boxes):
