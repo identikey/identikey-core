@@ -71,6 +71,7 @@ identikey-oidc = { path = "crates/identikey-oidc", version = "0.1.0" }
 identikey-recovery = { path = "crates/identikey-recovery", version = "0.1.0" }
 # Protocol-tier proof. Pin a rev; CI has no sibling checkout.
 identikey-auth = { git = "https://github.com/identikey/identikey-protocol.git", rev = "fd073c0c5cb08f7102e73a4f2b7f9a529210cf98", version = "0.1.0" }
+identikey-log = { git = "https://github.com/identikey/identikey-protocol.git", rev = "093ceb13148d5fb5267ad309ecdfea15f2637d9e", version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -74,6 +74,7 @@
 
 pub mod ceremony;
 pub mod consent;
+pub mod keyspace;
 pub mod privilege;
 pub mod resolve;
 pub mod rung;
@@ -97,6 +98,7 @@ pub use store::{
     ConsentAppend, DeviceRecord, KeysStore, PublishedDocument, StoreError, StoredAccount,
     StoredCustody, StoredPasskey,
 };
+pub use keyspace::{ApplyError, KeyspaceReplica, ReplicaSnapshot};
 pub use xid::{Xid, XidError};
 
 /// sqlx migrator for the schema in `migrations/`.
