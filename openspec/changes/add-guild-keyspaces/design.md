@@ -37,7 +37,7 @@ Protocol §2.1. Do not run FOKS servers. Do not replace XID with
 | Layer | Name | In this crate |
 |---|---|---|
 | Device | device key | `credentials` row. Not a wrap-target. Not a `keyspace.*` op. |
-| User | PUK | Wrap-target: user's latest identity key (Ed25519 via X25519, or P-256). |
+| User | PUK | Wrap-target: X25519 encapsulation half on the stored user `PublicKeys`. Not Schnorr, not §7.2, not a passkey. §6 roster spelling waits on identikey-protocol `ikp-2l8`. |
 | Keyspace | PTK | 32-byte secret; wraps are protocol §7 CBOR maps. |
 
 **Cascade.** Device revoke → user rotates PUK → keyspace rewraps PTK to

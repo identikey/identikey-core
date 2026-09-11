@@ -50,12 +50,18 @@ as `Op.actor`. Join SHALL NOT call `authorize_elect` on the member XID.
 
 ### Requirement: Wrap-target selector excludes Sign+Auth
 
-When applying wraps, identikey-keys SHALL treat wrap `recipient` as a
-member PUK (Ed25519 via X25519, or P-256) and SHALL refuse a wrap
-whose recipient is IdentiKey's C2 Sign+Auth public. The PUK selector
-on a stored XID SHALL be the latest user identity key, excluding that
-Sign+Auth key. Wrap-list change SHALL be `keyspace.epoch-begin` then
-`keyspace.epoch-commit` only.
+When applying wraps, identikey-keys SHALL treat wrap `recipient` as
+the member PUK named by ADR-012: on a `c2_native` + `PrivateKeyBase`
+document, the user's X25519 encapsulation half on the stored
+`PublicKeys`. It SHALL NOT use protocol §7.2, SHALL NOT select
+Schnorr, Sign+Auth, `managed_key_blob`, or a passkey, and SHALL NOT
+call that selector "the latest identity key". Members whose document
+actually carries Ed25519 or P-256 identity keys MAY use those as PUK
+per protocol §5; that is not the C2 constructor this crate ships.
+Wrap-list change SHALL be `keyspace.epoch-begin` then
+`keyspace.epoch-commit` only. A `keyspace.join` that needs a §6
+`RosterEntry` for a C2 row of this store SHALL wait on identikey-protocol
+`ikp-2l8`; until then that row is a §7 `Wrap.recipient` only.
 
 #### Scenario: Epoch begin retargets wraps to the new PUK
 

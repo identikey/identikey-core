@@ -31,8 +31,10 @@ looks like a home.
 - Apply `keyspace.*` ops from holders' replicas. Optional Postgres
   materialization of roster/epoch/wraps. Cache is not the home.
 - Refuse IdentiKey Sign+Auth as `Op.actor` and as wrap-target. PUK
-  selector is the user's latest identity key. `authorize_elect` stays
-  on the member XID path alone.
+  selector on a stored C2 document is the X25519 encapsulation half
+  of the user's `PublicKeys` (ADR-012). `authorize_elect` stays on
+  the member XID path alone. §6 roster join for those rows waits on
+  identikey-protocol `ikp-2l8`.
 - Wrap-list change is `keyspace.epoch-begin` then `epoch-commit`.
   Concurrent begins: nack-or-parent; do not merge.
 

@@ -56,8 +56,11 @@ signing half as a wrap-target, SHALL NOT apply protocol §7.2
 (Ed25519→X25519) to Schnorr, SHALL NOT wrap to IdentiKey Sign+Auth,
 `managed_key_blob`, or a `credentials` passkey, and SHALL NOT list a
 C1 row as a member. A row whose user private is not held by the user
-MAY appear as a wrap-target-only roster entry; unwrap SHALL fail until
-that private is user-held. PUK rotation of that encapsulation key SHALL
+MAY be named as a protocol §7 `Wrap.recipient`; unwrap SHALL fail until
+that private is user-held (inert on purpose; not a reason to wrap to
+`managed_key_blob`). Until identikey-protocol `ikp-2l8` adds
+`PublicKey.alg` `x25519`, that row SHALL NOT be written as a protocol
+§6 `RosterEntry`. PUK rotation of that encapsulation key SHALL
 be an Elect-gated XID document write, then `keyspace.epoch-begin` /
 `epoch-commit`.
 
@@ -79,6 +82,21 @@ be an Elect-gated XID document write, then `keyspace.epoch-begin` /
 - GIVEN a stored C1 identity (no user key)
 - WHEN a `keyspace.join` lists that identikey as a wrap-target
 - THEN the op is refused
+
+#### Scenario: C2 wrap is named and inert until user-held private
+
+- GIVEN a C2 row whose user `PrivateKeyBase` was dropped at signup
+- WHEN a wrap lists that row's X25519 encapsulation public as recipient
+- THEN the wrap is stored as protocol §7 `Wrap.recipient` and unwrap
+  by that member fails until Elect export or a wallet holds the private
+
+#### Scenario: C2 is not a §6 RosterEntry until ikp-2l8
+
+- GIVEN a stored C2 document whose only user PUK is native X25519
+- WHEN identikey-keys is asked to encode a protocol §6 `RosterEntry`
+  for that member
+- THEN it refuses rather than mint `alg: "x25519"`; join that needs
+  that entry waits on identikey-protocol `ikp-2l8`
 
 #### Scenario: Schnorr cannot author a keyspace op
 

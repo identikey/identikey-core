@@ -1029,18 +1029,28 @@ protocol onto identikey-keys instead of re-specifying it here.
    document (`apply_document_update`), then `keyspace.epoch-begin` /
    `epoch-commit` to retarget wraps. Join/leave still do not Elect.
 
+   **Roster vs wrap.** Protocol §6 `RosterEntry.puks` admits `alg` `ed25519` or
+   `p256` only. A native X25519 encapsulation key has no lawful `PublicKey.alg`
+   on that roster until identikey-protocol `ikp-2l8` (`add-keyspace-x25519-puk-alg`).
+   identikey-core SHALL NOT mint `alg: "x25519"` here. Until `ikp-2l8` lands,
+   a C2 row of this store is a protocol §7 `Wrap.recipient` (raw 32-byte
+   u-coordinate, `x25519-xchacha20poly1305`) and **not** a constructible §6
+   `RosterEntry`. Runtime `keyspace.join` that needs a roster entry for such a
+   row waits on `ikp-2l8`.
+
    **Actor.** Schnorr cannot author `keyspace.*` and cannot be `admin: true`.
    Passkeys and A4 `identikey_auth` `device_public_key` stay `credentials` rows;
    they are not the admin companion. Until a user-held Ed25519 actor exists
    (wallet-held key, or a second Ed25519 in the document — a later named change),
-   a C2 row of this store may only be a wrap-target-only roster entry
-   (`admin: false`, `actor` omitted per protocol §6).
+   a C2 row cannot be `admin: true`. Day-one house genesis admin is that
+   user-held Ed25519, **not** IdentiKey Sign+Auth.
 
    **Live instance.** `POST /signup` drops the user's `PrivateKeyBase` after
    `create_managed`; only IdentiKey's operational private is in
    `managed_key_blob`. Until Elect-key export or a wallet holds that user
-   private, no C2 row can unwrap. Runtime must not treat "at C2 it usually is
-   the PUK" as "the member can decrypt today."
+   private, no C2 row can unwrap. That inert wrap is intentional. Runtime must
+   not treat "at C2 it usually is the PUK" as "the member can decrypt today"
+   and must not "fix" it by wrapping to `managed_key_blob`.
 
 5. **Device revoke, PUK rotation, and PTK rewrap are three separate steps**, not one. Revoking
    a `credentials` row does not by itself edit the PTK wrap-list. The cascade is: device
