@@ -6,6 +6,16 @@ See morphist-tools `CONVENTIONS.md`.
 
 ---
 
+- 2026-09-11 — C2 `c2_native` + `PrivateKeyBase::new()` (bc-components 0.31)
+  yields Schnorr (secp256k1) + X25519, not Ed25519 or P-256. The C2 PUK
+  wrap-target is the X25519 encapsulation half as-is; protocol §7.2
+  Ed25519→X25519 does not apply to Schnorr. Signup drops the user private,
+  so a wrap to that recipient is inert until Elect export or a wallet.
+  (`openspec/specs/guild-keyspaces/spec.md`, `docs/ARCHITECTURE.md` ADR-012)
+- 2026-09-11 — Protocol `identikey-keyspace-v1` §6 admits `ed25519` / `p256`
+  only. A C2 row of this store is a §7 `Wrap.recipient` and not a constructible
+  §6 `RosterEntry` until identikey-protocol `ikp-2l8` adds `PublicKey.alg`
+  `x25519`. Core SHALL NOT mint that alg. (`openspec/specs/guild-keyspaces/spec.md`)
 - 2026-08-27 — Two concurrent `navigator.credentials.get` (conditional +
   button) finish the same ceremony; 1Password completes both and the
   second is unknown/expired. One in-flight get. (`crates/identikey-server/src/pages.rs`)
