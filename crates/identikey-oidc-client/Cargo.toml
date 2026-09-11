@@ -1,0 +1,26 @@
+[package]
+name = "identikey-oidc-client"
+description = "Relying-party JWT/JWKS validator for an identikey-core (or any OIDC) issuer. Not the OP."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# Protocol-shaped RP client: Apache, not the AGPL product. Conduit and other
+# RPs may depend on this crate without taking identikey-oidc (the OP).
+license = "Apache-2.0 OR BSD-2-Clause-Patent"
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+josekit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
