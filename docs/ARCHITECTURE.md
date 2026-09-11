@@ -1011,13 +1011,36 @@ protocol onto identikey-keys instead of re-specifying it here.
    `authorize_elect` continues to gate XID document writes only (ADR-001, ADR-010); keyspace
    join does not call it.
 
-4. **Wrap-target is each member's latest PUK**, not IdentiKey Sign+Auth. Per protocol §5/§7
-   the PTK is wrapped to the member's current identity key (Ed25519 via X25519, or P-256).
-   The C2 IdentiKey Sign+Auth key is **not** a wrap-target and **must not** appear on the
-   roster or author `keyspace.*` ops — Sign+Auth is our operational key, not the user's
-   identity key, and putting it on a roster would let us silently read guild content. A
-   P-256-only member is wrap-target only and cannot author ops; its admin companion (if any)
-   must be Ed25519.
+4. **Wrap-target is the user's X25519 encapsulation key on the stored XID document**,
+   not IdentiKey Sign+Auth, not a passkey, not a converted Schnorr signing key.
+   `c2_native` + `PrivateKeyBase::new()` (bc-components 0.31) puts **BIP-340 Schnorr
+   (secp256k1) + X25519** on the user key, not Ed25519 and not P-256. Protocol §7's
+   `x25519-xchacha20poly1305` recipient is a 32-byte X25519 u-coordinate; that is
+   the encapsulation half already in the document. Protocol §7.2 (Ed25519→X25519
+   birational map) does not apply to Schnorr. Protocol §5 names Ed25519-via-X25519
+   or P-256; an errata line for a native X25519 encapsulation key is the protocol
+   repo's box, not a fork here.
+
+   The C2 IdentiKey Sign+Auth key is **not** a wrap-target and **must not** appear
+   on the roster or author `keyspace.*` ops. `managed_key_blob` is **not** a
+   wrap-target. C1 rows have no user key and **cannot be members**. A row whose
+   user private key is not held by the user has a named wrap recipient but cannot
+   unwrap. PUK rotation of that encapsulation key is an Elect rewrite of the XID
+   document (`apply_document_update`), then `keyspace.epoch-begin` /
+   `epoch-commit` to retarget wraps. Join/leave still do not Elect.
+
+   **Actor.** Schnorr cannot author `keyspace.*` and cannot be `admin: true`.
+   Passkeys and A4 `identikey_auth` `device_public_key` stay `credentials` rows;
+   they are not the admin companion. Until a user-held Ed25519 actor exists
+   (wallet-held key, or a second Ed25519 in the document — a later named change),
+   a C2 row of this store may only be a wrap-target-only roster entry
+   (`admin: false`, `actor` omitted per protocol §6).
+
+   **Live instance.** `POST /signup` drops the user's `PrivateKeyBase` after
+   `create_managed`; only IdentiKey's operational private is in
+   `managed_key_blob`. Until Elect-key export or a wallet holds that user
+   private, no C2 row can unwrap. Runtime must not treat "at C2 it usually is
+   the PUK" as "the member can decrypt today."
 
 5. **Device revoke, PUK rotation, and PTK rewrap are three separate steps**, not one. Revoking
    a `credentials` row does not by itself edit the PTK wrap-list. The cascade is: device

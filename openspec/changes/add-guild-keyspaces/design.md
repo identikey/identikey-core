@@ -55,13 +55,20 @@ call it on that document.
 
 | Key | Role in a keyspace |
 |---|---|
-| User Elect (+ Transfer / Verify / Update at C2) | Identity control. Not automatically a wrap-target unless it is also the PUK. |
-| Latest PUK (Ed25519 or P-256) | Wrap-target. Protocol §5 / §7. |
-| IdentiKey Sign+Auth (C2) | **Not** a wrap-target. **Not** a keyspace admin. Must not appear on the roster. |
-| identikey-log `Op.actor` | Raw 32-byte Ed25519. Authors `keyspace.*`. |
-| P-256-only member | Wrap-target only. Cannot author ops. Admin companion is Ed25519. |
+| User Elect (Schnorr secp256k1 on `c2_native`) | Identity control. Not a wrap-target. Not `Op.actor`. Rotating the encapsulation half of this `PublicKeys` is an Elect rewrite. |
+| User X25519 encapsulation half (same `PublicKeys`) | **The C2 PUK.** Wrap-target. Protocol §7 `x25519-xchacha20poly1305`. Not derived via §7.2. |
+| IdentiKey Sign+Auth (C2) | **Not** a wrap-target. **Not** a keyspace admin. Must not appear on the roster. `managed_key_blob` is not a wrap-target. |
+| identikey-log `Op.actor` | Raw 32-byte Ed25519. Authors `keyspace.*`. **Not present** on today's C2 rows. |
+| Passkey / A4 `device_public_key` | `credentials` row. Not a wrap-target. Not the admin companion. Passkey revoke does not rotate PUK (the passkey never held it). |
+| C1 row | No user key. Cannot be a member. |
 
-`admin: true` requires an Ed25519 `actor` (protocol §5).
+`admin: true` requires an Ed25519 `actor` (protocol §5). That companion is
+wallet-held Ed25519 or a later second document key — not this crate's
+passkey, not A4 device keys. Until it exists, C2 members of this store are
+wrap-target-only (`admin: false`, `actor` omitted).
+
+Signup drops the user `PrivateKeyBase`. The wrap names the public X25519;
+unwrap waits on Elect export or a wallet that holds that private.
 
 ## Two words
 

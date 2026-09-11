@@ -46,13 +46,20 @@ the actor SHALL appear as `admin: true` in that same join body.
 - WHEN IdentiKey's Sign key is used as `Op.actor` on a `keyspace.*` op
 - THEN the op is refused and the roster is unchanged
 
-### Requirement: Wrap-target is the latest PUK
+### Requirement: Wrap-target is the user's X25519 encapsulation key
 
-The PTK SHALL be wrapped to each member's latest PUK (Ed25519 via
-X25519, or P-256) per identikey-keyspace-v1 §5 and §7. The C2
-IdentiKey Sign+Auth key SHALL NOT be a wrap-target and SHALL NOT
-appear on the roster. A P-256-only member SHALL be wrap-target only
-and SHALL NOT author `keyspace.*` ops.
+On a C2 document built by `c2_native` from `PrivateKeyBase::new()`, the
+PTK SHALL be wrapped to the user's X25519 encapsulation public (the
+encapsulation half of that `PublicKeys`), using protocol §7
+`x25519-xchacha20poly1305`. identikey-keys SHALL NOT treat the Schnorr
+signing half as a wrap-target, SHALL NOT apply protocol §7.2
+(Ed25519→X25519) to Schnorr, SHALL NOT wrap to IdentiKey Sign+Auth,
+`managed_key_blob`, or a `credentials` passkey, and SHALL NOT list a
+C1 row as a member. A row whose user private is not held by the user
+MAY appear as a wrap-target-only roster entry; unwrap SHALL fail until
+that private is user-held. PUK rotation of that encapsulation key SHALL
+be an Elect-gated XID document write, then `keyspace.epoch-begin` /
+`epoch-commit`.
 
 #### Scenario: C2 Sign key is absent from wraps
 
@@ -60,11 +67,24 @@ and SHALL NOT author `keyspace.*` ops.
 - WHEN wraps for the current epoch are applied
 - THEN no wrap recipient is IdentiKey's Sign+Auth public
 
-#### Scenario: P-256-only member cannot sign ops
+#### Scenario: C2 wrap recipient is the X25519 encapsulation half
 
-- GIVEN a roster entry whose PUKs are P-256 only and that has no
-  Ed25519 `actor`
-- WHEN that member's key is used as `Op.actor`
+- GIVEN a stored C2 document from `c2_native` + `PrivateKeyBase::new()`
+- WHEN wraps for the current epoch are applied
+- THEN each wrap recipient for that member is that document's user
+  X25519 encapsulation public and not the Schnorr signing public
+
+#### Scenario: C1 cannot be a member
+
+- GIVEN a stored C1 identity (no user key)
+- WHEN a `keyspace.join` lists that identikey as a wrap-target
+- THEN the op is refused
+
+#### Scenario: Schnorr cannot author a keyspace op
+
+- GIVEN a C2 member whose only user signing key is Schnorr and who
+  has no Ed25519 `actor`
+- WHEN that Schnorr public is used as `Op.actor`
 - THEN the op is refused
 
 ### Requirement: Device revoke is not a keyspace op
@@ -78,6 +98,7 @@ then PUK rotation, then rewrap of the PTK to the latest PUK.
 - GIVEN a member with two `credentials` rows and a PUK wrap of the PTK
 - WHEN one credential is revoked and the PUK is not rotated
 - THEN the PTK wrap-list is unchanged and the member XID still Elects
+  (a passkey never holds PUK material; revoke does not start a PUK rotate)
 
 #### Scenario: PUK rotate then rewrap
 

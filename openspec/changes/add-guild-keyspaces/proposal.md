@@ -5,7 +5,12 @@
 **Rigor:** architecture
 
 Steer residue is on `identikey-core-trr.1`. Send-back 2026-09-01
-(`reviews/2026-09-01-advise.md`). Protocol source is identikey-protocol
+(`reviews/2026-09-01-advise.md`). Other-family send-back 2026-09-11
+(`reviews/2026-09-11-advise.md`, `fable-5.1-arch-review`): C2 PUK is
+the X25519 encapsulation half on the stored document, not
+Ed25519-via-X25519; Schnorr cannot be `Op.actor`; signup drops the
+user private so unwrap is inert until Elect export/wallet.
+Protocol source is identikey-protocol
 `docs/standards/identikey-keyspace-v1.md` (folded `add-keyspace-spec`).
 This change does not fork kinds, genesis id, admin field, or epoch
 conflict. Runtime is `add-keyspace-runtime` after advise accept.
@@ -25,9 +30,11 @@ rewrite or putting radio SHALLs in this crate.
 - ADR-012: identikey-keys is a replica/cache of `identikey-keyspace-v1`
   ops on `identikey-log`. Postgres is optional materialization, not the
   home. Root identikey still Elects its own XID (ADR-001, ADR-010).
-- Map C2: wrap-target is the user's latest PUK; IdentiKey Sign+Auth is
+- Map C2: wrap-target is the user's X25519 encapsulation half on the
+  stored `PublicKeys`; Schnorr is Elect-only; IdentiKey Sign+Auth is
   not a wrap-target; devices are `credentials` rows, not PTK wrap
-  targets.
+  targets. Today's C2 rows are wrap-target-only until a user-held
+  Ed25519 actor exists. Unwrap waits on Elect export or a wallet.
 - Two profiles (house / access-node) as protocol `profile` strings.
   Access-node wrap-on-login is `trr.2`.
 

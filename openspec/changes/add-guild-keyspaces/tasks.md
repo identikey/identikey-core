@@ -14,9 +14,10 @@ Owed by this architecture activation (`nod-guild-keyspace-arch`) only:
 
 Owed by send-back 2026-09-11 (`reviews/2026-09-11-advise.md`, fable-5.1-arch-review):
 
-- [ ] Name the C2 PUK against the stored document: `c2_native` + `PrivateKeyBase::new()` yields Schnorr (secp256k1) + X25519, not Ed25519 or P-256. Decide X25519 encapsulation half vs a distinct user-held PUK; amend ADR-012 §4 and design.md wording; state C1 rows and rows with no user-held private key have no wrap-target; state PUK rotation in-document is an Elect rewrite
-- [ ] Name the Ed25519 `Op.actor` for a member of this store (Schnorr user key cannot author ops or be admin); say where the admin companion lives and whether A4 `identikey_auth` device keys are excluded
-- [ ] State the live-instance premise: signup drops the user's Elect private key; no C2 row can unwrap until a named user-held-key surface exists; amend `add-keyspace-runtime` design "at C2 it usually is the PUK" to match
+- [x] Name the C2 PUK against the stored document: `c2_native` + `PrivateKeyBase::new()` yields Schnorr (secp256k1) + X25519, not Ed25519 or P-256. Decide X25519 encapsulation half vs a distinct user-held PUK; amend ADR-012 §4 and design.md wording; state C1 rows and rows with no user-held private key have no wrap-target; state PUK rotation in-document is an Elect rewrite
+- [x] Name the Ed25519 `Op.actor` for a member of this store (Schnorr user key cannot author ops or be admin); say where the admin companion lives and whether A4 `identikey_auth` device keys are excluded
+- [x] State the live-instance premise: signup drops the user's Elect private key; no C2 row can unwrap until a named user-held-key surface exists; amend `add-keyspace-runtime` design "at C2 it usually is the PUK" to match
+- [ ] Re-advise after 2026-09-11 PUK/actor/live-instance amends
 
 Not owed here (bullets, not boxes):
 

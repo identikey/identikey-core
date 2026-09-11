@@ -35,11 +35,19 @@ cache is deleted. `consent_log` stays C2 access-credential proofs.
 
 ## PUK selector
 
-Wrap-target is the member's latest **user** identity key (Ed25519 via
-X25519, or P-256) per protocol §5 / §7. Exclude the C2 Sign+Auth
-operational key (`IDENTIKEY_C2_PRIVILEGES` in `privilege.rs`). Elect
-privilege is not automatically the wrap-target; at C2 it usually is
-the PUK.
+On a stored C2 document from `c2_native` + `PrivateKeyBase::new()`, the
+wrap-target is the **X25519 encapsulation half** of the user's
+`PublicKeys`, not Schnorr, not Sign+Auth, not a passkey, not
+`managed_key_blob`. Protocol §7.2 (Ed25519→X25519) is not the selector.
+C1 rows and rows with no user key have no wrap-target and cannot join.
+
+Signup drops the user private. A wrap to that X25519 public is named
+membership; the member cannot unwrap until Elect export or a wallet
+holds that private. Do not assume "at C2 it usually is the PUK" means
+the member can decrypt today.
+
+Schnorr cannot be `Op.actor`. Admin Ed25519 is a later named surface.
+Today's C2 rows are wrap-target-only (`admin: false`).
 
 Devices stay `credentials` rows. `revoke_device` does not edit the PTK
 wrap-list. Rewrap is `keyspace.epoch-begin` then `epoch-commit`. There
