@@ -52,6 +52,7 @@ IdentiKey Core serves as the **identity layer** for the IdentiKey platform:
 ## Installation
 
 ```bash
+cd web
 bun install
 ```
 
@@ -68,7 +69,7 @@ KEYCLOAK_CLIENT_SECRET=your-client-secret
 
 # IdentiKey Token Signing
 IDENTIKEY_ISSUER=https://connect.identikey.io
-# Generate via: bun run generate-key
+# Generate via: bun --cwd web run generate-key
 IDENTIKEY_SIGNING_KEY='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","kid":"...","use":"sig","alg":"EdDSA"}'
 
 # Bootstrap Verification (Social Login)
@@ -87,8 +88,8 @@ The CLI provides administrative access to IdentiKey:
 
 ```bash
 # Run via npm script
-bun run cli users list
-bun run cli users --help
+bun --cwd web run cli users list
+bun --cwd web run cli users --help
 
 # Or install globally as `kc`
 bun link
@@ -115,7 +116,7 @@ All commands support `--json` for machine-readable output.
 Run the MCP server for AI agent integration:
 
 ```bash
-bun run mcp
+bun --cwd web run mcp
 ```
 
 Add to your MCP client config (e.g., Cursor):
@@ -126,7 +127,7 @@ Add to your MCP client config (e.g., Cursor):
 		"identikey": {
 			"command": "bun",
 			"args": ["run", "mcp"],
-			"cwd": "/path/to/identikey-core"
+			"cwd": "/path/to/identikey-core/web"
 		}
 	}
 }
@@ -158,42 +159,28 @@ Native mobile authentication endpoints:
 ## Development
 
 ```bash
-bun run dev          # SvelteKit dev server
-bun run test:unit    # Unit tests
-bun run test:e2e     # E2E tests
-bun run test         # All tests
-bun run lint         # Linting
-bun run format       # Formatting
+bun --cwd web run dev          # SvelteKit dev server
+bun --cwd web run test:unit    # Unit tests
+bun --cwd web run test:e2e     # E2E tests
+bun --cwd web run test         # All tests
+bun --cwd web run lint         # Linting
+bun --cwd web run format       # Formatting
 ```
 
 ## Project Structure
 
 ```
 identikey-core/
-├── src/
-│   ├── lib/
-│   │   ├── keycloak/           # Keycloak Admin API wrapper
-│   │   │   ├── client.ts       # Authenticated client
-│   │   │   ├── config.ts       # Configuration
-│   │   │   ├── errors.ts       # Error types
-│   │   │   ├── services/       # Domain services (users, auth-flows)
-│   │   │   └── mappers/        # Keycloak → IdentiKey type mapping
-│   │   ├── auth/               # (New) Auth endpoints
-│   │   │   ├── jwt.ts          # Token signing/verification
-│   │   │   ├── apple.ts        # Apple token verification
-│   │   │   ├── webauthn.ts     # Passkey registration/auth
-│   │   │   └── device.ts       # Device trust management
-│   │   └── server/
-│   │       ├── auth.ts
-│   │       └── db/
-│   ├── mcp/                    # MCP server for AI agents
-│   ├── cli/                    # CLI commands
-│   └── routes/                 # SvelteKit routes (future web UI)
-├── docs/
-│   ├── prd.md
-│   ├── architecture.md
-│   ├── epics.md
-│   └── identikey-apple-auth-architecture-analysis.md
+├── crates/                      # Rust OIDC, custody, recovery, and server crates
+├── web/
+│   ├── src/
+│   │   ├── lib/                # UI support and frozen TypeScript-era modules
+│   │   ├── mcp/                # Legacy MCP server for AI agents
+│   │   ├── cli/                # Legacy CLI commands
+│   │   └── routes/             # SvelteKit routes
+│   ├── static/                 # Static assets
+│   └── drizzle/                # Legacy TypeScript migrations
+├── docs/                       # Architecture and product docs
 └── ...
 ```
 

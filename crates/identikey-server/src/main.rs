@@ -13,12 +13,6 @@
 //! WebAuthn RP ID / origin allowlist fails closed
 //! at boot (`identikey-core-62j`).
 //!
-//! Not yet wired, each blocking on its own issue:
-//!
-//! URN grant: `POST /challenge` then `POST /token` with
-//! `urn:identikey:params:oauth:grant-type:challenge-response`.
-//! - Static asset serving for `web/`.
-
 mod ceremonies;
 mod pages;
 mod webauthn;
@@ -29,7 +23,7 @@ use std::sync::Arc;
 use axum::extract::{Form, OriginalUri, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use bc_components::PrivateKeyBase;
 use identikey_keys::{CustodyRung, KeysStore, Xid, c2_native};
@@ -41,6 +35,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tokio::signal;
+use tower_http::services::{ServeDir, ServeFile};
 use webauthn::{WebAuthnConfig, parse_webauthn_config};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -60,12 +55,20 @@ async fn health() -> &'static str {
     "ok"
 }
 
+fn web_assets(web_dir: std::path::PathBuf) -> ServeDir<ServeFile> {
+    let fallback = ServeFile::new(web_dir.join("200.html"));
+    ServeDir::new(web_dir).fallback(fallback)
+}
+
 fn router(
     store: KeysStore,
     provider: Arc<Provider>,
     dev_login: bool,
     webauthn: WebAuthnConfig,
 ) -> Router {
+    let web_dir = std::env::var_os("IDENTIKEY_WEB_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("web/build"));
     let ceremonies = Arc::new(ceremonies::CeremonyHub::from_config(&webauthn));
     let mut routes = Router::new()
         .route("/health", get(health))
@@ -94,13 +97,19 @@ fn router(
             "/authorize/dev",
             get(dev_login_form).post(dev_login_complete),
         );
+    } else {
+        // Keep the disabled development surface at 404 rather than allowing the
+        // static SPA fallback to turn an unknown POST into a 405 response.
+        routes = routes.route("/authorize/dev", any(|| async { StatusCode::NOT_FOUND }));
     }
-    routes.with_state(AppState {
-        store,
-        provider,
-        webauthn,
-        ceremonies,
-    })
+    routes
+        .with_state(AppState {
+            store,
+            provider,
+            webauthn,
+            ceremonies,
+        })
+        .fallback_service(web_assets(web_dir))
 }
 
 /// Related Origin Requests (`identikey-core-2js`). Served from the first
@@ -1003,6 +1012,55 @@ mod tests {
             parse_bind("not-an-address").is_err(),
             "a malformed bind address must fail at boot, not silently fall back"
         );
+    }
+
+    #[tokio::test]
+    async fn web_assets_serve_files_and_spa_fallback() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use std::fs;
+        use tower::ServiceExt;
+
+        let web_dir = std::env::temp_dir().join(format!("identikey-web-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&web_dir).unwrap();
+        fs::write(
+            web_dir.join("200.html"),
+            "<!doctype html><title>IdentiKey</title>",
+        )
+        .unwrap();
+        fs::write(web_dir.join("app.css"), "body{color:#123}").unwrap();
+
+        let asset = web_assets(web_dir.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/app.css")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(asset.status(), StatusCode::OK);
+        assert_eq!(
+            asset.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/css"
+        );
+
+        let fallback = web_assets(web_dir.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/account/security")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fallback.status(), StatusCode::OK);
+        assert_eq!(
+            fallback.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/html"
+        );
+
+        fs::remove_dir_all(web_dir).unwrap();
     }
 
     #[test]

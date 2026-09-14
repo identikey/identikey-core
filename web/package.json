@@ -1,5 +1,5 @@
 {
-	"name": "identikey-core",
+	"name": "identikey-web",
 	"private": true,
 	"version": "0.0.1",
 	"license": "AGPL-3.0-or-later",
@@ -9,7 +9,7 @@
 	},
 	"scripts": {
 		"dev": "vite dev",
-		"build": "vite build",
+		"build": "svelte-kit sync && vite build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
@@ -21,7 +21,7 @@
 		"test:e2e": "playwright test",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
-		"db:test:migrate": "export $(grep -v '^#' .env | xargs) && DATABASE_URL=$DATABASE_URL_TEST drizzle-kit migrate",
+		"db:test:migrate": "export $(grep -v '^#' ../.env | xargs) && DATABASE_URL=$DATABASE_URL_TEST drizzle-kit migrate",
 		"db:studio": "drizzle-kit studio",
 		"storybook": "storybook dev -p 6006",
 		"build-storybook": "storybook build",
@@ -42,7 +42,7 @@
 		"@storybook/addon-svelte-csf": "^5.0.10",
 		"@storybook/addon-vitest": "^10.1.2",
 		"@storybook/sveltekit": "^10.1.2",
-		"@sveltejs/adapter-node": "^5.4.0",
+		"@sveltejs/adapter-static": "^3.0.10",
 		"@sveltejs/kit": "^2.47.1",
 		"@sveltejs/vite-plugin-svelte": "^6.2.1",
 		"@tailwindcss/forms": "^0.5.10",

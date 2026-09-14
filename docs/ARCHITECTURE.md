@@ -51,9 +51,10 @@ only an `identikey-auth` `Response` (ADR-005; folded `add-urn-grant`
 2026-08-19); a WebAuthn assertion is refused. OIDF **Config OP**
 runs in CI (`.github/workflows/oidf-config-op.yml`). Basic OP is
 documented (`docs/oidc/basic-op.json`) and is not a required CI job.
-`web/` is *not* yet in place — the SvelteKit
-app is still at the repository root, frozen at tag `pre-rust-pivot`. Relocating
-it is `identikey-core-ccf.11`.
+The SvelteKit app lives under `web/`, builds with `adapter-static`, and is served by
+`identikey-server` after the protocol and authentication routes. The relocated application
+still carries frozen TypeScript-era surfaces from tag `pre-rust-pivot`; replacing those
+surfaces is separate product work.
 
 Companion documents: [`custody-ladder.md`](./custody-ladder.md) (the normative rungs),
 [`licensing-and-commons.md`](./licensing-and-commons.md),

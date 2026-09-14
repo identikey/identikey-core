@@ -5,6 +5,15 @@ yarn.lock
 bun.lock
 bun.lockb
 
+# Generated output
+node_modules/
+.svelte-kit/
+build/
+test-results/
+playwright-report/
+coverage/
+storybook-static/
+
 # Miscellaneous
 /static/
 /drizzle/
