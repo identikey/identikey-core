@@ -78,13 +78,28 @@ struct Wrap {
     epoch: u64,
 }
 
-/// Opaque snapshot for an optional cache. Not the home.
+/// Snapshot for an optional Postgres cache. Not the home.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplicaSnapshot {
     pub keyspace: Hash32,
     pub epoch: u64,
     pub profile: String,
     pub faded: bool,
+    pub roster: Vec<CachedRosterEntry>,
+    pub wraps: Vec<CachedWrap>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedRosterEntry {
+    pub admin: bool,
+    pub actor: Option<Hash32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedWrap {
+    pub alg: String,
+    pub recipient: Vec<u8>,
+    pub epoch: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -131,6 +146,23 @@ impl KeyspaceReplica {
             epoch: s.epoch,
             profile: s.profile.clone(),
             faded: s.faded,
+            roster: s
+                .roster
+                .iter()
+                .map(|e| CachedRosterEntry {
+                    admin: e.admin,
+                    actor: e.actor,
+                })
+                .collect(),
+            wraps: s
+                .wraps
+                .iter()
+                .map(|w| CachedWrap {
+                    alg: w.alg.clone(),
+                    recipient: w.recipient.clone(),
+                    epoch: w.epoch,
+                })
+                .collect(),
         })
     }
 
@@ -209,7 +241,10 @@ impl KeyspaceReplica {
             }
             Some(id) => {
                 self.require_admin(&id, op.actor)?;
-                let space = self.spaces.get_mut(&id).ok_or(ApplyError::UnknownKeyspace)?;
+                let space = self
+                    .spaces
+                    .get_mut(&id)
+                    .ok_or(ApplyError::UnknownKeyspace)?;
                 merge_roster(&mut space.roster, roster);
                 if space.profile != "access-node" {
                     space.wraps = wraps;
@@ -227,7 +262,10 @@ impl KeyspaceReplica {
         }
         let id = req_hash(&body, "keyspace")?;
         self.require_admin(&id, op.actor)?;
-        let space = self.spaces.get_mut(&id).ok_or(ApplyError::UnknownKeyspace)?;
+        let space = self
+            .spaces
+            .get_mut(&id)
+            .ok_or(ApplyError::UnknownKeyspace)?;
         if let Ok(roster) = roster_list(&body) {
             merge_roster(&mut space.roster, roster);
         }
@@ -249,7 +287,10 @@ impl KeyspaceReplica {
         let id = req_hash(&body, "keyspace")?;
         self.require_admin(&id, op.actor)?;
         let leaving = opt_hash(&body, "actor")?;
-        let space = self.spaces.get_mut(&id).ok_or(ApplyError::UnknownKeyspace)?;
+        let space = self
+            .spaces
+            .get_mut(&id)
+            .ok_or(ApplyError::UnknownKeyspace)?;
         if let Some(actor) = leaving {
             space.roster.retain(|e| e.actor != Some(actor));
         }
@@ -266,7 +307,10 @@ impl KeyspaceReplica {
         let id = req_hash(&body, "keyspace")?;
         self.require_admin(&id, op.actor)?;
         let node = req_bytes32(&body, "node")?;
-        let space = self.spaces.get_mut(&id).ok_or(ApplyError::UnknownKeyspace)?;
+        let space = self
+            .spaces
+            .get_mut(&id)
+            .ok_or(ApplyError::UnknownKeyspace)?;
         space.node = Some(node);
         Ok(())
     }
@@ -332,7 +376,10 @@ impl KeyspaceReplica {
         if parents_exactly_one {
             this_conflicted = false;
         }
-        let space = self.spaces.get_mut(&id).ok_or(ApplyError::UnknownKeyspace)?;
+        let space = self
+            .spaces
+            .get_mut(&id)
+            .ok_or(ApplyError::UnknownKeyspace)?;
         if parents_exactly_one {
             for pending in &mut space.pending_begins {
                 pending.conflicted = !parents.contains(&pending.hash);
@@ -359,7 +406,10 @@ impl KeyspaceReplica {
         let id = req_hash(&body, "keyspace")?;
         self.require_admin(&id, op.actor)?;
         let epoch = uint_field(&body, "epoch").ok_or(ApplyError::BadBody)?;
-        let space = self.spaces.get_mut(&id).ok_or(ApplyError::UnknownKeyspace)?;
+        let space = self
+            .spaces
+            .get_mut(&id)
+            .ok_or(ApplyError::UnknownKeyspace)?;
         let live: Vec<(Hash32, Vec<Wrap>)> = space
             .pending_begins
             .iter()
@@ -564,7 +614,9 @@ fn wraps_contain_sign(wraps: &[Wrap], sign: Option<Hash32>) -> bool {
     let Some(sign) = sign else {
         return false;
     };
-    wraps.iter().any(|w| w.recipient.as_slice() == sign.as_slice())
+    wraps
+        .iter()
+        .any(|w| w.recipient.as_slice() == sign.as_slice())
 }
 
 fn merge_roster(dst: &mut Vec<RosterEntry>, src: Vec<RosterEntry>) {

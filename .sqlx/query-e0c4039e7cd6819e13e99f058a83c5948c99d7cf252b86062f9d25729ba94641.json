@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO keyspace_cache (keyspace_id, epoch, profile, faded, roster, wraps)\n               VALUES ($1, $2, $3, $4, $5, $6)\n               ON CONFLICT (keyspace_id) DO UPDATE SET\n                 epoch = EXCLUDED.epoch,\n                 profile = EXCLUDED.profile,\n                 faded = EXCLUDED.faded,\n                 roster = EXCLUDED.roster,\n                 wraps = EXCLUDED.wraps,\n                 updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int8",
+        "Text",
+        "Bool",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e0c4039e7cd6819e13e99f058a83c5948c99d7cf252b86062f9d25729ba94641"
+}

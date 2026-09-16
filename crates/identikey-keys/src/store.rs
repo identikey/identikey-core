@@ -14,6 +14,7 @@ use crate::ceremony::{
     verify_successor_digest,
 };
 use crate::consent::{ConsentHashInput, ConsentResult, ProofKind, hash_consent_entry, hash_proof};
+use crate::keyspace::{CachedRosterEntry, CachedWrap, ReplicaSnapshot};
 use crate::privilege::{PrivilegeError, authorize_elect, is_c2};
 use crate::rung::{AccessLevel, CustodyRung};
 use crate::xid::Xid;
@@ -506,6 +507,73 @@ impl KeysStore {
         tx.commit().await?;
         Ok(id)
     }
+
+    /// Cache of an applied replica. Deleting the row does not kill the keyspace.
+    pub async fn put_keyspace_cache(&self, snap: &ReplicaSnapshot) -> Result<(), StoreError> {
+        let epoch = i64::try_from(snap.epoch).map_err(|e| StoreError::Document(e.to_string()))?;
+        let roster = cache_roster_json(snap);
+        let wraps = cache_wraps_json(snap);
+        sqlx::query!(
+            r#"INSERT INTO keyspace_cache (keyspace_id, epoch, profile, faded, roster, wraps)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT (keyspace_id) DO UPDATE SET
+                 epoch = EXCLUDED.epoch,
+                 profile = EXCLUDED.profile,
+                 faded = EXCLUDED.faded,
+                 roster = EXCLUDED.roster,
+                 wraps = EXCLUDED.wraps,
+                 updated_at = now()"#,
+            snap.keyspace.as_slice(),
+            epoch,
+            &snap.profile,
+            snap.faded,
+            roster,
+            wraps
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_keyspace_cache(
+        &self,
+        id: identikey_log::Hash32,
+    ) -> Result<Option<ReplicaSnapshot>, StoreError> {
+        let row = sqlx::query!(
+            r#"SELECT keyspace_id, epoch, profile, faded, roster, wraps
+               FROM keyspace_cache WHERE keyspace_id = $1"#,
+            id.as_slice()
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let keyspace: identikey_log::Hash32 = row
+            .keyspace_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| StoreError::Document("keyspace_id is not 32 bytes".into()))?;
+        let epoch = u64::try_from(row.epoch).map_err(|e| StoreError::Document(e.to_string()))?;
+        Ok(Some(ReplicaSnapshot {
+            keyspace,
+            epoch,
+            profile: row.profile,
+            faded: row.faded,
+            roster: parse_roster_json(&row.roster)?,
+            wraps: parse_wraps_json(&row.wraps)?,
+        }))
+    }
+
+    pub async fn delete_keyspace_cache(&self, id: identikey_log::Hash32) -> Result<(), StoreError> {
+        sqlx::query!(
+            "DELETE FROM keyspace_cache WHERE keyspace_id = $1",
+            id.as_slice()
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 async fn apply_document_update_tx(
@@ -618,6 +686,102 @@ async fn append_consent_tx(
     .fetch_one(&mut **tx)
     .await?;
     Ok(rec.id)
+}
+
+fn cache_roster_json(snap: &ReplicaSnapshot) -> serde_json::Value {
+    serde_json::Value::Array(
+        snap.roster
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "admin": e.admin,
+                    "actor": e.actor.map(|a| a.to_vec()),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn cache_wraps_json(snap: &ReplicaSnapshot) -> serde_json::Value {
+    serde_json::Value::Array(
+        snap.wraps
+            .iter()
+            .map(|w| {
+                serde_json::json!({
+                    "alg": w.alg,
+                    "recipient": w.recipient,
+                    "epoch": w.epoch,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn json_to_bytes(v: &serde_json::Value) -> Result<Vec<u8>, StoreError> {
+    let Some(items) = v.as_array() else {
+        return Err(StoreError::Document("expected JSON byte array".into()));
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let n = item
+            .as_u64()
+            .ok_or_else(|| StoreError::Document("byte array entry is not a number".into()))?;
+        out.push(
+            u8::try_from(n)
+                .map_err(|_| StoreError::Document("byte array entry exceeds u8".into()))?,
+        );
+    }
+    Ok(out)
+}
+
+fn parse_roster_json(v: &serde_json::Value) -> Result<Vec<CachedRosterEntry>, StoreError> {
+    let Some(arr) = v.as_array() else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for item in arr {
+        let admin = item
+            .get("admin")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let actor = match item.get("actor") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(bytes) => Some(
+                identikey_log::Hash32::try_from(json_to_bytes(bytes)?.as_slice())
+                    .map_err(|_| StoreError::Document("roster actor is not 32 bytes".into()))?,
+            ),
+        };
+        out.push(CachedRosterEntry { admin, actor });
+    }
+    Ok(out)
+}
+
+fn parse_wraps_json(v: &serde_json::Value) -> Result<Vec<CachedWrap>, StoreError> {
+    let Some(arr) = v.as_array() else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for item in arr {
+        let alg = item
+            .get("alg")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let recipient = match item.get("recipient") {
+            None | Some(serde_json::Value::Null) => Vec::new(),
+            Some(bytes) => json_to_bytes(bytes)?,
+        };
+        let epoch = item
+            .get("epoch")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        out.push(CachedWrap {
+            alg,
+            recipient,
+            epoch,
+        });
+    }
+    Ok(out)
 }
 
 fn encode_document(document: &XIDDocument) -> Result<Vec<u8>, StoreError> {
@@ -1150,5 +1314,42 @@ mod tests {
             CustodyRung::C3
         );
         assert_eq!(store.has_managed_key(xid).await.unwrap(), Some(false));
+    }
+
+    #[sqlx::test]
+    async fn keyspace_cache_delete_does_not_kill_replica(pool: PgPool) {
+        use identikey_log::{Author, Hlc, Op};
+
+        let store = KeysStore::from_pool(pool);
+        let author = Author::from_seed(&[7u8; 32]);
+        let actor = author.actor();
+        let body =
+            crate::keyspace::encode_genesis(actor, "ed25519", &[1u8; 32], &[2u8; 32]).unwrap();
+        let genesis =
+            Op::new("keyspace.join", actor, Hlc::new(1_700_000_000_000, 1)).with_body(body);
+        let mut replica = crate::keyspace::KeyspaceReplica::new();
+        let id = replica.apply(&genesis).unwrap();
+        let snap = replica.get(&id).expect("applied genesis");
+        store.put_keyspace_cache(&snap).await.unwrap();
+        let cached = store
+            .get_keyspace_cache(id)
+            .await
+            .unwrap()
+            .expect("cache row");
+        assert_eq!(cached, snap);
+
+        store.delete_keyspace_cache(id).await.unwrap();
+        assert!(store.get_keyspace_cache(id).await.unwrap().is_none());
+        assert_eq!(replica.get(&id).expect("replica is home"), snap);
+
+        let mut leave_body = Map::new();
+        leave_body.insert("keyspace", CBOR::to_byte_string(id));
+        leave_body.insert("actor", CBOR::to_byte_string(actor));
+        let leave = Op::new("keyspace.leave", actor, Hlc::new(1_700_000_000_001, 1))
+            .with_body(CBOR::from(leave_body).to_cbor_data())
+            .with_parents([id]);
+        replica.apply(&leave).unwrap();
+        assert!(replica.get(&id).expect("still applied").faded);
+        assert!(store.get_keyspace_cache(id).await.unwrap().is_none());
     }
 }

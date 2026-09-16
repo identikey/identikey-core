@@ -88,6 +88,7 @@ pub use ceremony::{
 pub use consent::{
     CONSENT_HASH_V1, ConsentHashInput, ConsentResult, ProofKind, hash_consent_entry, hash_proof,
 };
+pub use keyspace::{ApplyError, CachedRosterEntry, CachedWrap, KeyspaceReplica, ReplicaSnapshot};
 pub use privilege::{
     IDENTIKEY_C2_PRIVILEGES, PrivilegeError, USER_C2_PRIVILEGES, authorize_elect, c1, c2_native,
     is_c2, key_allows, promote_c1_to_c2,
@@ -98,7 +99,6 @@ pub use store::{
     ConsentAppend, DeviceRecord, KeysStore, PublishedDocument, StoreError, StoredAccount,
     StoredCustody, StoredPasskey,
 };
-pub use keyspace::{ApplyError, KeyspaceReplica, ReplicaSnapshot};
 pub use xid::{Xid, XidError};
 
 /// sqlx migrator for the schema in `migrations/`.
@@ -151,6 +151,7 @@ mod tests {
             "credentials",
             "custody_events",
             "custody_records",
+            "keyspace_cache",
         ] {
             assert!(
                 tables.iter().any(|t| t == needed),
