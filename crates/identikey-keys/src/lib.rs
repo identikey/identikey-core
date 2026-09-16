@@ -82,18 +82,18 @@ pub mod store;
 pub mod xid;
 
 pub use ceremony::{
-    CeremonyError, SUCCESSOR_DIGEST_LEN, check_resolution, held_publics, parse_successor_digest,
-    successor_digest, validate_c2_to_c3, verify_successor_digest,
+    check_resolution, held_publics, parse_successor_digest, successor_digest, validate_c2_to_c3,
+    verify_successor_digest, CeremonyError, SUCCESSOR_DIGEST_LEN,
 };
 pub use consent::{
-    CONSENT_HASH_V1, ConsentHashInput, ConsentResult, ProofKind, hash_consent_entry, hash_proof,
+    hash_consent_entry, hash_proof, ConsentHashInput, ConsentResult, ProofKind, CONSENT_HASH_V1,
 };
 pub use keyspace::{ApplyError, CachedRosterEntry, CachedWrap, KeyspaceReplica, ReplicaSnapshot};
 pub use privilege::{
-    IDENTIKEY_C2_PRIVILEGES, PrivilegeError, USER_C2_PRIVILEGES, authorize_elect, c1, c2_native,
-    is_c2, key_allows, promote_c1_to_c2,
+    authorize_elect, c1, c2_native, c2_wrap_recipient, is_c2, key_allows, promote_c1_to_c2,
+    PrivilegeError, IDENTIKEY_C2_PRIVILEGES, USER_C2_PRIVILEGES,
 };
-pub use resolve::{FetchedDocument, ResolutionTier, ResolveError, WinningDoc, resolve_documents};
+pub use resolve::{resolve_documents, FetchedDocument, ResolutionTier, ResolveError, WinningDoc};
 pub use rung::{AccessLevel, CustodyRung, ParseRungError};
 pub use store::{
     ConsentAppend, DeviceRecord, KeysStore, PublishedDocument, StoreError, StoredAccount,
@@ -584,12 +584,10 @@ mod tests {
                 .sign_counter,
             4
         );
-        assert!(
-            store
-                .get_passkey_by_credential_id(&[0x00])
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(store
+            .get_passkey_by_credential_id(&[0x00])
+            .await
+            .unwrap()
+            .is_none());
     }
 }

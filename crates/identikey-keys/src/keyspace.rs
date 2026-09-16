@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use dcbor::prelude::*;
-use identikey_log::{Hash32, Op, codec};
+use identikey_log::{codec, Hash32, Hlc, Op};
 
 const KIND_JOIN: &str = "keyspace.join";
 const KIND_CHANGE: &str = "keyspace.change";
@@ -124,6 +124,8 @@ pub enum ApplyError {
     EpochConflict,
     #[error("native x25519 PublicKey.alg is not minted here (ikp-2l8)")]
     X25519RosterAlg,
+    #[error("wrap-on-login is access-node only")]
+    NotAccessNode,
     #[error("ChangeBody must not carry wraps")]
     ChangeWraps,
     #[error("identikey-log: {0}")]
@@ -180,6 +182,32 @@ impl KeyspaceReplica {
             .get(id)
             .map(|s| s.pending_begins.iter().filter(|b| !b.conflicted).count())
             .unwrap_or(0)
+    }
+
+    /// Access-node wrap-on-login: join merges the caller's PUK wrap, epoch stays.
+    pub fn wrap_login(
+        &mut self,
+        actor: Hash32,
+        hlc: Hlc,
+        access_node: Hash32,
+        recipient: &[u8],
+        parent: Hash32,
+    ) -> Result<Hash32, ApplyError> {
+        let (profile, epoch) = {
+            let space = self
+                .spaces
+                .get(&access_node)
+                .ok_or(ApplyError::UnknownKeyspace)?;
+            (space.profile.clone(), space.epoch)
+        };
+        if profile != "access-node" {
+            return Err(ApplyError::NotAccessNode);
+        }
+        let body = encode_login_join(access_node, recipient, epoch)?;
+        let op = Op::new(KIND_JOIN, actor, hlc)
+            .with_body(body)
+            .with_parents([parent]);
+        self.apply(&op)
     }
 
     pub fn apply(&mut self, op: &Op) -> Result<Hash32, ApplyError> {
@@ -246,7 +274,9 @@ impl KeyspaceReplica {
                     .get_mut(&id)
                     .ok_or(ApplyError::UnknownKeyspace)?;
                 merge_roster(&mut space.roster, roster);
-                if space.profile != "access-node" {
+                if space.profile == "access-node" {
+                    merge_wraps(&mut space.wraps, wraps);
+                } else {
                     space.wraps = wraps;
                     space.epoch = epoch;
                 }
@@ -628,6 +658,13 @@ fn merge_roster(dst: &mut Vec<RosterEntry>, src: Vec<RosterEntry>) {
     }
 }
 
+fn merge_wraps(dst: &mut Vec<Wrap>, src: Vec<Wrap>) {
+    for w in src {
+        dst.retain(|x| x.recipient != w.recipient);
+        dst.push(w);
+    }
+}
+
 /// Encode a genesis join body for tests.
 pub fn encode_genesis(
     actor: Hash32,
@@ -657,10 +694,52 @@ pub fn encode_genesis(
     Ok(CBOR::from(body).to_cbor_data())
 }
 
+/// Inner access-node nest body for tests.
+pub fn encode_nest(
+    outer: Hash32,
+    actor: Hash32,
+    wrap_recipient: &[u8],
+) -> Result<Vec<u8>, ApplyError> {
+    let mut puk_map = Map::new();
+    puk_map.insert("alg", ALG_ED25519);
+    puk_map.insert("key", CBOR::to_byte_string([1u8; 32]));
+    let mut entry = Map::new();
+    entry.insert("admin", true);
+    entry.insert("actor", CBOR::to_byte_string(actor));
+    entry.insert("puks", vec![CBOR::from(puk_map)]);
+    let mut wrap = Map::new();
+    wrap.insert("alg", "x25519-xchacha20poly1305");
+    wrap.insert("recipient", CBOR::to_byte_string(wrap_recipient));
+    wrap.insert("epoch", 0u64);
+    let mut body = Map::new();
+    body.insert("outer", CBOR::to_byte_string(outer));
+    body.insert("roster", vec![CBOR::from(entry)]);
+    body.insert("wraps", vec![CBOR::from(wrap)]);
+    body.insert("epoch", 0u64);
+    body.insert("profile", "access-node");
+    Ok(CBOR::from(body).to_cbor_data())
+}
+
+fn encode_login_join(
+    keyspace: Hash32,
+    recipient: &[u8],
+    epoch: u64,
+) -> Result<Vec<u8>, ApplyError> {
+    let mut wrap = Map::new();
+    wrap.insert("alg", "x25519-xchacha20poly1305");
+    wrap.insert("recipient", CBOR::to_byte_string(recipient));
+    wrap.insert("epoch", epoch);
+    let mut body = Map::new();
+    body.insert("keyspace", CBOR::to_byte_string(keyspace));
+    body.insert("wraps", vec![CBOR::from(wrap)]);
+    body.insert("epoch", epoch);
+    Ok(CBOR::from(body).to_cbor_data())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use identikey_log::{Author, Hlc, Op, codec};
+    use identikey_log::{codec, Author, Hlc, Op};
 
     use super::*;
 
@@ -784,5 +863,80 @@ mod tests {
         let actor = author.actor();
         let err = encode_genesis(actor, "x25519", &[1u8; 32], &[2u8; 32]).unwrap_err();
         assert_eq!(err, ApplyError::X25519RosterAlg);
+    }
+
+    #[test]
+    fn access_node_login_wraps_without_rotating_epoch() {
+        let author = Author::from_seed(&[7u8; 32]);
+        let actor = author.actor();
+        let body = encode_genesis(actor, ALG_ED25519, &[1u8; 32], &[2u8; 32]).unwrap();
+        let genesis = op(KIND_JOIN, actor, body, &[]);
+        let mut r = KeyspaceReplica::new();
+        let house = r.apply(&genesis).unwrap();
+        let nest = op(
+            KIND_NEST,
+            actor,
+            encode_nest(house, actor, &[3u8; 32]).unwrap(),
+            &[house],
+        );
+        let access = r.apply(&nest).unwrap();
+        assert_eq!(r.get(&access).unwrap().epoch, 0);
+        assert_eq!(r.get(&access).unwrap().profile, "access-node");
+
+        let member = [9u8; 32];
+        r.wrap_login(
+            actor,
+            Hlc::new(1_700_000_000_002, 1),
+            access,
+            &member,
+            access,
+        )
+        .unwrap();
+        let snap = r.get(&access).unwrap();
+        assert_eq!(snap.epoch, 0);
+        assert!(snap
+            .wraps
+            .iter()
+            .any(|w| w.recipient.as_slice() == member.as_slice()));
+    }
+
+    #[test]
+    fn wrap_login_refuses_house_and_sign() {
+        let author = Author::from_seed(&[7u8; 32]);
+        let actor = author.actor();
+        let body = encode_genesis(actor, ALG_ED25519, &[1u8; 32], &[2u8; 32]).unwrap();
+        let genesis = op(KIND_JOIN, actor, body, &[]);
+        let mut r = KeyspaceReplica::new();
+        let house = r.apply(&genesis).unwrap();
+        let err = r
+            .wrap_login(
+                actor,
+                Hlc::new(1_700_000_000_002, 1),
+                house,
+                &[9u8; 32],
+                house,
+            )
+            .unwrap_err();
+        assert_eq!(err, ApplyError::NotAccessNode);
+
+        let nest = op(
+            KIND_NEST,
+            actor,
+            encode_nest(house, actor, &[3u8; 32]).unwrap(),
+            &[house],
+        );
+        let access = r.apply(&nest).unwrap();
+        let sign_pk = [8u8; 32];
+        r.refuse_sign(sign_pk);
+        let err = r
+            .wrap_login(
+                actor,
+                Hlc::new(1_700_000_000_003, 1),
+                access,
+                sign_pk.as_slice(),
+                access,
+            )
+            .unwrap_err();
+        assert_eq!(err, ApplyError::SignRecipient);
     }
 }

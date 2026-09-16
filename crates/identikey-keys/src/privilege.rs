@@ -4,7 +4,7 @@
 //! The split is real only if we refuse to apply a key-graph change that was
 //! not authorized by a key that already holds `Elect`.
 
-use bc_components::PublicKeysProvider;
+use bc_components::{EncapsulationPublicKey, Encrypter, PublicKeysProvider};
 use bc_xid::{
     HasPermissions, Key, Privilege, XIDDocument, XIDGenesisMarkOptions, XIDInceptionKeyOptions,
 };
@@ -146,6 +146,25 @@ pub fn c2_native(
     Ok(doc)
 }
 
+/// C2 wrap-target: the user's X25519 encapsulation public, not Sign+Auth.
+pub fn c2_wrap_recipient(doc: &XIDDocument) -> Result<Vec<u8>, PrivilegeError> {
+    if !is_c2(doc) {
+        return Err(PrivilegeError::NotC2("wrap recipient requires C2"));
+    }
+    for key in doc.keys() {
+        if key_allows(key, Privilege::Elect) && !key_allows(key, Privilege::Sign) {
+            let enc = key.public_keys().encapsulation_public_key();
+            let EncapsulationPublicKey::X25519(pk) = enc else {
+                return Err(PrivilegeError::NotC2("C2 wrap recipient is not X25519"));
+            };
+            return Ok(pk.as_bytes().to_vec());
+        }
+    }
+    Err(PrivilegeError::NotC2(
+        "no user Elect key for wrap recipient",
+    ))
+}
+
 /// C1: IdentiKey's key is inception and holds `All`. The user has no Elect key.
 pub fn c1(identikey_public: &impl PublicKeysProvider) -> XIDDocument {
     XIDDocument::new(
@@ -242,6 +261,7 @@ fn set_privileges(
 #[allow(
     clippy::unwrap_used,
     clippy::expect_used,
+    clippy::panic,
     reason = "panicking on failure is the assertion in a test"
 )]
 mod tests {
@@ -281,6 +301,26 @@ mod tests {
             Err(PrivilegeError::ElectDenied)
         );
         assert!(authorize_elect(&doc, &user).is_ok());
+    }
+
+    #[test]
+    fn wrap_recipient_is_user_x25519_not_sign() {
+        use bc_components::Encrypter;
+
+        let (user, ours) = pair();
+        let doc = c2_native(&user, &ours).unwrap();
+        let got = c2_wrap_recipient(&doc).unwrap();
+        let want = match user.public_keys().encapsulation_public_key() {
+            EncapsulationPublicKey::X25519(pk) => pk.as_bytes().to_vec(),
+            _ => panic!("fixture user is X25519"),
+        };
+        assert_eq!(got, want);
+        let ours_enc = match ours.public_keys().encapsulation_public_key() {
+            EncapsulationPublicKey::X25519(pk) => pk.as_bytes().to_vec(),
+            _ => panic!("fixture ours is X25519"),
+        };
+        assert_ne!(got, ours_enc);
+        assert!(c2_wrap_recipient(&c1(&ours)).is_err());
     }
 
     #[test]
