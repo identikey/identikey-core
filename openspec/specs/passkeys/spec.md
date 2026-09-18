@@ -14,8 +14,11 @@ synced-passkey counter policy are later slices (`5gh.2`–`5gh.4`).
 The system SHALL perform WebAuthn registration and assertion with
 `webauthn-rs`, using the fail-closed RP ID and origin allowlist
 already parsed at boot. Discoverable (resident) keys SHALL be
-requested. A verified assertion SHALL bind to an existing account
-XID and SHALL NOT create an account implicitly.
+**required** so a synced authenticator (1Password, iCloud Keychain,
+Google Password Manager) can store the passkey. Creation options
+SHALL NOT set `authenticatorAttachment` or `hints` that prefer a
+platform authenticator only. A verified assertion SHALL bind to an
+existing account XID and SHALL NOT create an account implicitly.
 
 #### Scenario: Registration stores a passkey credential
 

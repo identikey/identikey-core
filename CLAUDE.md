@@ -91,6 +91,20 @@ cert SAN `auth.identikey.me` until 2026-11-25, `/health` 200, discovery
 200, JWKS EdDSA kid `JZnOxfXDaklXwH9yyeEbqi6AMkD68zE74w3mv7_A3yk`.
 Bare `/authorize` is 400 (client_id required). `/signup` 200.
 
+Public SPA clients (PKCE `none`) may list extra `redirects` in
+`IDENTIKEY_CLIENTS`. CORS on `/token` (and the rest of the OP) allows
+those redirect origins, including loopback port flexibility.
+
+World Tree site CMS (`wtnf-web`):
+
+```json
+[{"id":"wtnf-web","auth":"none","redirect":"https://worldtree.network/admin/callback/","redirects":["http://127.0.0.1:5173/admin/callback/"]}]
+```
+
+Append that object to the existing `IDENTIKEY_CLIENTS` array on the
+guest; do not replace taskmaster clients. Pairwise sector is
+`worldtree.network`.
+
 First production RP (taskmaster-web ADR 0001): two confidential
 clients, never one. Pairwise sector is the redirect *host*.
 

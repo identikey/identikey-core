@@ -130,7 +130,7 @@ pub fn passkey_login(ceremony_json: &str) -> String {
         "Sign in — IdentiKey",
         &format!(
             "<h1>Sign in</h1>\
-             <p>Use your passkey. No username.</p>\
+             <p>Use a passkey from 1Password, iCloud Keychain, or this device. No username.</p>\
              <p id=\"status\" class=\"status\"></p>\
              <button type=\"button\" id=\"go\">Continue with passkey</button>\
              <p style=\"margin-top:1.25rem\">New here? <a id=\"signup\" href=\"/signup\">Create an account</a></p>\
@@ -190,7 +190,8 @@ pub fn signup() -> String {
         "Create account — IdentiKey",
         &format!(
             "<h1>Create an account</h1>\
-             <p>We will create a managed identity and enroll a passkey on this device. \
+             <p>We will create a managed identity and enroll a passkey. Save it in \
+             1Password (or iCloud Keychain / this device) when the browser asks. \
              This is access, not your Elect key.</p>\
              <p id=\"status\" class=\"status\"></p>\
              <button type=\"button\" id=\"go\">Create account and add a passkey</button>\

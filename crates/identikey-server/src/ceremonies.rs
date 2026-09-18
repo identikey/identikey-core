@@ -261,12 +261,46 @@ impl CeremonyHub {
 fn client_public_key(challenge: &impl Serialize) -> Result<serde_json::Value, CeremonyError> {
     let value =
         serde_json::to_value(challenge).map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
-    Ok(match value {
+    let public_key = match value {
         serde_json::Value::Object(mut map) => map
             .remove("publicKey")
             .unwrap_or(serde_json::Value::Object(map)),
         other => other,
-    })
+    };
+    Ok(passkey_manager_compat(public_key))
+}
+
+/// Options 1Password (and iCloud / Google Password Manager) can intercept.
+///
+/// Do not set `authenticatorAttachment` or `hints: ["client-device"]` — those
+/// hide synced passkey providers behind platform authenticators. Discoverable
+/// credentials are required so usernameless login works from a vault.
+fn passkey_manager_compat(mut public_key: serde_json::Value) -> serde_json::Value {
+    let Some(obj) = public_key.as_object_mut() else {
+        return public_key;
+    };
+    obj.remove("hints");
+    let creation = obj.contains_key("user");
+    if creation {
+        let mut selection = obj
+            .remove("authenticatorSelection")
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+        selection.remove("authenticatorAttachment");
+        selection.insert("residentKey".into(), serde_json::json!("required"));
+        selection.insert("requireResidentKey".into(), serde_json::json!(true));
+        selection.insert("userVerification".into(), serde_json::json!("required"));
+        obj.insert(
+            "authenticatorSelection".into(),
+            serde_json::Value::Object(selection),
+        );
+    } else if let Some(selection) = obj.get_mut("authenticatorSelection")
+        && let Some(sel) = selection.as_object_mut()
+    {
+        sel.remove("authenticatorAttachment");
+        sel.insert("userVerification".into(), serde_json::json!("required"));
+    }
+    public_key
 }
 
 async fn load_passkeys(store: &KeysStore, xid: Xid) -> Result<Vec<Passkey>, CeremonyError> {

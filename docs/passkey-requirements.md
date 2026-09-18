@@ -44,6 +44,9 @@ themselves a rung.
 - Discoverable credentials (resident keys) required — usernameless login is the
   target UX. The existing `authentication-options.ts` / assertion-verification work
   already supports the `challenge.userId === null` discoverable path.
+- Do **not** set `authenticatorAttachment: platform` or
+  `hints: ["client-device"]`. Those hide 1Password and other synced passkey
+  providers. Leave attachment unspecified so the browser offers the vault.
 
 ### R2. Additional passkeys — offered, never pushed
 

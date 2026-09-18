@@ -638,6 +638,24 @@ impl Provider {
         self.clients.lock().ok()?.get(id).cloned()
     }
 
+    /// Whether a browser `Origin` may call `/token` (and other SPA endpoints).
+    ///
+    /// Public clients exchange the authorization code from JavaScript. The
+    /// origin must match a registered redirect (scheme + host + port), with
+    /// RFC 8252 loopback port flexibility so Vite can hop 5173 → 5174.
+    #[must_use]
+    pub fn allows_browser_origin(&self, origin: &str) -> bool {
+        let Ok(clients) = self.clients.lock() else {
+            return false;
+        };
+        clients.values().any(|client| {
+            client
+                .redirect_uris
+                .iter()
+                .any(|uri| origin_matches_redirect(uri, origin))
+        })
+    }
+
     #[cfg(test)]
     fn refresh_is_hashed(&self, raw: &str) -> bool {
         let Ok(map) = self.refresh.lock() else {
@@ -891,6 +909,38 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
         .zip(b.iter())
         .fold(0u8, |acc, (x, y)| acc | (x ^ y))
         == 0
+}
+
+fn origin_of(uri: &str) -> Option<String> {
+    let parsed = url::Url::parse(uri).ok()?;
+    Some(parsed.origin().ascii_serialization())
+}
+
+fn loopback_origin_flexible(registered_origin: &str, requested_origin: &str) -> bool {
+    fn split(origin: &str) -> Option<(&str, &str)> {
+        for host in ["http://127.0.0.1", "http://localhost", "http://[::1]"] {
+            if origin == host {
+                return Some((host, ""));
+            }
+            if let Some(rest) = origin.strip_prefix(host)
+                && rest.starts_with(':')
+            {
+                return Some((host, rest));
+            }
+        }
+        None
+    }
+    match (split(registered_origin), split(requested_origin)) {
+        (Some((a, _)), Some((b, _))) => a == b,
+        _ => false,
+    }
+}
+
+fn origin_matches_redirect(redirect: &str, origin: &str) -> bool {
+    let Some(registered) = origin_of(redirect) else {
+        return false;
+    };
+    registered == origin || loopback_origin_flexible(&registered, origin)
 }
 
 /// Exact string match, plus RFC 8252 §7.3 loopback port flexibility.
@@ -1185,6 +1235,21 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(err.error, "invalid_grant");
+    }
+
+    #[test]
+    fn spa_origin_matches_redirect_and_loopback_port() {
+        let p = provider();
+        p.register(
+            Client::new("wtnf-web", "worldtree.network")
+                .with_redirect("https://worldtree.network/admin/callback/")
+                .with_redirect("http://127.0.0.1:5173/admin/callback/"),
+        );
+        assert!(p.allows_browser_origin("https://worldtree.network"));
+        assert!(p.allows_browser_origin("http://127.0.0.1:5173"));
+        assert!(p.allows_browser_origin("http://127.0.0.1:5174"));
+        assert!(!p.allows_browser_origin("https://evil.example"));
+        assert!(!p.allows_browser_origin("http://localhost:5173"));
     }
 
     fn confidential_provider() -> Provider {

@@ -20,8 +20,9 @@ mod webauthn;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::{Form, OriginalUri, Path, Query, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::extract::{Form, OriginalUri, Path, Query, Request, State};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
@@ -103,6 +104,7 @@ fn router(
         routes = routes.route("/authorize/dev", any(|| async { StatusCode::NOT_FOUND }));
     }
     routes
+        .layer(middleware::from_fn_with_state(provider.clone(), spa_cors))
         .with_state(AppState {
             store,
             provider,
@@ -110,6 +112,52 @@ fn router(
             ceremonies,
         })
         .fallback_service(web_assets(web_dir))
+}
+
+/// CORS for public-client PKCE (CMS / other SPAs). Origins come from
+/// registered redirect URIs; unknown origins get no ACAO header.
+async fn spa_cors(State(provider): State<Arc<Provider>>, req: Request, next: Next) -> Response {
+    let origin = req
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let allowed = origin
+        .as_deref()
+        .is_some_and(|origin| provider.allows_browser_origin(origin));
+    if req.method() == Method::OPTIONS {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        apply_spa_cors(&mut response, origin.as_deref(), allowed);
+        return response;
+    }
+    let mut response = next.run(req).await;
+    apply_spa_cors(&mut response, origin.as_deref(), allowed);
+    response
+}
+
+fn apply_spa_cors(response: &mut Response, origin: Option<&str>, allowed: bool) {
+    if !allowed {
+        return;
+    }
+    let Some(origin) = origin else {
+        return;
+    };
+    if let Ok(value) = HeaderValue::from_str(origin) {
+        response
+            .headers_mut()
+            .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+    }
+    response.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("authorization, content-type, accept"),
+    );
+    response.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, POST, OPTIONS"),
+    );
+    response
+        .headers_mut()
+        .insert(header::VARY, HeaderValue::from_static("Origin"));
 }
 
 /// Related Origin Requests (`identikey-core-2js`). Served from the first
@@ -795,7 +843,10 @@ fn redirect_with_error(uri: &str, error: &str, description: &str, state: Option<
 #[derive(Debug, Deserialize)]
 struct ClientJson {
     id: String,
-    redirect: String,
+    #[serde(default)]
+    redirect: Option<String>,
+    #[serde(default)]
+    redirects: Vec<String>,
     #[serde(default)]
     secret: Option<String>,
     #[serde(default)]
@@ -811,11 +862,11 @@ fn sector_from_redirect(redirect: &str) -> String {
 
 fn client_from_spec(
     id: String,
-    redirect: String,
+    redirects: Vec<String>,
     secret: Option<String>,
     auth: Option<String>,
 ) -> Result<Client, BoxError> {
-    if id.is_empty() || redirect.is_empty() {
+    if id.is_empty() || redirects.is_empty() || redirects.iter().any(String::is_empty) {
         return Err("OIDC client id and redirect are required".into());
     }
     let method = match (auth.as_deref(), secret.as_deref()) {
@@ -823,8 +874,14 @@ fn client_from_spec(
         (None, Some(s)) if !s.is_empty() => TokenEndpointAuthMethod::ClientSecretBasic,
         (None, _) => TokenEndpointAuthMethod::None,
     };
-    let sector = sector_from_redirect(&redirect);
-    let client = Client::new(id, sector).with_redirect(redirect);
+    let Some(primary) = redirects.first() else {
+        return Err("OIDC client id and redirect are required".into());
+    };
+    let sector = sector_from_redirect(primary);
+    let mut client = Client::new(id, sector);
+    for redirect in redirects {
+        client = client.with_redirect(redirect);
+    }
     match (method, secret.as_deref().filter(|s| !s.is_empty())) {
         (TokenEndpointAuthMethod::None, Some(_)) => {
             Err("public client (token_endpoint_auth_method=none) must not have a secret".into())
@@ -839,6 +896,19 @@ fn client_from_spec(
     }
 }
 
+fn merge_redirects(primary: Option<String>, extra: Vec<String>) -> Vec<String> {
+    let mut redirects = Vec::new();
+    if let Some(primary) = primary.filter(|s| !s.is_empty()) {
+        redirects.push(primary);
+    }
+    for uri in extra {
+        if !uri.is_empty() && !redirects.contains(&uri) {
+            redirects.push(uri);
+        }
+    }
+    redirects
+}
+
 fn optional_client() -> Result<Option<Client>, BoxError> {
     let id = match std::env::var("IDENTIKEY_CLIENT_ID") {
         Ok(id) if !id.is_empty() => id,
@@ -847,7 +917,12 @@ fn optional_client() -> Result<Option<Client>, BoxError> {
     let redirect = std::env::var("IDENTIKEY_CLIENT_REDIRECT").unwrap_or_default();
     let secret = std::env::var("IDENTIKEY_CLIENT_SECRET").ok();
     let auth = std::env::var("IDENTIKEY_CLIENT_AUTH_METHOD").ok();
-    Ok(Some(client_from_spec(id, redirect, secret, auth)?))
+    Ok(Some(client_from_spec(
+        id,
+        merge_redirects(Some(redirect), Vec::new()),
+        secret,
+        auth,
+    )?))
 }
 
 fn extra_clients() -> Result<Vec<Client>, BoxError> {
@@ -859,7 +934,14 @@ fn extra_clients() -> Result<Vec<Client>, BoxError> {
         .map_err(|e| format!("IDENTIKEY_CLIENTS is not valid JSON: {e}"))?;
     specs
         .into_iter()
-        .map(|spec| client_from_spec(spec.id, spec.redirect, spec.secret, spec.auth))
+        .map(|spec| {
+            client_from_spec(
+                spec.id,
+                merge_redirects(spec.redirect, spec.redirects),
+                spec.secret,
+                spec.auth,
+            )
+        })
         .collect()
 }
 
@@ -995,6 +1077,55 @@ mod tests {
 
     fn test_router_dev(store: KeysStore, provider: Arc<Provider>) -> Router {
         router(store, provider, true, test_webauthn())
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn spa_preflight_allows_registered_loopback_origin(pool: sqlx::PgPool) {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = test_router(KeysStore::from_pool(pool));
+        let allowed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/token")
+                    .header(header::ORIGIN, "http://127.0.0.1:9999")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            allowed
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .and_then(|v| v.to_str().ok()),
+            Some("http://127.0.0.1:9999")
+        );
+
+        let denied = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/token")
+                    .header(header::ORIGIN, "https://evil.example")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            denied
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1512,7 +1643,7 @@ mod tests {
     fn confidential_spec_hashes_and_public_rejects_secret() {
         let confidential = client_from_spec(
             "basic-1".into(),
-            "http://127.0.0.1:9999/cb".into(),
+            vec!["http://127.0.0.1:9999/cb".into()],
             Some("s3cret".into()),
             Some("client_secret_basic".into()),
         )
@@ -1532,7 +1663,7 @@ mod tests {
         for (id, auth) in two_basic_one_post {
             let client = client_from_spec(
                 id.into(),
-                "http://127.0.0.1:9999/cb".into(),
+                vec!["http://127.0.0.1:9999/cb".into()],
                 Some(format!("{id}-secret")),
                 Some(auth.into()),
             )
@@ -1543,7 +1674,7 @@ mod tests {
         assert!(
             client_from_spec(
                 "smoke".into(),
-                "http://127.0.0.1:9999/cb".into(),
+                vec!["http://127.0.0.1:9999/cb".into()],
                 Some("nope".into()),
                 Some("none".into()),
             )
@@ -1552,7 +1683,7 @@ mod tests {
         assert!(
             client_from_spec(
                 "basic-1".into(),
-                "http://127.0.0.1:9999/cb".into(),
+                vec!["http://127.0.0.1:9999/cb".into()],
                 None,
                 Some("client_secret_basic".into()),
             )
@@ -1939,6 +2070,22 @@ mod tests {
                 .unwrap();
         assert_eq!(first_json["publicKey"]["rp"]["id"], "auth.identikey.me");
         assert_eq!(first_json["publicKey"]["rp"]["name"], "IdentiKey");
+        assert!(
+            first_json["publicKey"]["authenticatorSelection"]["authenticatorAttachment"].is_null()
+        );
+        assert_eq!(
+            first_json["publicKey"]["authenticatorSelection"]["residentKey"],
+            "required"
+        );
+        assert_eq!(
+            first_json["publicKey"]["authenticatorSelection"]["requireResidentKey"],
+            true
+        );
+        assert_eq!(
+            first_json["publicKey"]["authenticatorSelection"]["userVerification"],
+            "required"
+        );
+        assert!(first_json["publicKey"]["hints"].is_null());
         let user_id = first_json["publicKey"]["user"]["id"].clone();
         assert!(!user_id.is_null());
 

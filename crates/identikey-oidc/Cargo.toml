@@ -23,6 +23,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 sha2.workspace = true
+url.workspace = true
 getrandom = "0.2"
 hkdf = "0.12"
 base64 = "0.22"
