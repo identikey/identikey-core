@@ -311,6 +311,35 @@ mod tests {
         .unwrap();
     }
 
+    #[sqlx::test]
+    async fn ssh_git_shape_is_enforced(pool: PgPool) {
+        insert_account(&pool, xid(8)).await;
+        sqlx::query(
+            "INSERT INTO credentials (xid, kind, device_public_key)
+             VALUES ($1, 'ssh_git', $2)",
+        )
+        .bind(xid(8).as_bytes().as_slice())
+        .bind(b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake".as_slice())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let err = sqlx::query(
+            "INSERT INTO credentials (xid, kind, webauthn_credential_id)
+             VALUES ($1, 'ssh_git', $2)",
+        )
+        .bind(xid(8).as_bytes().as_slice())
+        .bind([0xAAu8].as_slice())
+        .execute(&pool)
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("credentials_kind_shape")
+                || err.to_string().contains("credentials_kind_known"),
+            "unexpected error: {err}"
+        );
+    }
+
     async fn insert_passkey(pool: &PgPool, id: Xid, cred: &[u8]) -> uuid::Uuid {
         sqlx::query_scalar(
             "INSERT INTO credentials

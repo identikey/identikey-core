@@ -2,8 +2,8 @@
 
 use std::fmt;
 
-use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use hkdf::Hkdf;
 use identikey_keys::Xid;
 use sha2::{Digest, Sha256};
@@ -17,6 +17,24 @@ pub enum SubjectType {
     #[default]
     Pairwise,
     Public,
+}
+
+impl SubjectType {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "public" => Ok(Self::Public),
+            "pairwise" => Ok(Self::Pairwise),
+            other => Err(format!("unknown subject_type {other}")),
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Pairwise => "pairwise",
+        }
+    }
 }
 
 /// How this client authenticates at `/token` (RFC 6749 §2.3, RFC 7591).
@@ -99,6 +117,12 @@ impl Client {
     #[must_use]
     pub fn with_redirect(mut self, uri: impl Into<String>) -> Self {
         self.redirect_uris.push(uri.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_subject_type(mut self, subject_type: SubjectType) -> Self {
+        self.subject_type = subject_type;
         self
     }
 
@@ -204,9 +228,19 @@ mod tests {
 
     #[test]
     fn public_is_the_xid() {
-        let mut client = Client::new("disclosed", "stack.example");
-        client.subject_type = SubjectType::Public;
+        let client =
+            Client::new("disclosed", "stack.example").with_subject_type(SubjectType::Public);
         assert_eq!(subject(&salt(), xid(), &client).unwrap(), xid().to_string());
         assert_eq!(xid().to_string().len(), 64);
+    }
+
+    #[test]
+    fn parse_subject_type() {
+        assert_eq!(SubjectType::parse("public").unwrap(), SubjectType::Public);
+        assert_eq!(
+            SubjectType::parse("pairwise").unwrap(),
+            SubjectType::Pairwise
+        );
+        assert!(SubjectType::parse("pairwise_legacy").is_err());
     }
 }

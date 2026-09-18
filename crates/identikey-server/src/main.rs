@@ -30,7 +30,7 @@ use bc_components::PrivateKeyBase;
 use identikey_keys::{CustodyRung, KeysStore, Xid, c2_native};
 use identikey_oidc::{
     AuthorizeError, AuthorizeQuery, Client, OidcError, PairwiseSalt, Provider, SigningKey,
-    TokenEndpointAuthMethod, TokenRequest, parse_http_basic,
+    SubjectType, TokenEndpointAuthMethod, TokenRequest, parse_http_basic,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -851,6 +851,8 @@ struct ClientJson {
     secret: Option<String>,
     #[serde(default)]
     auth: Option<String>,
+    #[serde(default)]
+    subject_type: Option<String>,
 }
 
 fn sector_from_redirect(redirect: &str) -> String {
@@ -865,6 +867,7 @@ fn client_from_spec(
     redirects: Vec<String>,
     secret: Option<String>,
     auth: Option<String>,
+    subject_type: Option<String>,
 ) -> Result<Client, BoxError> {
     if id.is_empty() || redirects.is_empty() || redirects.iter().any(String::is_empty) {
         return Err("OIDC client id and redirect are required".into());
@@ -879,6 +882,9 @@ fn client_from_spec(
     };
     let sector = sector_from_redirect(primary);
     let mut client = Client::new(id, sector);
+    if let Some(raw) = subject_type.as_deref().filter(|s| !s.is_empty()) {
+        client = client.with_subject_type(SubjectType::parse(raw)?);
+    }
     for redirect in redirects {
         client = client.with_redirect(redirect);
     }
@@ -917,11 +923,13 @@ fn optional_client() -> Result<Option<Client>, BoxError> {
     let redirect = std::env::var("IDENTIKEY_CLIENT_REDIRECT").unwrap_or_default();
     let secret = std::env::var("IDENTIKEY_CLIENT_SECRET").ok();
     let auth = std::env::var("IDENTIKEY_CLIENT_AUTH_METHOD").ok();
+    let subject_type = std::env::var("IDENTIKEY_CLIENT_SUBJECT_TYPE").ok();
     Ok(Some(client_from_spec(
         id,
         merge_redirects(Some(redirect), Vec::new()),
         secret,
         auth,
+        subject_type,
     )?))
 }
 
@@ -940,6 +948,7 @@ fn extra_clients() -> Result<Vec<Client>, BoxError> {
                 merge_redirects(spec.redirect, spec.redirects),
                 spec.secret,
                 spec.auth,
+                spec.subject_type,
             )
         })
         .collect()
@@ -1646,6 +1655,7 @@ mod tests {
             vec!["http://127.0.0.1:9999/cb".into()],
             Some("s3cret".into()),
             Some("client_secret_basic".into()),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1666,6 +1676,7 @@ mod tests {
                 vec!["http://127.0.0.1:9999/cb".into()],
                 Some(format!("{id}-secret")),
                 Some(auth.into()),
+                None,
             )
             .unwrap();
             assert_eq!(client.token_endpoint_auth_method.as_str(), auth);
@@ -1677,6 +1688,7 @@ mod tests {
                 vec!["http://127.0.0.1:9999/cb".into()],
                 Some("nope".into()),
                 Some("none".into()),
+                None,
             )
             .is_err()
         );
@@ -1686,9 +1698,21 @@ mod tests {
                 vec!["http://127.0.0.1:9999/cb".into()],
                 None,
                 Some("client_secret_basic".into()),
+                None,
             )
             .is_err()
         );
+
+        let mjolnir = client_from_spec(
+            "mjolnir-term".into(),
+            vec!["https://api.vm.worldtree.network/auth/callback".into()],
+            None,
+            Some("none".into()),
+            Some("public".into()),
+        )
+        .unwrap();
+        assert_eq!(mjolnir.subject_type, SubjectType::Public);
+        assert_eq!(mjolnir.token_endpoint_auth_method, TokenEndpointAuthMethod::None);
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
