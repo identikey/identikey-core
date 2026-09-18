@@ -91,14 +91,13 @@ cert SAN `auth.identikey.me` until 2026-11-25, `/health` 200, discovery
 200, JWKS EdDSA kid `JZnOxfXDaklXwH9yyeEbqi6AMkD68zE74w3mv7_A3yk`.
 Bare `/authorize` is 400 (client_id required). `/signup` 200.
 
-Domains (checked 2026-09-18, bead `identikey-core-wzm`): both NameCheap.
-`identikey.me` created 2023-07-20, registry expiry **2027-07-20**, WHOIS
+Domains (checked 2026-09-18, bead `identikey-core-wzm` **P2**): both
+NameCheap. `identikey.me` created 2023-07-20, registry expiry
+**2030-07-20** (Duke multi-year renew; NameCheap WHOIS may lag). WHOIS
 `clientTransferProhibited` only (registrar lock on; **not** .ME registry
-lock — no `serverTransfer/Update/DeleteProhibited`). `identikey.io`
-expiry **2027-09-26**, same registrar lock, currently `renewPeriod`.
-Auto-renew is not visible in WHOIS; confirm in NameCheap. Independent
-expiry monitor (≥60 days) is still owed. Registry lock is extra, not
-the bead's minimum.
+lock). `identikey.io` expiry **2027-09-26**, same registrar lock,
+`renewPeriod`. Remaining on wzm: independent expiry monitor (≥60 days,
+not NameCheap email). Registry lock is extra.
 
 Public SPA clients (PKCE `none`) may list extra `redirects` in
 `IDENTIKEY_CLIENTS`. CORS on `/token` (and the rest of the OP) allows
