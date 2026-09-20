@@ -4,7 +4,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use identikey_keys::{KeysStore, StoreError, Xid, XidError};
+use identikey_keys::{
+    ADD_DEVICE_ACTION, AccessLevel, ConsentAppend, ConsentResult, KeysStore, ProofKind,
+    SshGitInsert, StoreError, Xid, XidError,
+};
 use identikey_oidc::PendingAuthorization;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -25,6 +28,8 @@ pub enum CeremonyError {
     UnknownAccount,
     #[error("credential not found")]
     UnknownCredential,
+    #[error("ssh_git requires a fresh A3 assertion, not Elect")]
+    ElectCannotAddDevice,
     #[error("webauthn: {0}")]
     Webauthn(String),
     #[error("store: {0}")]
@@ -256,6 +261,47 @@ impl CeremonyHub {
             .await?;
         Ok((stored.xid, pending))
     }
+
+    /// Finish a WebAuthn assertion and insert `kind = ssh_git`.
+    ///
+    /// Elect-only (missing assertion, or an OIDC-login session) is refused.
+    /// The private SSH key is never sent here — `device_public_key` only.
+    pub async fn add_ssh_git_device(
+        &self,
+        store: &KeysStore,
+        session: &str,
+        credential: PublicKeyCredential,
+        device_public_key: &[u8],
+        nickname: Option<&str>,
+    ) -> Result<(Xid, Uuid), CeremonyError> {
+        let cred_id = credential.get_credential_id().to_vec();
+        let proof_bytes =
+            serde_json::to_vec(&credential).map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        let (xid, pending) = self.finish_assert(store, session, credential).await?;
+        if pending.is_some() {
+            return Err(CeremonyError::ElectCannotAddDevice);
+        }
+        let passkey_id = store.passkey_id(&cred_id).await?;
+        let id = store
+            .insert_ssh_git(SshGitInsert {
+                xid,
+                device_public_key,
+                nickname,
+                consent: ConsentAppend {
+                    xid,
+                    action: ADD_DEVICE_ACTION,
+                    audience: Some("mjolnir-hosted-being"),
+                    purpose: Some("ssh git-signing device"),
+                    access_level: AccessLevel::A3,
+                    credential_id: Some(passkey_id),
+                    proof_kind: ProofKind::WebauthnAssertion,
+                    proof_bytes: &proof_bytes,
+                    result: ConsentResult::Signed,
+                },
+            })
+            .await?;
+        Ok((xid, id))
+    }
 }
 
 fn client_public_key(challenge: &impl Serialize) -> Result<serde_json::Value, CeremonyError> {
@@ -334,6 +380,21 @@ pub struct AssertBegin {
 pub struct AssertFinish {
     pub session: String,
     pub credential: PublicKeyCredential,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddSshGit {
+    pub session: Option<String>,
+    pub credential: Option<PublicKeyCredential>,
+    pub elect_signature: Option<String>,
+    pub device_public_key: String,
+    pub nickname: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RevokeSshGit {
+    pub xid: String,
+    pub credential_id: Uuid,
 }
 
 #[derive(Debug, Serialize)]

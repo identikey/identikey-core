@@ -87,6 +87,8 @@ fn router(
         .route("/webauthn/register/finish", post(register_finish))
         .route("/webauthn/assert/begin", post(assert_begin))
         .route("/webauthn/assert/finish", post(assert_finish))
+        .route("/devices/ssh_git", post(add_ssh_git))
+        .route("/devices/ssh_git/revoke", post(revoke_ssh_git))
         .route("/challenge", get(challenge).post(challenge))
         .route("/token", post(token))
         .route("/userinfo", get(userinfo).post(userinfo))
@@ -440,6 +442,53 @@ async fn passkey_login_finish(
     Json(body): Json<ceremonies::AssertFinish>,
 ) -> Response {
     assert_finish(State(state), Json(body)).await
+}
+
+async fn add_ssh_git(
+    State(state): State<AppState>,
+    Json(body): Json<ceremonies::AddSshGit>,
+) -> Response {
+    if body.elect_signature.is_some() {
+        return ceremony_http(ceremonies::CeremonyError::ElectCannotAddDevice);
+    }
+    let (Some(session), Some(credential)) = (body.session, body.credential) else {
+        return ceremony_http(ceremonies::CeremonyError::ElectCannotAddDevice);
+    };
+    match state
+        .ceremonies
+        .add_ssh_git_device(
+            &state.store,
+            &session,
+            credential,
+            body.device_public_key.as_bytes(),
+            body.nickname.as_deref(),
+        )
+        .await
+    {
+        Ok((xid, id)) => Json(serde_json::json!({
+            "xid": xid.to_string(),
+            "credential_id": id,
+            "kind": "ssh_git",
+        }))
+        .into_response(),
+        Err(err) => ceremony_http(err),
+    }
+}
+
+async fn revoke_ssh_git(
+    State(state): State<AppState>,
+    Json(body): Json<ceremonies::RevokeSshGit>,
+) -> Response {
+    let Ok(xid) = Xid::from_hex(&body.xid) else {
+        return ceremony_http(ceremonies::CeremonyError::UnknownAccount);
+    };
+    match state.store.revoke_ssh_git(xid, body.credential_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(identikey_keys::StoreError::NotFound) => {
+            ceremony_http(ceremonies::CeremonyError::UnknownCredential)
+        }
+        Err(err) => ceremony_http(err.into()),
+    }
 }
 
 fn params_xid_from_query(_params: &AuthorizeParams) -> Option<Xid> {
@@ -1712,7 +1761,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(mjolnir.subject_type, SubjectType::Public);
-        assert_eq!(mjolnir.token_endpoint_auth_method, TokenEndpointAuthMethod::None);
+        assert_eq!(
+            mjolnir.token_endpoint_auth_method,
+            TokenEndpointAuthMethod::None
+        );
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
@@ -1929,7 +1981,8 @@ mod tests {
         )
         .unwrap();
         assert!(body.contains("navigator.credentials.get"));
-        assert!(!body.contains("<pre"));
+        assert!(body.contains("<details id=\"technical\" hidden>"));
+        assert!(body.contains("Try another passkey"));
         assert!(!body.contains("name=\"username\""));
         assert!(body.contains("Continue with passkey"));
     }
@@ -2343,6 +2396,142 @@ mod tests {
         let pending = pending.unwrap();
         let code = provider.issue_code(&pending, got_xid).unwrap();
         assert!(!code.is_empty());
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn ssh_git_insert_refuses_elect_only(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool);
+        let app = test_router(store);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/devices/ssh_git")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "elect_signature": "not-an-assertion",
+                            "device_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake",
+                            "xid": "aa".repeat(32),
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = serde_json::from_slice(
+            &body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let desc = body["error_description"].as_str().unwrap_or("");
+        assert!(
+            desc.contains("Elect") || desc.contains("A3"),
+            "unexpected description: {desc}"
+        );
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn ssh_git_unknown_session_is_not_an_insert(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool);
+        let app = test_router(store);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/devices/ssh_git")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"session":"nope","credential":{"id":"nope","rawId":"AA","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"AA","signature":"AA"}},"device_public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake"}"#.to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let _ = body::to_bytes(response.into_body(), usize::MAX).await;
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn ssh_git_http_revoke_after_a3_insert(pool: sqlx::PgPool) {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use bc_components::PrivateKeyBase;
+        use identikey_keys::{
+            ADD_DEVICE_ACTION, AccessLevel, ConsentAppend, ConsentResult, CustodyRung, ProofKind,
+            SshGitInsert, c2_native,
+        };
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &[0x51, 0x47])
+            .await
+            .unwrap();
+        let passkey = store
+            .insert_passkey(xid, &[0xAAu8], &[0xBBu8], 0)
+            .await
+            .unwrap();
+        let id = store
+            .insert_ssh_git(SshGitInsert {
+                xid,
+                device_public_key: b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake",
+                nickname: Some("vm-1"),
+                consent: ConsentAppend {
+                    xid,
+                    action: ADD_DEVICE_ACTION,
+                    audience: Some("mjolnir-hosted-being"),
+                    purpose: Some("ssh git-signing device"),
+                    access_level: AccessLevel::A3,
+                    credential_id: Some(passkey),
+                    proof_kind: ProofKind::WebauthnAssertion,
+                    proof_bytes: b"assertion",
+                    result: ConsentResult::Signed,
+                },
+            })
+            .await
+            .unwrap();
+        let app = test_router(store.clone());
+        let revoke = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/devices/ssh_git/revoke")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "xid": xid.to_string(),
+                            "credential_id": id,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(revoke.status(), StatusCode::NO_CONTENT);
+        assert!(
+            store
+                .list_devices(xid)
+                .await
+                .unwrap()
+                .iter()
+                .all(|d| d.kind != "ssh_git")
+        );
     }
 
     const VERIFIER: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";

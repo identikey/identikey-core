@@ -41,8 +41,23 @@ pub enum StoreError {
     Ceremony(#[from] CeremonyError),
     #[error("consent proof must be A3 or A4")]
     ConsentProofNotAccess,
+    #[error("ssh_git requires a fresh A3 add_device consent, not Elect")]
+    SshGitRequiresA3AddDevice,
+    #[error("ssh_git device_public_key must not be empty")]
+    SshGitEmptyPublicKey,
     #[error("stored XID is not 32 bytes")]
     BadXid,
+}
+
+/// Consent-log action for adding a hosted-being git-signing device.
+pub const ADD_DEVICE_ACTION: &str = "add_device";
+
+/// Inputs for [`KeysStore::insert_ssh_git`]. Private key material is never stored.
+pub struct SshGitInsert<'a> {
+    pub xid: Xid,
+    pub device_public_key: &'a [u8],
+    pub nickname: Option<&'a str>,
+    pub consent: ConsentAppend<'a>,
 }
 
 #[derive(Clone)]
@@ -499,6 +514,80 @@ impl KeysStore {
             return Err(StoreError::NotFound);
         }
         Ok(())
+    }
+
+    /// Soft-revoke an `ssh_git` device only. Will not touch passkeys.
+    ///
+    /// Missing id, a different XID, or a non-`ssh_git` kind is [`StoreError::NotFound`].
+    pub async fn revoke_ssh_git(&self, xid: Xid, credential_id: Uuid) -> Result<(), StoreError> {
+        let result = sqlx::query(
+            "UPDATE credentials
+             SET revoked_at = COALESCE(revoked_at, now())
+             WHERE id = $1 AND xid = $2 AND kind = 'ssh_git'",
+        )
+        .bind(credential_id)
+        .bind(xid.as_bytes().as_slice())
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::NotFound);
+        }
+        Ok(())
+    }
+
+    /// UUID of a live passkey row by WebAuthn credential id.
+    pub async fn passkey_id(&self, webauthn_credential_id: &[u8]) -> Result<Uuid, StoreError> {
+        let id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM credentials
+             WHERE webauthn_credential_id = $1
+               AND kind = 'passkey'
+               AND revoked_at IS NULL",
+        )
+        .bind(webauthn_credential_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        id.ok_or(StoreError::NotFound)
+    }
+
+    /// Insert `kind = ssh_git` under a fresh A3 `add_device` consent.
+    ///
+    /// Elect-only (or any non-A3 / non-WebAuthn proof) is refused. The
+    /// private SSH key never enters this store.
+    pub async fn insert_ssh_git(&self, insert: SshGitInsert<'_>) -> Result<Uuid, StoreError> {
+        if insert.device_public_key.is_empty() {
+            return Err(StoreError::SshGitEmptyPublicKey);
+        }
+        if insert.consent.xid != insert.xid {
+            return Err(StoreError::XidMismatch);
+        }
+        if insert.consent.action != ADD_DEVICE_ACTION
+            || insert.consent.result != ConsentResult::Signed
+        {
+            return Err(StoreError::SshGitRequiresA3AddDevice);
+        }
+        match (insert.consent.access_level, insert.consent.proof_kind) {
+            (AccessLevel::A3, ProofKind::WebauthnAssertion) => {}
+            _ => return Err(StoreError::SshGitRequiresA3AddDevice),
+        }
+        if self.get_account(insert.xid).await?.is_none() {
+            return Err(StoreError::NotFound);
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let xid_bytes = insert.xid.as_bytes().as_slice();
+        let rec_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO credentials (xid, kind, device_public_key, nickname)
+             VALUES ($1, 'ssh_git', $2, $3)
+             RETURNING id",
+        )
+        .bind(xid_bytes)
+        .bind(insert.device_public_key)
+        .bind(insert.nickname)
+        .fetch_one(&mut *tx)
+        .await?;
+        append_consent_tx(&mut tx, insert.consent).await?;
+        tx.commit().await?;
+        Ok(rec_id)
     }
 
     pub async fn append_consent(&self, entry: ConsentAppend<'_>) -> Result<Uuid, StoreError> {
@@ -1225,6 +1314,144 @@ mod tests {
         assert!(
             matches!(missing, StoreError::NotFound),
             "unexpected error: {missing}"
+        );
+    }
+
+    fn add_device_consent(xid: Xid, passkey: Uuid) -> ConsentAppend<'static> {
+        ConsentAppend {
+            xid,
+            action: ADD_DEVICE_ACTION,
+            audience: Some("mjolnir-hosted-being"),
+            purpose: Some("ssh git-signing device"),
+            access_level: AccessLevel::A3,
+            credential_id: Some(passkey),
+            proof_kind: ProofKind::WebauthnAssertion,
+            proof_bytes: b"assertion",
+            result: ConsentResult::Signed,
+        }
+    }
+
+    #[sqlx::test]
+    async fn insert_ssh_git_requires_a3_add_device_not_elect(pool: PgPool) {
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &blob())
+            .await
+            .unwrap();
+        let passkey = store
+            .insert_passkey(xid, &[0xAAu8], &[0xBBu8], 0)
+            .await
+            .unwrap();
+        let pub_bytes = b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake";
+
+        let elect_only = ConsentAppend {
+            xid,
+            action: ADD_DEVICE_ACTION,
+            audience: None,
+            purpose: Some("elect"),
+            access_level: AccessLevel::A4,
+            credential_id: Some(passkey),
+            proof_kind: ProofKind::IdentikeyAuthResponse,
+            proof_bytes: b"elect-sig",
+            result: ConsentResult::Signed,
+        };
+        let err = store
+            .insert_ssh_git(SshGitInsert {
+                xid,
+                device_public_key: pub_bytes,
+                nickname: Some("vm-1"),
+                consent: elect_only,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::SshGitRequiresA3AddDevice),
+            "unexpected error: {err}"
+        );
+
+        let wrong_action = ConsentAppend {
+            action: "sign",
+            ..add_device_consent(xid, passkey)
+        };
+        let err = store
+            .insert_ssh_git(SshGitInsert {
+                xid,
+                device_public_key: pub_bytes,
+                nickname: None,
+                consent: wrong_action,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::SshGitRequiresA3AddDevice),
+            "unexpected error: {err}"
+        );
+
+        assert_eq!(
+            store
+                .list_devices(xid)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|d| d.kind == "ssh_git")
+                .count(),
+            0
+        );
+
+        let id = store
+            .insert_ssh_git(SshGitInsert {
+                xid,
+                device_public_key: pub_bytes,
+                nickname: Some("vm-1"),
+                consent: add_device_consent(xid, passkey),
+            })
+            .await
+            .unwrap();
+        let listed = store.list_devices(xid).await.unwrap();
+        let git = listed
+            .iter()
+            .find(|d| d.kind == "ssh_git")
+            .expect("ssh_git row");
+        assert_eq!(git.id, id);
+        assert_eq!(git.nickname.as_deref(), Some("vm-1"));
+
+        let action: String = sqlx::query_scalar(
+            "SELECT action FROM consent_log WHERE xid = $1 ORDER BY seq DESC LIMIT 1",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(action, ADD_DEVICE_ACTION);
+
+        store.revoke_ssh_git(xid, id).await.unwrap();
+        store.revoke_ssh_git(xid, id).await.unwrap();
+        assert!(
+            store
+                .list_devices(xid)
+                .await
+                .unwrap()
+                .iter()
+                .all(|d| d.kind != "ssh_git")
+        );
+        // Passkeys must not be revocable via the ssh_git path.
+        let err = store.revoke_ssh_git(xid, passkey).await.unwrap_err();
+        assert!(
+            matches!(err, StoreError::NotFound),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            store
+                .list_devices(xid)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|d| d.kind == "passkey")
+                .count(),
+            1
         );
     }
 
