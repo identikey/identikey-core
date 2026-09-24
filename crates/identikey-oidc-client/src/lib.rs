@@ -163,6 +163,12 @@ impl OidcClient {
         })
     }
 
+    /// Endpoints inferred from `issuer`; empty JWKS. Enough to build
+    /// `/authorize` URLs in tests. [`validate`] will fail with [`OidcClientError::NoKey`].
+    pub fn endpoints_only(issuer: &str, audience: &str) -> Self {
+        Self::from_jwks(issuer, audience, JwkSet::new())
+    }
+
     /// Test / offline constructor: no HTTP, keys supplied.
     /// Authorization/token endpoints are inferred as `{issuer}/authorize`
     /// and `{issuer}/token` (identikey-core shape).
