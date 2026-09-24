@@ -9,7 +9,7 @@
 - [x] Envelope-encrypted blob; zeroize plaintext after use; no blob getter
 - [x] Tests: exact-challenge bind, substitution, stale session, replay, concurrency, pre-sign log failure, rotation races, response theft, C3/C4 Response-shape equivalence
 - [x] Docs: hosted availability; recommend short-lived holder-bound edge Biscuits
-- [ ] Advise — reader Fable 5.1, second family Grok
+- [x] Advise — Fable 5.1 infra-red on Claude credits. Other-family accept is `reviews/2026-09-24-re-advise-2.md` (READER astra-arch-review).
 
 ## Owed from 2026-09-24 Astra advise
 
@@ -21,7 +21,7 @@ Review: `reviews/2026-09-24-advise.md` (send-back; banner remains PENDING).
 - [x] R4: Specify signing versus exit/key-removal/revocation ordering and completed-response retrieval behavior; add both race orderings to acceptance
 - [x] R5: Specify authenticated encrypted blob format and wrapping-key lifecycle, seed/PublicKeysProvider seams, legacy rejection, and explicit C1/C2 support; add restart and malformed/swapped-blob acceptance cases
 - [x] Fresh advise after preparation
-- [ ] Fresh independent advise after R1–R5 contract reconciliation; acceptance does not activate the PENDING change
+- [x] Fresh independent advise after R1–R5 contract reconciliation. The reconciled contract was accepted in `reviews/2026-09-24-re-advise-2.md`. The change was already ACTIVE BUILD.
 
 ## Owed from 2026-09-24 Astra re-advise
 

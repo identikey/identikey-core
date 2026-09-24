@@ -11,7 +11,7 @@
 - [x] Define conflict-resolution/finality and predeclared-recovery contracts, including
   offline freshness and irreversible key-release limits.
 - [x] Specify adapter compatibility, evidence bounds, and Registry identity/upgrade trust.
-- [ ] Obtain independent architecture review of the revised contract.
+- [x] Obtain independent architecture review of the revised contract. Accept: `reviews/2026-09-24-re-advise-5.md` (READER astra-arch-review). Fable 5.1 was infra-red.
 - [x] Record the accepted architecture as an amendment/successor to ADR-012, with
   explicit upstream references and downstream implementation acceptance packets.
 
@@ -29,7 +29,7 @@ See `reviews/2026-09-24-advise.md`; these refine the open contract tasks above.
   of recovery versus handoff; cover late forks, partitions, and finality contradictions.
 - [x] R5: Specify adapter compatibility predicates, evidence bounds, and Registry
   upgrade/migration authorization; cover mixed evidence and same-address code changes.
-- [ ] Obtain fresh independent architecture acceptance after R1-R5 are reconciled.
+- [x] Obtain fresh independent architecture acceptance after R1-R5 are reconciled. Same accept, after R1–R12: `reviews/2026-09-24-re-advise-5.md`.
 - [x] Fresh advise after preparation
 
 ## Downstream handoffs (not implementation owed by this change)
