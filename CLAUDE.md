@@ -101,6 +101,18 @@ hosted HTML (`Your account — IdentiKey`); first-party register/finish
 sets `identikey_account` and `next: /account`. OIDC signup still
 returns to `/authorize/passkey`. No `IDENTIKEY_DEV_LOGIN` in the guest.
 
+`Client::new` defaults to pairwise `sub` (HKDF of salt + sector + XID,
+base64url). Mjolnir owner checks are string equality against the hex
+XID, so those clients must be `subject_type=public` (`sub` =
+`xid.to_string()`). Live `IDENTIKEY_CLIENTS` already has
+`mjolnir-cli` (`http://127.0.0.1/callback`) and `mjolnir-term`
+(`https://api.vm.worldtree.network/auth/callback`) as `auth=none`
+`subject_type=public`. `taskmaster` / `taskmaster-laptop` stay
+pairwise. The 2026-09-24 binary (`35aee29`) reads `subject_type` from
+that JSON (`client_from_spec`). Tokens minted before that cutover stay
+pairwise until `mj logout` and `mj login` again. No extra grant and no
+Mjolnir user row — the owner check is just `sub`.
+
 Domains (checked 2026-09-18, bead `identikey-core-wzm` **P2**): both
 NameCheap. `identikey.me` created 2023-07-20, registry expiry
 **2030-07-20** (Duke multi-year renew; NameCheap WHOIS may lag). WHOIS
