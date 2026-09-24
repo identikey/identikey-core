@@ -1115,6 +1115,70 @@ content must not be readable through *our* key just because we host the account.
 
 ---
 
+## ADR-013: Keyspace governance is pluggable; settlement, freshness, and consumption are distinct ✅ Decided 2026-09-24
+
+**Status.** Successor to ADR-012. ADR-012 remains the definition of the current
+`identikey-keyspace-v1` mapping. This decision records the accepted architecture in
+`openspec/changes/add-pluggable-keyspace-governance/design.md` and
+`openspec/specs/keyspace-governance/spec.md`, accepted by the independent architecture
+review in `openspec/changes/add-pluggable-keyspace-governance/reviews/2026-09-24-re-advise-5.md`.
+The **wire owner is `identikey-protocol`**; this repository consumes its versioned keyspace
+wire and must not extend it locally.
+
+**Context.** A collective needs an identity that can outlive any one roster or governance
+adapter, while governance decisions need deterministic finality and secret release needs a
+stronger, consumable freshness boundary. Approval, settlement, activation, and consumption
+are therefore separate facts. Treating any one of them as another would let delivery order,
+stale state, or a replay decide authority.
+
+**Decision.**
+
+1. **A guild XID is not the keyspace genesis id.** The guild XID is the collective's stable
+   identity; ADR-012's genesis-op content hash identifies a particular keyspace lineage.
+   Binding and identity-control evidence connect them canonically without collapsing the two
+   identifiers. A governance handoff may replace the bound keyspace successor while the guild
+   XID remains stable.
+
+2. **Version 1 roster-admin remains authoritative until an upstream migration cut.** The
+   current `identikey-keyspace-v1` roster-admin rules continue to govern v1 operations. A
+   pluggable governance adapter cannot reinterpret old wire or silently supersede those
+   rules. Only a versioned migration boundary defined by `identikey-protocol`, with explicit
+   old-client rejection and outgoing/incoming evidence domains, can cut authority over to a
+   successor. This repository must not mint op kinds, local wire variants, or an implicit
+   migration marker.
+
+3. **Approval signatures are not settlement.** A fully signed approval is a candidate
+   transition, not proof that it won. With no admissible settlement record, no candidate is
+   selected. Exactly one admissible settlement record selects its named successor. Two
+   admissible settlement records selecting competing successors freeze the keyspace; arrival
+   order cannot choose a winner. Activation and recovery consume the selected outcome only
+   after the applicable settlement and handoff gates hold.
+
+4. **Secret release requires both freshness and consumption.** A releaser must validate an
+   admissible freshness witness under the selected governance profile and atomically record a
+   consume record at the common ordering boundary before releasing secret material. The
+   witness establishes that the action is current enough to be admitted; the consume record
+   makes that admission single-use and orders it against handoff, recovery, restart, and
+   concurrent consumers. A signature, cached approval, maximum-age observation, or settlement
+   record alone is not authority to release a secret.
+
+**Consequences.**
+
+- Governance is pluggable at the verification/finality boundary, not by changing the v1 wire.
+  `identikey-protocol` owns any new version, migration encoding, or op-kind change.
+- Wallets, resolvers, and relying parties verify the guild-XID/keyspace binding and the
+  applicable identity-control evidence; a retained key or stale bundle does not redefine the
+  collective.
+- Implementations fail closed on absent, stale, replayed, contradictory, or wrong-domain
+  evidence. Competing settlements freeze rather than resolve by observation order.
+- Downstream implementation nodes receive acceptance packets scoped to their existing
+  handoffs: governance verifier/adapters, collective identity and binding, holder-key
+  lifecycle, threshold signing/release, Registry settlement/deployment, and replica repair.
+  Those packets must cite this ADR and the accepted change contract; they do not gain license
+  to alter the upstream wire or invent operation kinds.
+
+---
+
 ## Open questions
 
 1. **Pre-rotation.** ~~Open~~ — decided as **ADR-008** (adopt). Whether `bc-xid` implements it

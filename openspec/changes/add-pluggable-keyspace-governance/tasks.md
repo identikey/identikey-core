@@ -12,7 +12,7 @@
   offline freshness and irreversible key-release limits.
 - [x] Specify adapter compatibility, evidence bounds, and Registry identity/upgrade trust.
 - [ ] Obtain independent architecture review of the revised contract.
-- [ ] Record the accepted architecture as an amendment/successor to ADR-012, with
+- [x] Record the accepted architecture as an amendment/successor to ADR-012, with
   explicit upstream references and downstream implementation acceptance packets.
 
 ## Owed by architecture review — 2026-09-24
