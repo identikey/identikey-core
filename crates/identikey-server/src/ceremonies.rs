@@ -262,6 +262,62 @@ impl CeremonyHub {
         Ok((stored.xid, pending))
     }
 
+    /// Start an A3 assertion whose verifier state is persisted by the managed
+    /// challenge attempt rather than held in this process's session map.
+    pub async fn begin_managed_assert(
+        &self,
+        store: &KeysStore,
+        xid: Xid,
+    ) -> Result<(serde_json::Value, Vec<u8>), CeremonyError> {
+        let passkeys = load_passkeys(store, xid).await?;
+        if passkeys.is_empty() {
+            return Err(CeremonyError::UnknownCredential);
+        }
+        let (challenge, state) = self
+            .webauthn
+            .start_passkey_authentication(&passkeys)
+            .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        let state = serde_json::to_vec(&state)
+            .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        Ok((client_public_key(&challenge)?, state))
+    }
+
+    /// Verify an A3 assertion against the exact state loaded from its durable
+    /// managed challenge attempt.
+    pub async fn finish_managed_assert(
+        &self,
+        store: &KeysStore,
+        xid: Xid,
+        state_bytes: &[u8],
+        credential: PublicKeyCredential,
+    ) -> Result<(Uuid, Vec<u8>), CeremonyError> {
+        let state: PasskeyAuthentication = serde_json::from_slice(state_bytes)
+            .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        let proof = serde_json::to_vec(&credential)
+            .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        let cred_id = credential.get_credential_id().to_vec();
+        let stored = store
+            .get_passkey_by_credential_id(&cred_id)
+            .await?
+            .ok_or(CeremonyError::UnknownCredential)?;
+        if stored.xid != xid {
+            return Err(CeremonyError::UnknownCredential);
+        }
+        let result = self
+            .webauthn
+            .finish_passkey_authentication(&credential, &state)
+            .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        if result.counter() > 0 && i64::from(result.counter()) <= stored.sign_counter {
+            return Err(CeremonyError::Webauthn(
+                "sign counter did not increase".into(),
+            ));
+        }
+        store
+            .update_passkey_sign_counter(&cred_id, i64::from(result.counter()))
+            .await?;
+        Ok((store.passkey_id(&cred_id).await?, proof))
+    }
+
     /// Finish a WebAuthn assertion and insert `kind = ssh_git`.
     ///
     /// Elect-only (missing assertion, or an OIDC-login session) is refused.

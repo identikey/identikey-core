@@ -501,18 +501,31 @@ impl KeysStore {
     ///
     /// Missing id or a different XID is [`StoreError::NotFound`].
     pub async fn revoke_device(&self, xid: Xid, credential_id: Uuid) -> Result<(), StoreError> {
-        let result = sqlx::query!(
+        let mut tx = self.pool.begin().await?;
+        // Same custody→credential lock order as an A3 managed-signing claim.
+        // Whichever transaction wins defines whether the key may be used.
+        let custody = sqlx::query(
+            "SELECT xid FROM custody_records WHERE xid = $1 FOR UPDATE",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if custody.is_none() {
+            return Err(StoreError::NotFound);
+        }
+        let result = sqlx::query(
             "UPDATE credentials
              SET revoked_at = COALESCE(revoked_at, now())
              WHERE id = $1 AND xid = $2",
-            credential_id,
-            xid.as_bytes().as_slice()
         )
-        .execute(&self.pool)
+        .bind(credential_id)
+        .bind(xid.as_bytes().as_slice())
+        .execute(&mut *tx)
         .await?;
         if result.rows_affected() == 0 {
             return Err(StoreError::NotFound);
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -707,7 +720,7 @@ async fn apply_document_update_tx(
     Ok(())
 }
 
-async fn append_consent_tx(
+pub(crate) async fn append_consent_tx(
     tx: &mut Transaction<'_, Postgres>,
     entry: ConsentAppend<'_>,
 ) -> Result<Uuid, StoreError> {

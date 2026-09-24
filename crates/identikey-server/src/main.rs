@@ -15,6 +15,7 @@
 //!
 mod account;
 mod ceremonies;
+mod managed_challenge;
 mod pages;
 mod webauthn;
 
@@ -27,8 +28,11 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
-use bc_components::PrivateKeyBase;
-use identikey_keys::{CustodyRung, KeysStore, Xid, c2_native};
+use bc_components::{PrivateKeyBase, XIDProvider};
+use identikey_keys::{
+    CustodyRung, KeysStore, ManagedKeyring, OperationalEd25519, Xid, c2_native,
+    operational_ed25519_public,
+};
 use identikey_oidc::{
     AuthorizeError, AuthorizeQuery, Client, OidcError, PairwiseSalt, Provider, SigningKey,
     SubjectType, TokenEndpointAuthMethod, TokenRequest, parse_http_basic,
@@ -49,6 +53,7 @@ struct AppState {
     webauthn: WebAuthnConfig,
     ceremonies: Arc<ceremonies::CeremonyHub>,
     accounts: Arc<account::AccountSessions>,
+    managed_keys: Arc<ManagedKeyring>,
 }
 
 /// Liveness only. This must not grow into a readiness check that reports on the
@@ -63,12 +68,31 @@ fn web_assets(web_dir: std::path::PathBuf) -> ServeDir<ServeFile> {
     ServeDir::new(web_dir).fallback(fallback)
 }
 
+#[cfg(test)]
 fn router(
     store: KeysStore,
     provider: Arc<Provider>,
     dev_login: bool,
     webauthn: WebAuthnConfig,
     accounts: Arc<account::AccountSessions>,
+) -> Router {
+    router_with_keyring(
+        store,
+        provider,
+        dev_login,
+        webauthn,
+        accounts,
+        Arc::new(ManagedKeyring::single("test", [0x6d; 32])),
+    )
+}
+
+fn router_with_keyring(
+    store: KeysStore,
+    provider: Arc<Provider>,
+    dev_login: bool,
+    webauthn: WebAuthnConfig,
+    accounts: Arc<account::AccountSessions>,
+    managed_keys: Arc<ManagedKeyring>,
 ) -> Router {
     let web_dir = std::env::var_os("IDENTIKEY_WEB_DIR")
         .map(std::path::PathBuf::from)
@@ -93,6 +117,10 @@ fn router(
         .route("/webauthn/assert/finish", post(assert_finish))
         .route("/devices/ssh_git", post(add_ssh_git))
         .route("/devices/ssh_git/revoke", post(revoke_ssh_git))
+        .route("/managed-challenge/begin", post(managed_challenge::begin))
+        .route("/managed-challenge/finish/a3", post(managed_challenge::finish_a3))
+        .route("/managed-challenge/finish/a4", post(managed_challenge::finish_a4))
+        .route("/managed-challenge/retrieve", post(managed_challenge::retrieve))
         .route("/challenge", get(challenge).post(challenge))
         .route("/token", post(token))
         .route("/userinfo", get(userinfo).post(userinfo))
@@ -117,6 +145,7 @@ fn router(
             webauthn,
             ceremonies,
             accounts,
+            managed_keys,
         })
         .fallback_service(web_assets(web_dir))
 }
@@ -587,8 +616,8 @@ async fn signup_page() -> Response {
 
 async fn signup(State(state): State<AppState>) -> Response {
     let user = PrivateKeyBase::new();
-    let ours = PrivateKeyBase::new();
-    let doc = match c2_native(&user, &ours) {
+    let operational = OperationalEd25519::generate();
+    let doc = match c2_native(&user, operational.public_keys()) {
         Ok(doc) => doc,
         Err(err) => {
             return oauth_error(
@@ -598,7 +627,27 @@ async fn signup(State(state): State<AppState>) -> Response {
             );
         }
     };
-    let blob = ours.as_bytes().to_vec();
+    let xid = Xid::from(doc.xid());
+    let public = match operational_ed25519_public(&doc) {
+        Ok(public) => public,
+        Err(err) => {
+            return oauth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                &err.to_string(),
+            );
+        }
+    };
+    let blob = match state.managed_keys.seal(xid, &public, operational.seed()) {
+        Ok(blob) => blob,
+        Err(err) => {
+            return oauth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                &err.to_string(),
+            );
+        }
+    };
     let xid = match state
         .store
         .create_managed(CustodyRung::C2, &doc, &blob)
@@ -1106,6 +1155,21 @@ fn database_url(raw: Option<String>) -> Result<String, BoxError> {
     }
 }
 
+fn managed_keyring(raw: Option<String>, kid: Option<String>) -> Result<ManagedKeyring, BoxError> {
+    let raw = raw.ok_or("IDENTIKEY_MANAGED_WRAP_KEY is required")?;
+    if raw.len() != 64 || !raw.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("IDENTIKEY_MANAGED_WRAP_KEY must be exactly 64 hexadecimal characters".into());
+    }
+    let mut key = [0_u8; 32];
+    for (index, pair) in raw.as_bytes().chunks_exact(2).enumerate() {
+        let text = std::str::from_utf8(pair).map_err(|_| "invalid managed wrap key")?;
+        let slot = key.get_mut(index).ok_or("invalid managed wrap key length")?;
+        *slot = u8::from_str_radix(text, 16).map_err(|_| "invalid managed wrap key")?;
+    }
+    let kid = kid.filter(|value| !value.is_empty()).unwrap_or_else(|| "v1".into());
+    Ok(ManagedKeyring::single(kid, key))
+}
+
 async fn shutdown_signal() {
     if let Err(e) = signal::ctrl_c().await {
         tracing::error!(error = %e, "failed to install ctrl-c handler; shutting down");
@@ -1128,10 +1192,21 @@ async fn main() -> Result<(), BoxError> {
         std::env::var("WEBAUTHN_EXPECTED_ORIGIN").ok().as_deref(),
     )?;
     tracing::info!("webauthn origin allowlist ready");
+    let managed_keys = Arc::new(managed_keyring(
+        std::env::var("IDENTIKEY_MANAGED_WRAP_KEY").ok(),
+        std::env::var("IDENTIKEY_MANAGED_WRAP_KID").ok(),
+    )?);
+    tracing::info!("managed wrapping key ready");
 
     let url = database_url(std::env::var("DATABASE_URL").ok())?;
     let store = KeysStore::connect(&url).await?;
     store.migrate().await?;
+    let indeterminate = store
+        .mark_claimed_managed_challenges_indeterminate()
+        .await?;
+    if indeterminate > 0 {
+        tracing::warn!(indeterminate, "terminalized managed signing claims left by restart");
+    }
     tracing::info!("database migrated");
 
     let data_dir = std::env::var("IDENTIKEY_DATA_DIR").unwrap_or_else(|_| ".".into());
@@ -1176,12 +1251,13 @@ async fn main() -> Result<(), BoxError> {
     let dev_login = std::env::var("IDENTIKEY_DEV_LOGIN").ok().as_deref() == Some("1");
     axum::serve(
         listener,
-        router(
+        router_with_keyring(
             store,
             Arc::new(provider),
             dev_login,
             webauthn,
             Arc::new(account::AccountSessions::default()),
+            managed_keys,
         ),
     )
     .with_graceful_shutdown(shutdown_signal())
@@ -2111,10 +2187,10 @@ mod tests {
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
-    async fn signup_then_register_stores_passkey(pool: sqlx::PgPool) {
+    async fn managed_challenge_signup_then_register_stores_ed25519(pool: sqlx::PgPool) {
         use axum::body::{self, Body};
         use axum::http::{Request, StatusCode};
-        use identikey_keys::{CustodyRung, Xid, is_c2};
+        use identikey_keys::{CustodyRung, Xid, is_c2, operational_ed25519_public};
         use tower::ServiceExt;
 
         let store = KeysStore::from_pool(pool);
@@ -2174,6 +2250,7 @@ mod tests {
         let custody = store.get_custody(xid).await.unwrap().unwrap();
         assert_eq!(custody.rung, CustodyRung::C2);
         assert!(is_c2(&custody.document));
+        assert!(operational_ed25519_public(&custody.document).is_ok());
         assert_eq!(store.has_managed_key(xid).await.unwrap(), Some(true));
         assert!(store.list_passkeys(xid).await.unwrap().is_empty());
         let _session = session;

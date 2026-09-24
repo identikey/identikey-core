@@ -18,6 +18,7 @@ workspace = true
 identikey-keys.workspace = true
 identikey-oidc.workspace = true
 identikey-recovery.workspace = true
+identikey-auth.workspace = true
 
 axum.workspace = true
 bc-components.workspace = true
@@ -34,9 +35,8 @@ tracing-subscriber.workspace = true
 url.workspace = true
 webauthn-rs.workspace = true
 uuid.workspace = true
+base64 = "0.22"
 
 [dev-dependencies]
 bc-xid.workspace = true
-identikey-auth.workspace = true
-base64 = "0.22"
 webauthn-authenticator-rs = { version = "0.5", features = ["softpasskey"] }

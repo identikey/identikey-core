@@ -75,6 +75,7 @@
 pub mod ceremony;
 pub mod consent;
 pub mod keyspace;
+pub mod managed_challenge;
 pub mod privilege;
 pub mod resolve;
 pub mod rung;
@@ -89,6 +90,12 @@ pub use consent::{
     CONSENT_HASH_V1, ConsentHashInput, ConsentResult, ProofKind, hash_consent_entry, hash_proof,
 };
 pub use keyspace::{ApplyError, CachedRosterEntry, CachedWrap, KeyspaceReplica, ReplicaSnapshot};
+pub use managed_challenge::{
+    A3Authorization, BeginManagedChallenge, ChallengeAdmission, ManagedChallengeError,
+    ManagedChallengeProof, ManagedChallengeState, ManagedKeyEnvelope, ManagedKeyring,
+    OperationalEd25519, RetrievedManagedChallenge, consent_digest, operational_ed25519_public,
+    verifier_commitment,
+};
 pub use privilege::{
     IDENTIKEY_C2_PRIVILEGES, PrivilegeError, USER_C2_PRIVILEGES, authorize_elect, c1, c2_native,
     c2_wrap_recipient, is_c2, key_allows, promote_c1_to_c2,
