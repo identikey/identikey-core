@@ -17,7 +17,7 @@
 # pairwise people. DATABASE_URL comes from `mix mjolnir.pg.tenant ensure`.
 steps = [
   "export PATH=/root/.local/bin:/usr/local/bin:$PATH; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git pkg-config libssl-dev",
-  "export PATH=/root/.local/bin:/usr/local/bin:$PATH; mise install bun@1.2.23; cd web && mise exec bun@1.2.23 -- bun install --frozen-lockfile && mise exec bun@1.2.23 -- bun run build",
+  "export PATH=/root/.local/bin:/usr/local/bin:$PATH; mise install bun@1.2.23; cd web && mise exec bun@1.2.23 -- bun install --frozen-lockfile && NODE_ENV=production mise exec bun@1.2.23 -- bun run build",
   "export PATH=/root/.cargo/bin:/root/.local/bin:/usr/local/bin:$PATH; mise install rust@1.96.0; . /root/.cargo/env; SQLX_OFFLINE=true cargo build --release --quiet -p identikey-server --locked",
   "ln -sfn /dev/null /etc/systemd/system/serial-getty@ttyS0.service",
 ]
