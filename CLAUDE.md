@@ -134,7 +134,13 @@ public `sub` (base58btc XID). Live `IDENTIKEY_CLIENTS` already has
 `mjolnir-cli` (`http://127.0.0.1/callback`) and `mjolnir-term`
 (`https://api.vm.worldtree.network/auth/callback`) as `auth=none`
 `subject_type=public`. `taskmaster` / `taskmaster-laptop` stay
-pairwise. The 2026-09-24 binary (`35aee29`) reads `subject_type` from
+pairwise. Conduit laptop RP is confidential `id=localhost`
+(`http://127.0.0.1:8008/_matrix/client/v3/login/identikey/callback`,
+plus `http://localhost:8008/...`), `auth=client_secret_basic`, pairwise
+sector `127.0.0.1`. Secret is not in this file; Conduit reads
+`CONDUIT_OIDC_CLIENT_SECRET`. Next `mj deploy` of identikey picks the
+host secrets JSON; until then the guest wrapper
+`/app/target/release/identikey-server` exports `/root/identikey-clients.json`. The 2026-09-24 binary (`35aee29`) reads `subject_type` from
 that JSON (`client_from_spec`). Tokens minted before that cutover stay
 pairwise until `mj logout` and `mj login` again. No extra grant and no
 Mjolnir user row — the owner check is just `sub`.
