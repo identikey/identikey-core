@@ -65,10 +65,15 @@ Mjolnir managed deploy (`mjolnir.toml`), first live 2026-08-27:
     mj deploy . --name identikey --memory 2048 --domain auth.identikey.me
 
 This OP runs on the maintained spawn image `@base/ubuntu-24.04`, not
-`deploy-node-bun`. Redeploy via rpc
-`base_image: "ubuntu-24.04"` until `mjolnir-6ee1` (manifest
-`base_image` / `mj deploy --base`). Do not `mj deploy` from the
-laptop against today's host — that still defaults to deploy-node-bun.
+`deploy-node-bun`. Redeploy via host rpc
+`Mjolnir.Deploy.Orchestrator.deploy("identikey", src, base_image:
+"ubuntu-24.04", memory_mb: 2048, custom_domain: "auth.identikey.me")`
+until `mjolnir-6ee1` (manifest `base_image` / `mj deploy --base`).
+`POST /api/deploy` still omits `base_image`, so laptop `mj deploy`
+defaults to deploy-node-bun. Source lands in
+`/var/lib/mjolnir/deploy/src/identikey` (`git archive` of HEAD).
+Bun defaults `NODE_ENV` to development — the web build step must set
+`NODE_ENV=production` or pino will look for missing `pino-pretty`.
 
 Related Mjolnir beads from the first ship: `mjolnir-bhcr` (live
 deploy-node-bun has the agent unit and no binary), `mjolnir-hjnz`
@@ -83,13 +88,18 @@ Apex `identikey.me` must be in **both** `MJOLNIR_GATEWAY_APEXES`
 domain"). Bind is `0.0.0.0:8080` in `start_command` — `PORT` is
 ignored. Do not set `IDENTIKEY_DEV_LOGIN`. Host: `root@45.76.77.97`.
 
-Live (2026-08-27): app `identikey`, snapshot
-`deploy-2e6187d237ffb69bb6727c5122325ad4ff6e9547020403e94582957ddfca4af3`,
-service VM `2a39456f-b93e-4dcd-a0e2-b0a358a3ffd9`. Public
+Live (2026-09-24, `35aee29`): app `identikey`, snapshot
+`deploy-0f2fa7f0ba65c6255d3b011d89e452a7f3c8cc30247806e73c53f4959dbb7dfa`,
+service VM `31b4dc3b-ed0c-47a9-b395-872fcf78e57c` (cut over from
+`1769d148-8949-457b-806f-1e467046da94`). Public
 `https://auth.identikey.me` — DNS A `45.76.77.97` (grey-cloud), HTTP-01
 cert SAN `auth.identikey.me` until 2026-11-25, `/health` 200, discovery
-200, JWKS EdDSA kid `JZnOxfXDaklXwH9yyeEbqi6AMkD68zE74w3mv7_A3yk`.
-Bare `/authorize` is 400 (client_id required). `/signup` 200.
+200, JWKS EdDSA kid `JZnOxfXDaklXwH9yyeEbqi6AMkD68zE74w3mv7_A3yk`
+(managed `IDENTIKEY_SIGNING_KEY`; did not rotate). Bare `/authorize` is
+400 (client_id required). `/signup` 200. Unsigned `GET /account` is 401
+hosted HTML (`Your account — IdentiKey`); first-party register/finish
+sets `identikey_account` and `next: /account`. OIDC signup still
+returns to `/authorize/passkey`. No `IDENTIKEY_DEV_LOGIN` in the guest.
 
 Domains (checked 2026-09-18, bead `identikey-core-wzm` **P2**): both
 NameCheap. `identikey.me` created 2023-07-20, registry expiry
