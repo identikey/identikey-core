@@ -116,6 +116,10 @@ The hosted OP (this repo) serves the **C1–C2 rows**. `identikey-auth` serves t
 The native app is what makes **C3 reachable by ordinary people**, because it is the thing that
 can back a key with the enclave (held or wrapped) and participate in a guardian ceremony.
 
+Hosted C2 signing depends on the IdentiKey service being available to authenticate the instruction,
+record consent, and use the managed key. Edge Biscuits issued from that signing path should therefore
+be short-lived and holder-bound, limiting replay if a capability leaves the initiating client.
+
 ---
 
 ## The invariants

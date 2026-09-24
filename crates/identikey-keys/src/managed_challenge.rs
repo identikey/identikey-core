@@ -1596,6 +1596,308 @@ mod tests {
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn managed_challenge_stale_session_is_rejected_before_authorization(pool: PgPool) {
+        let (store, _keyring, xid, credential, _challenge) = managed_fixture(pool).await;
+        let stale_now = current_unix().unwrap() - (CONSENT_TTL + 1);
+        let challenge = Challenge {
+            version: 1,
+            audience: "ab".repeat(32),
+            nonce: vec![11; 32],
+            issued_at: stale_now,
+            expires_at: stale_now + MAX_CHALLENGE_TTL,
+        };
+        let begun = store
+            .begin_managed_challenge(
+                xid,
+                &challenge.to_bytes(),
+                verifier_commitment("stale session"),
+                ManagedChallengeProof::A3,
+                Some(b"persisted webauthn verifier state"),
+                stale_now,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            store
+                .authorize_managed_a3(
+                    begun.request_id,
+                    A3Authorization {
+                        credential_id: credential,
+                        proof_bytes: b"otherwise valid assertion",
+                    },
+                )
+                .await,
+            Err(ManagedChallengeError::Expired)
+        ));
+        assert!(matches!(
+            store
+                .claim_managed_challenge_material(begun.request_id, current_unix().unwrap())
+                .await,
+            Err(ManagedChallengeError::InvalidState)
+        ));
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn managed_challenge_pre_sign_log_failure_prevents_key_use(pool: PgPool) {
+        let (store, _keyring, xid, credential, challenge) = managed_fixture(pool).await;
+        let begun = store
+            .begin_managed_challenge(
+                xid,
+                &challenge.to_bytes(),
+                verifier_commitment("audit failure"),
+                ManagedChallengeProof::A3,
+                Some(b"state"),
+                current_unix().unwrap(),
+            )
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE FUNCTION reject_managed_authorization() RETURNS trigger AS $$
+             BEGIN
+               IF NEW.action = 'signing_instruction_authorized' THEN
+                 RAISE EXCEPTION 'injected consent-log failure';
+               END IF;
+               RETURN NEW;
+             END;
+             $$ LANGUAGE plpgsql",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER reject_managed_authorization
+             BEFORE INSERT ON consent_log
+             FOR EACH ROW EXECUTE FUNCTION reject_managed_authorization()",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            store
+                .authorize_managed_a3(
+                    begun.request_id,
+                    A3Authorization {
+                        credential_id: credential,
+                        proof_bytes: b"verified assertion",
+                    },
+                )
+                .await,
+            Err(ManagedChallengeError::Document(_))
+        ));
+        let row = sqlx::query(
+            "SELECT state FROM managed_challenge_attempts WHERE request_id = $1",
+        )
+        .bind(begun.request_id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(row.try_get::<Option<String>, _>("state").unwrap(), None);
+        assert!(matches!(
+            store
+                .claim_managed_challenge_material(begun.request_id, current_unix().unwrap())
+                .await,
+            Err(ManagedChallengeError::InvalidState)
+        ));
+    }
+
+    async fn managed_rotation_fixture(
+        pool: PgPool,
+    ) -> (
+        KeysStore,
+        ManagedKeyring,
+        Xid,
+        Uuid,
+        Challenge,
+        PrivateKeyBase,
+    ) {
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let operational = OperationalEd25519::generate();
+        let document = c2_native(&user, operational.public_keys()).unwrap();
+        let xid = Xid::from(document.xid());
+        let public = operational_ed25519_public(&document).unwrap();
+        let keyring = ManagedKeyring::single("rotation", [0x53; 32]);
+        let blob = keyring.seal(xid, &public, operational.seed()).unwrap();
+        store
+            .create_managed(CustodyRung::C2, &document, &blob)
+            .await
+            .unwrap();
+        let credential = store
+            .insert_passkey(xid, b"rotation-credential", b"{}", 0)
+            .await
+            .unwrap();
+        let now = current_unix().unwrap();
+        let challenge = Challenge {
+            version: 1,
+            audience: "34".repeat(32),
+            nonce: vec![0x35; 32],
+            issued_at: now,
+            expires_at: now + 300,
+        };
+        (store, keyring, xid, credential, challenge, user)
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn managed_challenge_rotation_before_claim_prevents_old_key_use(pool: PgPool) {
+        let (store, keyring, xid, credential, challenge, user) =
+            managed_rotation_fixture(pool).await;
+        let begun = store
+            .begin_managed_challenge(
+                xid,
+                &challenge.to_bytes(),
+                verifier_commitment("rotation loses"),
+                ManagedChallengeProof::A3,
+                Some(b"state"),
+                current_unix().unwrap(),
+            )
+            .await
+            .unwrap();
+        store
+            .authorize_managed_a3(
+                begun.request_id,
+                A3Authorization {
+                    credential_id: credential,
+                    proof_bytes: b"proof",
+                },
+            )
+            .await
+            .unwrap();
+        let replacement = OperationalEd25519::generate();
+        let rotated = c2_native(&user, replacement.public_keys()).unwrap();
+        store.apply_document_update(&user, &rotated).await.unwrap();
+
+        assert!(matches!(
+            store
+                .finish_authorized_managed_challenge(
+                    &keyring,
+                    begun.request_id,
+                    current_unix().unwrap(),
+                )
+                .await,
+            Err(ManagedChallengeError::BadEnvelope)
+        ));
+        assert_eq!(
+            store
+                .retrieve_managed_challenge(begun.request_id, "rotation loses")
+                .await
+                .unwrap(),
+            RetrievedManagedChallenge::Failed
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn managed_challenge_claim_before_rotation_completes_once(pool: PgPool) {
+        let (store, keyring, xid, credential, challenge, user) =
+            managed_rotation_fixture(pool).await;
+        let begun = store
+            .begin_managed_challenge(
+                xid,
+                &challenge.to_bytes(),
+                verifier_commitment("claim wins rotation"),
+                ManagedChallengeProof::A3,
+                Some(b"state"),
+                current_unix().unwrap(),
+            )
+            .await
+            .unwrap();
+        store
+            .authorize_managed_a3(
+                begun.request_id,
+                A3Authorization {
+                    credential_id: credential,
+                    proof_bytes: b"proof",
+                },
+            )
+            .await
+            .unwrap();
+        let claimed = store
+            .claim_managed_challenge_material(begun.request_id, current_unix().unwrap())
+            .await
+            .unwrap();
+        let replacement = OperationalEd25519::generate();
+        let rotated = c2_native(&user, replacement.public_keys()).unwrap();
+        store.apply_document_update(&user, &rotated).await.unwrap();
+        let response = keyring
+            .open(&claimed.1, claimed.0, &claimed.2)
+            .unwrap()
+            .respond(&claimed.3)
+            .unwrap()
+            .to_bytes();
+        store
+            .complete_managed_challenge(begun.request_id, &response)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            store
+                .retrieve_managed_challenge(begun.request_id, "claim wins rotation")
+                .await
+                .unwrap(),
+            RetrievedManagedChallenge::Completed(_)
+        ));
+    }
+
+    #[test]
+    fn managed_challenge_c3_c4_response_shape_matches_managed_response() {
+        let challenge = Challenge {
+            version: 1,
+            audience: "56".repeat(32),
+            nonce: vec![0x57; 32],
+            issued_at: 1_700_000_000,
+            expires_at: 1_700_000_300,
+        };
+        let operational = OperationalEd25519::generate();
+        let managed_public = match operational.public_keys().signing_public_key() {
+            SigningPublicKey::Ed25519(public) => *public.data(),
+            _ => panic!("operational key must be Ed25519"),
+        };
+        let keyring = ManagedKeyring::single("response-shape", [0x58; 32]);
+        let blob = keyring
+            .seal(xid(), &managed_public, operational.seed())
+            .unwrap();
+        let managed = keyring
+            .open(&blob, xid(), &managed_public)
+            .unwrap()
+            .respond(&challenge)
+            .unwrap();
+        let c3 = SoftwareSigner::generate_ed25519()
+            .respond(&challenge)
+            .unwrap();
+        let c4 = SoftwareSigner::generate_ed25519()
+            .respond(&challenge)
+            .unwrap();
+        let managed = Response::from_bytes(&managed.to_bytes()).unwrap();
+        let c3 = Response::from_bytes(&c3.to_bytes()).unwrap();
+        let c4 = Response::from_bytes(&c4.to_bytes()).unwrap();
+
+        assert_eq!(managed.challenge_bytes, c3.challenge_bytes);
+        assert_eq!(managed.challenge_bytes, c4.challenge_bytes);
+        assert_eq!(managed.public_key.alg, ClassicalAlg::Ed25519);
+        assert_eq!(c3.public_key.alg, ClassicalAlg::Ed25519);
+        assert_eq!(c4.public_key.alg, ClassicalAlg::Ed25519);
+        assert_eq!(managed.public_key.bytes.len(), c3.public_key.bytes.len());
+        assert_eq!(managed.public_key.bytes.len(), c4.public_key.bytes.len());
+        assert_eq!(
+            managed.signature.bytes.len(),
+            c3.signature.bytes.len()
+        );
+        assert_eq!(
+            managed.signature.bytes.len(),
+            c4.signature.bytes.len()
+        );
+        for response in [&managed, &c3, &c4] {
+            verify_classical(
+                &response.public_key,
+                &signing_payload(&response.challenge_bytes),
+                &response.signature,
+            )
+            .unwrap();
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn managed_challenge_claim_wins_before_revocation(pool: PgPool) {
         let (store, keyring, xid, credential, challenge) = managed_fixture(pool).await;
         let begun = store

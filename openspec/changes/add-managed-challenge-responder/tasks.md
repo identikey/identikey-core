@@ -7,8 +7,8 @@
 - [x] Durable `signing_instruction_authorized` before sign; completed/failed after with same request id
 - [x] Response released only to the initiating client (state + PKCE-like verifier or holder-key proof)
 - [x] Envelope-encrypted blob; zeroize plaintext after use; no blob getter
-- [ ] Tests: exact-challenge bind, substitution, stale session, replay, concurrency, pre-sign log failure, rotation races, response theft, C3/C4 Response-shape equivalence
-- [ ] Docs: hosted availability; recommend short-lived holder-bound edge Biscuits
+- [x] Tests: exact-challenge bind, substitution, stale session, replay, concurrency, pre-sign log failure, rotation races, response theft, C3/C4 Response-shape equivalence
+- [x] Docs: hosted availability; recommend short-lived holder-bound edge Biscuits
 - [ ] Advise — reader Fable 5.1, second family Grok
 
 ## Owed from 2026-09-24 Astra advise
