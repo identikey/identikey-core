@@ -795,7 +795,8 @@ surface is not this ADR's threat model — that is what the URN grant and disclo
 `docs/oidc-implementation-checklist.md` and implemented by `subject()`
 (`add-sub-seam`). IKM is the pairwise salt, salt is the sector identifier,
 info is `identikey-oidc-sub-v1` ‖ 0x00 ‖ xid_bytes, L = 32, output is
-unpadded base64url. Actions 1–4 of this ADR landed with `add-pairwise-salt`,
+base58btc of those 32 bytes (same alphabet as public `sub`; the bytes
+are the HKDF digest, not the XID). Actions 1–4 of this ADR landed with `add-pairwise-salt`,
 `add-sub-seam`, and `add-pairwise-export`.
 
 ---

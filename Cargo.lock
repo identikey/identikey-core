@@ -1697,6 +1697,7 @@ name = "identikey-oidc"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bs58",
  "getrandom 0.2.17",
  "hkdf 0.12.4",
  "identikey-auth",

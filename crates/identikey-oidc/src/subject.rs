@@ -2,8 +2,6 @@
 
 use std::fmt;
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
 use hkdf::Hkdf;
 use identikey_keys::Xid;
 use sha2::{Digest, Sha256};
@@ -161,7 +159,7 @@ pub fn subject(salt: &PairwiseSalt, xid: Xid, client: &Client) -> Result<String,
             info.extend_from_slice(xid.as_bytes());
             let mut out = [0u8; 32];
             hk.expand(&info, &mut out).map_err(|_| SubjectError::Hkdf)?;
-            Ok(URL_SAFE_NO_PAD.encode(out))
+            Ok(bs58::encode(out).into_string())
         }
     }
 }
@@ -216,6 +214,8 @@ mod tests {
         assert_ne!(sa, sb);
         assert_ne!(sa, xid().to_string());
         assert_ne!(sb, xid().to_string());
+        assert_eq!(bs58::decode(&sa).into_vec().unwrap().len(), 32);
+        assert!(!sa.chars().any(|c| matches!(c, '0' | 'O' | 'I' | 'l' | '-' | '_')));
     }
 
     #[test]

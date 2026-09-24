@@ -60,7 +60,7 @@ IKM  = IDENTIKEY_PAIRWISE_SALT   # 32+ bytes, install-generated
 salt = sector_identifier         # UTF-8
 info = "identikey-oidc-sub-v1" || 0x00 || xid_bytes   # 32-byte XID
 L    = 32
-sub  = base64url(HKDF-SHA-256(IKM, salt, info, L))   # no padding
+sub  = base58btc(HKDF-SHA-256(IKM, salt, info, L))   # same alphabet as public sub; bytes differ
 ```
 
 `public` subject type: `sub` is the base58btc text form of the 32-byte XID. Never HKDF. Hex is not an identifier form.

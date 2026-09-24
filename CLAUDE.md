@@ -108,7 +108,8 @@ picks one encoding per kind — hex is diagnostics only, not the
 identifier form. `Xid` `Display` / `FromStr` / JSON `xid` /
 `GET /.well-known/xid/{xid}` / `/authorize/dev` / public OIDC `sub`
 are **base58btc**. `Xid::to_hex` is diagnostics. Pairwise `sub` is
-opaque unpadded base64url (not a XID). After this cutover, Mjolnir
+the same alphabet over **different** 32 bytes (HKDF of salt+sector+XID),
+so it never equals a XID. After this cutover, Mjolnir
 `owner_id` for `subject_type=public` is the base58 string; `mj logout`
 && `mj login` if an old hex token is still on disk.
 
@@ -116,7 +117,7 @@ opaque unpadded base64url (not a XID). After this cutover, Mjolnir
 |---|---|---|
 | XID (32 B SHA-256 of inception CBOR) | `bytea` / `[u8; 32]` | **base58btc** |
 | Public OIDC `sub` | token claim | **base58btc** of that XID |
-| Pairwise OIDC `sub` | token claim | unpadded base64url of HKDF-SHA-256 |
+| Pairwise OIDC `sub` | token claim | base58btc of HKDF-SHA-256 (not the XID) |
 | Pairwise salt | 32 B | env/file 64-hex (operator secret) |
 | JWKS `x` / JWT | — | base64url (RFC 7517/7518) |
 | Signing `kid` | — | opaque (not a XID) |
@@ -128,7 +129,7 @@ opaque unpadded base64url (not a XID). After this cutover, Mjolnir
 | Whole envelope in chat/QR | CBOR | `ur:envelope/…` |
 
 `Client::new` defaults to pairwise `sub` (HKDF of salt + sector + XID,
-base64url). Mjolnir owner checks are string equality against the
+base58btc of those 32 bytes). Mjolnir owner checks are string equality against the
 public `sub` (base58btc XID). Live `IDENTIKEY_CLIENTS` already has
 `mjolnir-cli` (`http://127.0.0.1/callback`) and `mjolnir-term`
 (`https://api.vm.worldtree.network/auth/callback`) as `auth=none`
