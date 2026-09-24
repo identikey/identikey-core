@@ -191,6 +191,12 @@ identikey-core/
 - [Epics](docs/epics.md) — Implementation breakdown
 - [Apple Auth Analysis](docs/identikey-apple-auth-architecture-analysis.md) — Native auth architecture
 
+## Contributing
+
+Contributors to identikey-core must agree to the [Contributor License
+Agreement](CLA.md). Contributors to identikey-protocol use the
+identikey-protocol Developer Certificate of Origin instead of this CLA.
+
 ## License
 
 Private — IdentiKey Platform
