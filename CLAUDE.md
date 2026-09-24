@@ -64,16 +64,17 @@ Mjolnir managed deploy (`mjolnir.toml`), first live 2026-08-27:
     # (mj secrets set 404s until the app is in the registry)
     mj deploy . --name identikey --memory 2048 --domain auth.identikey.me
 
-This OP runs on the maintained spawn image `@base/ubuntu-24.04`, not
-`deploy-node-bun`. Redeploy via host rpc
-`Mjolnir.Deploy.Orchestrator.deploy("identikey", src, base_image:
-"ubuntu-24.04", memory_mb: 2048, custom_domain: "auth.identikey.me")`
-until `mjolnir-6ee1` (manifest `base_image` / `mj deploy --base`).
-`POST /api/deploy` still omits `base_image`, so laptop `mj deploy`
-defaults to deploy-node-bun. Source lands in
-`/var/lib/mjolnir/deploy/src/identikey` (`git archive` of HEAD).
-Bun defaults `NODE_ENV` to development — the web build step must set
-`NODE_ENV=production` or pino will look for missing `pino-pretty`.
+This OP pins `base_image = "ubuntu-24.04"` in `mjolnir.toml` (mjolnir-6ee1).
+`mj deploy . --name identikey --memory 2048 --domain auth.identikey.me`
+reads that pin (or `--base ubuntu-24.04` overrides it). Do not omit the
+pin: Orchestrator still defaults inferred/unpinned apps to
+`deploy-node-bun`. The **host** Mjolnir must include 6ee1; until that
+release is running, laptop `mj deploy` still ignores the key and you
+must rpc `Orchestrator.deploy(..., base_image: "ubuntu-24.04")`.
+Source lands in `/var/lib/mjolnir/deploy/src/identikey` (`git archive`
+of HEAD, or `mj deploy` tarball). Bun defaults `NODE_ENV` to
+development — the web build step must set `NODE_ENV=production` or
+pino will look for missing `pino-pretty`.
 
 Related Mjolnir beads from the first ship: `mjolnir-bhcr` (live
 deploy-node-bun has the agent unit and no binary), `mjolnir-hjnz`

@@ -1,10 +1,10 @@
 # IdentiKey OP. Detector cannot infer a Rust workspace.
-#   rpc Orchestrator.deploy(..., base_image: "ubuntu-24.04", memory_mb: 2048,
-#     custom_domain: "auth.identikey.me")
-#   # `mj deploy` still hard-defaults deploy-node-bun (mjolnir-6ee1 / bhcr).
-#   # Pin `base_image = "ubuntu-24.04"` here once that Manifest key exists.
 #
-# Maintained image is ubuntu-24.04 (mj spawn default), not deploy-node-bun.
+# `base_image` is a known Manifest key (mjolnir-6ee1). Pin the maintained
+# spawn image so `mj deploy` does not fall through to deploy-node-bun.
+# `mj deploy --base` still overrides. Host must be running a Mjolnir that
+# honours this key; older Orchestrator ignored it and defaulted bun.
+#
 # ubuntu-24.04 has mise at /root/.local/bin but no /usr/local/bin shim, so
 # PATH is explicit and `runtime` is omitted — that key prepends a bare
 # `mise install`. June guest agent cannot unlock managed secrets
@@ -15,11 +15,12 @@
 # IDENTIKEY_PAIRWISE_SALT). Do not let first-boot generate them onto the
 # guest disk — cutover is a new VM and would mint a new issuer key / new
 # pairwise people. DATABASE_URL comes from `mix mjolnir.pg.tenant ensure`.
+base_image = "ubuntu-24.04"
+port = 8080
+start_command = "IDENTIKEY_BIND=0.0.0.0:8080 ./target/release/identikey-server"
 steps = [
   "export PATH=/root/.local/bin:/usr/local/bin:$PATH; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git pkg-config libssl-dev",
   "export PATH=/root/.local/bin:/usr/local/bin:$PATH; mise install bun@1.2.23; cd web && mise exec bun@1.2.23 -- bun install --frozen-lockfile && NODE_ENV=production mise exec bun@1.2.23 -- bun run build",
   "export PATH=/root/.cargo/bin:/root/.local/bin:/usr/local/bin:$PATH; mise install rust@1.96.0; . /root/.cargo/env; SQLX_OFFLINE=true cargo build --release --quiet -p identikey-server --locked",
   "ln -sfn /dev/null /etc/systemd/system/serial-getty@ttyS0.service",
 ]
-start_command = "IDENTIKEY_BIND=0.0.0.0:8080 ./target/release/identikey-server"
-port = 8080
