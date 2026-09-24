@@ -1661,6 +1661,7 @@ version = "0.1.0"
 dependencies = [
  "bc-components",
  "bc-xid",
+ "bs58",
  "dcbor",
  "identikey-log",
  "serde",

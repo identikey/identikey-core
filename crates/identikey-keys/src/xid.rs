@@ -62,6 +62,24 @@ impl Xid {
         }
         Ok(Self(bytes))
     }
+
+    /// Human-facing encoding (encoding-conventions: short stable IDs are base58btc).
+    ///
+    /// [`Display`] / [`ToString`] stay lowercase hex: public OIDC `sub` and
+    /// Mjolnir `owner_id` compare that string.
+    #[must_use]
+    pub fn to_base58(self) -> String {
+        bs58::encode(self.as_bytes()).into_string()
+    }
+
+    /// Parse a base58btc XID (Bitcoin alphabet). Wrong alphabet or length is
+    /// [`XidError::InvalidBase58`].
+    pub fn from_base58(s: &str) -> Result<Self, XidError> {
+        let bytes = bs58::decode(s)
+            .into_vec()
+            .map_err(|_| XidError::InvalidBase58)?;
+        Self::try_from_slice(&bytes).map_err(|_| XidError::InvalidBase58)
+    }
 }
 
 impl From<bc_components::XID> for Xid {
@@ -91,6 +109,8 @@ pub enum XidError {
     InvalidLength { got: usize },
     #[error("XID hex must be 64 lowercase characters")]
     InvalidHex,
+    #[error("XID must be 32 bytes of base58btc")]
+    InvalidBase58,
 }
 
 #[cfg(test)]
@@ -136,5 +156,28 @@ mod tests {
             Err(XidError::InvalidHex)
         ));
         assert!(matches!(Xid::from_hex("dead"), Err(XidError::InvalidHex)));
+    }
+
+    #[test]
+    fn display_stays_hex_for_oidc_sub() {
+        let xid = Xid::from_bytes([0xab; 32]);
+        assert_eq!(xid.to_string().len(), 64);
+        assert_ne!(xid.to_base58(), xid.to_string());
+    }
+
+    #[test]
+    fn base58_round_trips_and_rejects_junk() {
+        let xid = Xid::from_bytes([0xab; 32]);
+        let encoded = xid.to_base58();
+        assert_eq!(Xid::from_base58(&encoded).unwrap(), xid);
+        assert!(!encoded.chars().any(|c| matches!(c, '0' | 'O' | 'I' | 'l')));
+        assert!(matches!(
+            Xid::from_base58("not-a-xid"),
+            Err(XidError::InvalidBase58)
+        ));
+        assert!(matches!(
+            Xid::from_base58(&xid.to_string()),
+            Err(XidError::InvalidBase58)
+        ));
     }
 }

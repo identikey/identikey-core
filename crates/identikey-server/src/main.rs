@@ -418,7 +418,7 @@ async fn account_page(State(state): State<AppState>, headers: HeaderMap) -> Resp
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        pages::account(&xid.to_string(), rung, passkeys),
+        pages::account(&xid.to_base58(), rung, passkeys),
     )
         .into_response()
 }
@@ -2196,7 +2196,8 @@ mod tests {
                 .to_vec(),
         )
         .unwrap();
-        assert!(profile_html.contains(&xid.to_string()));
+        assert!(profile_html.contains(&xid.to_base58()));
+        assert!(!profile_html.contains(&xid.to_string()));
         assert!(profile_html.contains("Managed (C2)"));
         assert!(profile_html.contains("1 passkey"));
 
@@ -2217,6 +2218,7 @@ mod tests {
                 .to_vec(),
         )
         .unwrap();
+        assert!(!signed_out_html.contains(&xid.to_base58()));
         assert!(!signed_out_html.contains(&xid.to_string()));
         assert!(signed_out_html.contains("/signup"));
     }
