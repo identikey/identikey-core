@@ -105,32 +105,31 @@ returns to `/authorize/passkey`. No `IDENTIKEY_DEV_LOGIN` in the guest.
 Encoding (cite protocol `docs/standards/encoding-conventions.md`).
 Bytes stay bytes in Postgres, Rust, and CBOR. A **text** boundary
 picks one encoding per kind — hex is diagnostics only, not the
-identifier form. `Xid`'s `Display` is still lowercase hex, which is
-why JSON `xid`, `GET /.well-known/xid/{xid}`, `/authorize/dev`, and
-public OIDC `sub` are hex: they called `to_string()`, nobody chose
-hex. Human surfaces (`/account`, passkey `user.name`) use
-`Xid::to_base58` (base58btc). Do not change `Display` until public
-`sub` and those HTTP parsers move together — Mjolnir `owner_id` is
-string equality on today's hex `sub`.
+identifier form. `Xid` `Display` / `FromStr` / JSON `xid` /
+`GET /.well-known/xid/{xid}` / `/authorize/dev` / public OIDC `sub`
+are **base58btc**. `Xid::to_hex` is diagnostics. Pairwise `sub` is
+opaque unpadded base64url (not a XID). After this cutover, Mjolnir
+`owner_id` for `subject_type=public` is the base58 string; `mj logout`
+&& `mj login` if an old hex token is still on disk.
 
-| Value | Inside | Text boundary today | Should be |
-|---|---|---|---|
-| XID (32 B SHA-256 of inception CBOR) | `bytea` / `[u8; 32]` | hex via `Display`; HTML/passkey name base58 | **base58btc** at every text boundary |
-| Public OIDC `sub` | n/a (token claim) | 64-hex (`xid.to_string()`) | **base58btc** of the same 32 B (living spec still says 64-hex) |
-| Pairwise OIDC `sub` | n/a | unpadded base64url of HKDF-SHA-256 | keep (opaque, already issued; not a XID) |
-| Pairwise salt | 32 B | env/file 64-hex | hex is fine (operator secret, diagnostic) |
-| JWKS `x` / JWT | n/a | base64url (RFC 7517/7518) | keep |
-| Signing `kid` | n/a | opaque (live is base64url of 32 B) | keep; do not treat as a XID |
-| identikey-auth Response (URN grant) | CBOR envelope | unpadded base64url | keep (binary blob on a form field) |
-| HTTP ETag of a XID document | SHA-256 of bytes | lowercase hex | keep (cache validator) |
-| WebAuthn `user.id` | n/a | UUID v5 (`NAMESPACE_URL` + xid bytes) | keep (webauthn-rs, not a text form of XID) |
-| Account cookie / ceremony session | n/a | UUID | keep |
-| Whole envelope in chat/QR | CBOR | `ur:envelope/…` | keep (not JSON) |
+| Value | Inside | Text boundary |
+|---|---|---|
+| XID (32 B SHA-256 of inception CBOR) | `bytea` / `[u8; 32]` | **base58btc** |
+| Public OIDC `sub` | token claim | **base58btc** of that XID |
+| Pairwise OIDC `sub` | token claim | unpadded base64url of HKDF-SHA-256 |
+| Pairwise salt | 32 B | env/file 64-hex (operator secret) |
+| JWKS `x` / JWT | — | base64url (RFC 7517/7518) |
+| Signing `kid` | — | opaque (not a XID) |
+| identikey-auth Response (URN grant) | CBOR envelope | unpadded base64url (variable blob) |
+| HTTP ETag of a XID document | SHA-256 of bytes | lowercase hex (cache validator) |
+| WebAuthn `user.id` | — | UUID v5 (`NAMESPACE_URL` + xid bytes) |
+| WebAuthn `user.name` / `/account` | — | base58btc XID |
+| Account cookie / ceremony session | — | UUID |
+| Whole envelope in chat/QR | CBOR | `ur:envelope/…` |
 
 `Client::new` defaults to pairwise `sub` (HKDF of salt + sector + XID,
-base64url). Mjolnir owner checks are string equality against the hex
-XID, so those clients must be `subject_type=public` (`sub` =
-`xid.to_string()`). Live `IDENTIKEY_CLIENTS` already has
+base64url). Mjolnir owner checks are string equality against the
+public `sub` (base58btc XID). Live `IDENTIKEY_CLIENTS` already has
 `mjolnir-cli` (`http://127.0.0.1/callback`) and `mjolnir-term`
 (`https://api.vm.worldtree.network/auth/callback`) as `auth=none`
 `subject_type=public`. `taskmaster` / `taskmaster-laptop` stay

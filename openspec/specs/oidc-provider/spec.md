@@ -36,15 +36,16 @@ Rotation SHALL be unsupported.
 
 Every OIDC `sub` SHALL be produced by a single function in
 `identikey-oidc`. Pairwise clients SHALL receive
-`KDF(salt, xid, sector)`. `public` clients SHALL receive the 64-hex
-XID. The XID SHALL remain the internal key; a pairwise `sub` SHALL
-NOT be used as a database primary key.
+`KDF(salt, xid, sector)`. `public` clients SHALL receive the base58btc
+text form of the 32-byte XID. The XID SHALL remain the internal key; a
+pairwise `sub` SHALL NOT be used as a database primary key. Hex SHALL
+NOT appear as an identifier form.
 
 #### Scenario: Two sectors differ
 
 - GIVEN one XID and two clients with distinct sector identifiers
 - WHEN `sub` is computed for each
-- THEN the two values differ and neither equals the XID hex
+- THEN the two values differ and neither equals the XID text form
 
 #### Scenario: Same sector is stable
 
@@ -56,7 +57,7 @@ NOT be used as a database primary key.
 
 - GIVEN a client with `subject_type=public`
 - WHEN `sub` is computed
-- THEN the value is the 64-lowercase-hex XID
+- THEN the value is the base58btc XID (same 32 bytes as the internal key)
 
 ### Requirement: Discovery and JWKS
 

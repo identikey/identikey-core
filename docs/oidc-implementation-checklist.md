@@ -63,7 +63,7 @@ L    = 32
 sub  = base64url(HKDF-SHA-256(IKM, salt, info, L))   # no padding
 ```
 
-`public` subject type: `sub` is the 64-lowercase-hex XID. Never HKDF.
+`public` subject type: `sub` is the base58btc text form of the 32-byte XID. Never HKDF. Hex is not an identifier form.
 Internal keys stay the XID (`identikey-keys`). Pairwise `sub` is
 token-boundary only.
 

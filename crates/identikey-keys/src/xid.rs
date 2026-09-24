@@ -1,6 +1,7 @@
 //! The account primary key: a XID, not a fingerprint and not a pairwise `sub`.
 
 use std::fmt;
+use std::str::FromStr;
 
 use sha2::{Digest, Sha256};
 
@@ -8,6 +9,10 @@ use sha2::{Digest, Sha256};
 ///
 /// This is the canonical internal identity (ADR-001). Pairwise subject identifiers
 /// (ADR-009) are a projection at the token boundary and must never appear here.
+///
+/// Text form is **base58btc** (encoding-conventions: short stable IDs). [`Display`]
+/// and [`FromStr`] are that form. Hex is diagnostics only ([`Self::to_hex`] /
+/// [`Self::from_hex`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sqlx::Type)]
 #[sqlx(transparent)]
 pub struct Xid(pub(crate) [u8; Xid::LEN]);
@@ -47,7 +52,37 @@ impl Xid {
         &self.0
     }
 
-    /// Parse 64 lowercase hex characters. Any other shape is [`XidError::InvalidHex`].
+    /// Canonical text form: base58btc of the 32 bytes.
+    pub fn parse(s: &str) -> Result<Self, XidError> {
+        Self::from_base58(s)
+    }
+
+    /// Human-facing encoding (encoding-conventions: short stable IDs are base58btc).
+    #[must_use]
+    pub fn to_base58(self) -> String {
+        bs58::encode(self.as_bytes()).into_string()
+    }
+
+    /// Parse a base58btc XID (Bitcoin alphabet). Wrong alphabet or length is
+    /// [`XidError::InvalidBase58`].
+    pub fn from_base58(s: &str) -> Result<Self, XidError> {
+        let bytes = bs58::decode(s)
+            .into_vec()
+            .map_err(|_| XidError::InvalidBase58)?;
+        Self::try_from_slice(&bytes).map_err(|_| XidError::InvalidBase58)
+    }
+
+    /// Diagnostic dump. Not the identifier form.
+    #[must_use]
+    pub fn to_hex(self) -> String {
+        let mut out = String::with_capacity(Self::LEN * 2);
+        for byte in self.as_bytes() {
+            let _ = fmt::Write::write_fmt(&mut out, format_args!("{byte:02x}"));
+        }
+        out
+    }
+
+    /// Parse 64 lowercase hex characters. Diagnostics / tests only.
     pub fn from_hex(hex: &str) -> Result<Self, XidError> {
         if hex.len() != Self::LEN * 2
             || !hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
@@ -61,24 +96,6 @@ impl Xid {
             *slot = u8::from_str_radix(text, 16).map_err(|_| XidError::InvalidHex)?;
         }
         Ok(Self(bytes))
-    }
-
-    /// Human-facing encoding (encoding-conventions: short stable IDs are base58btc).
-    ///
-    /// [`Display`] / [`ToString`] stay lowercase hex: public OIDC `sub` and
-    /// Mjolnir `owner_id` compare that string.
-    #[must_use]
-    pub fn to_base58(self) -> String {
-        bs58::encode(self.as_bytes()).into_string()
-    }
-
-    /// Parse a base58btc XID (Bitcoin alphabet). Wrong alphabet or length is
-    /// [`XidError::InvalidBase58`].
-    pub fn from_base58(s: &str) -> Result<Self, XidError> {
-        let bytes = bs58::decode(s)
-            .into_vec()
-            .map_err(|_| XidError::InvalidBase58)?;
-        Self::try_from_slice(&bytes).map_err(|_| XidError::InvalidBase58)
     }
 }
 
@@ -96,10 +113,15 @@ impl AsRef<[u8]> for Xid {
 
 impl fmt::Display for Xid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for byte in &self.0 {
-            write!(f, "{byte:02x}")?;
-        }
-        Ok(())
+        f.write_str(&self.to_base58())
+    }
+}
+
+impl FromStr for Xid {
+    type Err = XidError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
     }
 }
 
@@ -138,15 +160,17 @@ mod tests {
     }
 
     #[test]
-    fn display_is_hex() {
+    fn display_is_base58() {
         let xid = Xid::from_bytes([0xab; 32]);
-        assert_eq!(xid.to_string(), "ab".repeat(32));
+        assert_eq!(xid.to_string(), xid.to_base58());
+        assert_ne!(xid.to_string(), xid.to_hex());
+        assert_eq!(xid.to_hex(), "ab".repeat(32));
     }
 
     #[test]
     fn from_hex_round_trips() {
         let xid = Xid::from_bytes([0xab; 32]);
-        assert_eq!(Xid::from_hex(&xid.to_string()).unwrap(), xid);
+        assert_eq!(Xid::from_hex(&xid.to_hex()).unwrap(), xid);
     }
 
     #[test]
@@ -159,24 +183,18 @@ mod tests {
     }
 
     #[test]
-    fn display_stays_hex_for_oidc_sub() {
+    fn parse_is_base58_and_rejects_hex() {
         let xid = Xid::from_bytes([0xab; 32]);
-        assert_eq!(xid.to_string().len(), 64);
-        assert_ne!(xid.to_base58(), xid.to_string());
-    }
-
-    #[test]
-    fn base58_round_trips_and_rejects_junk() {
-        let xid = Xid::from_bytes([0xab; 32]);
-        let encoded = xid.to_base58();
-        assert_eq!(Xid::from_base58(&encoded).unwrap(), xid);
+        let encoded = xid.to_string();
+        assert_eq!(Xid::parse(&encoded).unwrap(), xid);
+        assert_eq!(encoded.parse::<Xid>().unwrap(), xid);
         assert!(!encoded.chars().any(|c| matches!(c, '0' | 'O' | 'I' | 'l')));
         assert!(matches!(
-            Xid::from_base58("not-a-xid"),
+            Xid::parse("not-a-xid"),
             Err(XidError::InvalidBase58)
         ));
         assert!(matches!(
-            Xid::from_base58(&xid.to_string()),
+            Xid::parse(&xid.to_hex()),
             Err(XidError::InvalidBase58)
         ));
     }

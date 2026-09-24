@@ -203,10 +203,10 @@ fn if_none_match_hits(headers: &HeaderMap, etag: &str) -> bool {
 
 async fn xid_document(
     State(state): State<AppState>,
-    Path(hex): Path<String>,
+    Path(xid): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let Ok(xid) = Xid::from_hex(&hex) else {
+    let Ok(xid) = Xid::parse(&xid) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let published = match state.store.published_document(xid).await {
@@ -321,7 +321,7 @@ async fn register_begin(
     State(state): State<AppState>,
     Json(body): Json<ceremonies::RegisterBegin>,
 ) -> Response {
-    let Ok(xid) = Xid::from_hex(&body.xid) else {
+    let Ok(xid) = Xid::parse(&body.xid) else {
         return ceremony_http(ceremonies::CeremonyError::UnknownAccount);
     };
     match state.ceremonies.begin_register(&state.store, xid).await {
@@ -338,7 +338,7 @@ async fn register_finish(
     State(state): State<AppState>,
     Json(body): Json<ceremonies::RegisterFinish>,
 ) -> Response {
-    let Ok(xid) = Xid::from_hex(&body.xid) else {
+    let Ok(xid) = Xid::parse(&body.xid) else {
         return ceremony_http(ceremonies::CeremonyError::UnknownAccount);
     };
     match state
@@ -418,7 +418,7 @@ async fn account_page(State(state): State<AppState>, headers: HeaderMap) -> Resp
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        pages::account(&xid.to_base58(), rung, passkeys),
+        pages::account(&xid.to_string(), rung, passkeys),
     )
         .into_response()
 }
@@ -428,7 +428,7 @@ async fn assert_begin(
     Json(body): Json<ceremonies::AssertBegin>,
 ) -> Response {
     let xid = match body.xid.as_deref() {
-        Some(hex) => match Xid::from_hex(hex) {
+        Some(raw) => match Xid::parse(raw) {
             Ok(xid) => Some(xid),
             Err(_) => return ceremony_http(ceremonies::CeremonyError::UnknownAccount),
         },
@@ -556,7 +556,7 @@ async fn revoke_ssh_git(
     State(state): State<AppState>,
     Json(body): Json<ceremonies::RevokeSshGit>,
 ) -> Response {
-    let Ok(xid) = Xid::from_hex(&body.xid) else {
+    let Ok(xid) = Xid::parse(&body.xid) else {
         return ceremony_http(ceremonies::CeremonyError::UnknownAccount);
     };
     match state.store.revoke_ssh_git(xid, body.credential_id).await {
@@ -742,14 +742,14 @@ async fn complete_dev_login(state: AppState, params: DevLoginParams) -> Response
             return oauth_error(StatusCode::BAD_REQUEST, error, &description);
         }
     };
-    let Some(hex) = params.xid.as_deref().filter(|s| !s.is_empty()) else {
+    let Some(raw) = params.xid.as_deref().filter(|s| !s.is_empty()) else {
         return oauth_error(
             StatusCode::BAD_REQUEST,
             "invalid_request",
             "xid is required",
         );
     };
-    let Ok(xid) = Xid::from_hex(hex) else {
+    let Ok(xid) = Xid::parse(raw) else {
         return redirect_with_error(
             &pending.redirect_uri,
             "access_denied",
@@ -1444,7 +1444,7 @@ mod tests {
             .unwrap();
         assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
 
-        let missing = test_router(store)
+        let missing = test_router(store.clone())
             .oneshot(
                 Request::builder()
                     .uri("/.well-known/xid/dead")
@@ -1454,6 +1454,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+        let hex_path = test_router(store)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/.well-known/xid/{}", xid.to_hex()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(hex_path.status(), StatusCode::NOT_FOUND);
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
@@ -2156,7 +2167,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let xid = Xid::from_hex(created_json["xid"].as_str().unwrap()).unwrap();
+        let xid = Xid::parse(created_json["xid"].as_str().unwrap()).unwrap();
         let session = created_json["session"].as_str().unwrap().to_owned();
         assert!(created_json["publicKey"].is_object());
         assert!(store.get_account(xid).await.unwrap().is_some());
@@ -2196,8 +2207,8 @@ mod tests {
                 .to_vec(),
         )
         .unwrap();
-        assert!(profile_html.contains(&xid.to_base58()));
-        assert!(!profile_html.contains(&xid.to_string()));
+        assert!(profile_html.contains(&xid.to_string()));
+        assert!(!profile_html.contains(&xid.to_hex()));
         assert!(profile_html.contains("Managed (C2)"));
         assert!(profile_html.contains("1 passkey"));
 
@@ -2218,8 +2229,8 @@ mod tests {
                 .to_vec(),
         )
         .unwrap();
-        assert!(!signed_out_html.contains(&xid.to_base58()));
         assert!(!signed_out_html.contains(&xid.to_string()));
+        assert!(!signed_out_html.contains(&xid.to_hex()));
         assert!(signed_out_html.contains("/signup"));
     }
 

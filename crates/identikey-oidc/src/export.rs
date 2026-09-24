@@ -10,10 +10,10 @@ use crate::subject::{Client, subject};
 /// What a successor OP needs to recompute every pairwise `sub`.
 ///
 /// `Debug` redacts the salt. Callers that print this must not log
-/// [`PairwiseExport::salt_hex`].
+/// [`PairwiseExport::salt_hex`]. `xid` is the canonical base58btc text form.
 #[derive(Clone)]
 pub struct PairwiseExport {
-    pub xid_hex: String,
+    pub xid: String,
     pub salt_hex: String,
     pub kdf: &'static str,
 }
@@ -22,7 +22,7 @@ impl PairwiseExport {
     #[must_use]
     pub fn for_xid(salt: &PairwiseSalt, xid: Xid) -> Self {
         Self {
-            xid_hex: xid.to_string(),
+            xid: xid.to_string(),
             salt_hex: salt.export_hex(),
             kdf: "HKDF-SHA-256",
         }
@@ -33,7 +33,7 @@ impl PairwiseExport {
     }
 
     pub fn xid(&self) -> Result<Xid, identikey_keys::XidError> {
-        Xid::from_hex(&self.xid_hex)
+        Xid::parse(&self.xid)
     }
 
     /// Recompute `sub` the way a successor OP must.
@@ -47,7 +47,7 @@ impl PairwiseExport {
 impl fmt::Debug for PairwiseExport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PairwiseExport")
-            .field("xid_hex", &self.xid_hex)
+            .field("xid", &self.xid)
             .field("salt_hex", &"[redacted]")
             .field("kdf", &self.kdf)
             .finish()

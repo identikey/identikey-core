@@ -56,10 +56,11 @@ document.
 
 `identikey-server` SHALL serve the stored XID document at
 `GET /.well-known/xid/{xid}` as an availability service. `{xid}` SHALL
-be 64 lowercase hex characters. The 200 body SHALL be the stored
-`xid_document` bytes and SHALL NOT be re-signed by the server. Unknown
-or malformed XIDs SHALL return 404. `/health` SHALL remain a liveness
-signal and SHALL NOT report resolver or key state.
+be the base58btc text form of the 32-byte XID. The 200 body SHALL be
+the stored `xid_document` bytes and SHALL NOT be re-signed by the
+server. Unknown or malformed XIDs (including a 64-hex path) SHALL
+return 404. `/health` SHALL remain a liveness signal and SHALL NOT
+report resolver or key state.
 
 #### Scenario: A stored document is fetchable by XID
 
@@ -75,7 +76,7 @@ signal and SHALL NOT report resolver or key state.
 
 #### Scenario: Malformed XID is 404
 
-- GIVEN any path segment that is not 64 lowercase hex characters
+- GIVEN any path segment that is not base58btc of 32 bytes
 - WHEN `GET /.well-known/xid/{segment}` is called
 - THEN the response is 404
 

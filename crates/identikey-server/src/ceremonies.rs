@@ -119,7 +119,7 @@ impl CeremonyHub {
         } else {
             Some(exclude)
         };
-        let name = xid.to_base58();
+        let name = xid.to_string();
         let (ccr, state) = self
             .webauthn
             .start_passkey_registration(xid_user_id(xid), &name, &name, exclude)

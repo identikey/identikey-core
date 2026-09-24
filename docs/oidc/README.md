@@ -74,10 +74,10 @@ Login automation:
 1. Create the test user in `KeysStore` first (no implicit signup).
 2. `IDENTIKEY_DEV_LOGIN` must be exactly `1`. `/authorize` then
    redirects to `/authorize/dev`.
-3. The form field is `name="xid"` (64 lowercase hex). Submit
+3. The form field is `name="xid"` (base58btc of the 32-byte XID). Submit
    completes the code+PKCE request.
 4. Without a browser: `GET /authorize/dev` with the same query string
-   `/authorize` used, plus `xid=<64hex>`, completes login (the GET
+   `/authorize` used, plus `xid=<base58btc>`, completes login (the GET
    handler already does this when `xid` is present).
 5. PKCE `S256` is still required when a client secret is presented.
 

@@ -231,7 +231,7 @@ mod tests {
         let client =
             Client::new("disclosed", "stack.example").with_subject_type(SubjectType::Public);
         assert_eq!(subject(&salt(), xid(), &client).unwrap(), xid().to_string());
-        assert_eq!(xid().to_string().len(), 64);
+        assert_ne!(xid().to_string(), xid().to_hex());
     }
 
     #[test]
