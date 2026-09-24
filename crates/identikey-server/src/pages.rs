@@ -42,6 +42,8 @@ button.secondary{background:#2a3542;margin-top:.6rem}\
 a{color:#8bb4ff}\
 .status{min-height:1.4em;color:#f0b4b4;margin:0 0 1rem}\
 .status.ok{color:#9ed4b0}\
+.facts{margin:0 0 1rem}.facts dt{color:#b7c2cc;font-size:.875rem;margin-top:.75rem}\
+.facts dd{margin:.15rem 0 0}.facts code{display:block;overflow-wrap:anywhere;font:.8125rem/1.45 ui-monospace,monospace}\
 ";
 
 const WEBAUTHN_JS: &str = r#"
@@ -223,8 +225,8 @@ pub fn signup() -> String {
                    location.assign('/authorize/passkey'+location.search);\
                    return;\
                  }}\
-                 setStatus('Passkey saved. You can sign in now.',true);\
-                 btn.textContent='Done';\
+                 const body=await res.json().catch(()=>({{}}));\
+                 location.assign(body.next||'/account');\
                  return;\
                }}catch(e){{setStatus(e&&e.message?e.message:String(e));}}\
                btn.disabled=false;\
@@ -233,4 +235,60 @@ pub fn signup() -> String {
              </script>"
         ),
     )
+}
+
+/// Signed-in first-party account page after hosted signup.
+#[must_use]
+pub fn account(xid: &str, rung: &str, passkeys: usize) -> String {
+    let xid = html_escape(xid);
+    let rung = html_escape(rung);
+    let passkeys = html_escape(&passkey_label(passkeys));
+    shell(
+        "Your account — IdentiKey",
+        &format!(
+            "<h1>Your IdentiKey</h1>\
+             <p>This is the account you just created. Use the passkey you saved to sign in to apps that use IdentiKey.</p>\
+             <dl class=\"facts\">\
+             <dt>Account</dt><dd><code>{xid}</code></dd>\
+             <dt>Custody</dt><dd>{rung}</dd>\
+             <dt>Sign-in</dt><dd>{passkeys}</dd>\
+             </dl>\
+             <p>Keep the passkey. Creating another account will not restore this one.</p>\
+             <p><a href=\"/signup\">Create a different account</a></p>"
+        ),
+    )
+}
+
+/// No session: do not create an account.
+#[must_use]
+pub fn account_signed_out() -> String {
+    shell(
+        "Your account — IdentiKey",
+        "<h1>Your account</h1>\
+         <p>This page appears after you create an account and save a passkey.</p>\
+         <p><a href=\"/signup\">Create an account</a></p>",
+    )
+}
+
+fn passkey_label(n: usize) -> String {
+    match n {
+        0 => "No passkey saved yet".to_owned(),
+        1 => "1 passkey".to_owned(),
+        n => format!("{n} passkeys"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_page_shows_xid_and_not_a_sub() {
+        let html = account("abc123", "Managed (C2)", 1);
+        assert!(html.contains("abc123"));
+        assert!(html.contains("Managed (C2)"));
+        assert!(html.contains("1 passkey"));
+        assert!(!html.contains("pairwise"));
+        assert!(signup().contains("/account"));
+    }
 }

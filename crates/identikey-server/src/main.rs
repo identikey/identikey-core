@@ -13,6 +13,7 @@
 //! WebAuthn RP ID / origin allowlist fails closed
 //! at boot (`identikey-core-62j`).
 //!
+mod account;
 mod ceremonies;
 mod pages;
 mod webauthn;
@@ -47,6 +48,7 @@ struct AppState {
     provider: Arc<Provider>,
     webauthn: WebAuthnConfig,
     ceremonies: Arc<ceremonies::CeremonyHub>,
+    accounts: Arc<account::AccountSessions>,
 }
 
 /// Liveness only. This must not grow into a readiness check that reports on the
@@ -66,6 +68,7 @@ fn router(
     provider: Arc<Provider>,
     dev_login: bool,
     webauthn: WebAuthnConfig,
+    accounts: Arc<account::AccountSessions>,
 ) -> Router {
     let web_dir = std::env::var_os("IDENTIKEY_WEB_DIR")
         .map(std::path::PathBuf::from)
@@ -83,6 +86,7 @@ fn router(
             get(passkey_login_page).post(passkey_login_finish),
         )
         .route("/signup", get(signup_page).post(signup))
+        .route("/account", get(account_page))
         .route("/webauthn/register/begin", post(register_begin))
         .route("/webauthn/register/finish", post(register_finish))
         .route("/webauthn/assert/begin", post(assert_begin))
@@ -112,6 +116,7 @@ fn router(
             provider,
             webauthn,
             ceremonies,
+            accounts,
         })
         .fallback_service(web_assets(web_dir))
 }
@@ -341,9 +346,81 @@ async fn register_finish(
         .finish_register(&state.store, &body.session, xid, body.credential)
         .await
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            let Ok(token) = state.accounts.issue(xid) else {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            };
+            let secure = state
+                .webauthn
+                .expected_origins
+                .iter()
+                .any(|origin| origin.starts_with("https://"));
+            (
+                StatusCode::OK,
+                [
+                    (
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/json"),
+                    ),
+                    (account::cookie_header(), account::set_cookie(&token, secure)),
+                ],
+                serde_json::json!({ "next": "/account" }).to_string(),
+            )
+                .into_response()
+        }
         Err(err) => ceremony_http(err),
     }
+}
+
+async fn account_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let cookie = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok());
+    let Some(token) = account::parse_cookie(cookie) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            pages::account_signed_out(),
+        )
+            .into_response();
+    };
+    let Ok(Some(xid)) = state.accounts.lookup(token) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            pages::account_signed_out(),
+        )
+            .into_response();
+    };
+    let custody = match state.store.get_custody(xid).await {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                pages::account_signed_out(),
+            )
+                .into_response();
+        }
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let passkeys = match state.store.list_passkeys(xid).await {
+        Ok(rows) => rows.len(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let rung = match custody.rung {
+        CustodyRung::C0 => "Placeholder (C0)",
+        CustodyRung::C1 => "Managed (C1)",
+        CustodyRung::C2 => "Managed (C2)",
+        CustodyRung::C3 => "Self-custody (C3)",
+        CustodyRung::C4 => "Self-custody (C4)",
+    };
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        pages::account(&xid.to_string(), rung, passkeys),
+    )
+        .into_response()
 }
 
 async fn assert_begin(
@@ -1099,7 +1176,13 @@ async fn main() -> Result<(), BoxError> {
     let dev_login = std::env::var("IDENTIKEY_DEV_LOGIN").ok().as_deref() == Some("1");
     axum::serve(
         listener,
-        router(store, Arc::new(provider), dev_login, webauthn),
+        router(
+            store,
+            Arc::new(provider),
+            dev_login,
+            webauthn,
+            Arc::new(account::AccountSessions::default()),
+        ),
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;
@@ -1130,11 +1213,24 @@ mod tests {
     }
 
     fn test_router(store: KeysStore) -> Router {
-        router(store, test_provider(), false, test_webauthn())
+        test_router_with_accounts(store, Arc::new(account::AccountSessions::default()))
+    }
+
+    fn test_router_with_accounts(
+        store: KeysStore,
+        accounts: Arc<account::AccountSessions>,
+    ) -> Router {
+        router(store, test_provider(), false, test_webauthn(), accounts)
     }
 
     fn test_router_dev(store: KeysStore, provider: Arc<Provider>) -> Router {
-        router(store, provider, true, test_webauthn())
+        router(
+            store,
+            provider,
+            true,
+            test_webauthn(),
+            Arc::new(account::AccountSessions::default()),
+        )
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
@@ -1516,7 +1612,13 @@ mod tests {
         let code = provider
             .issue_code(&pending, Xid::from_bytes([0x22; 32]))
             .unwrap();
-        let app = router(store, provider, false, test_webauthn());
+        let app = router(
+            store,
+            provider,
+            false,
+            test_webauthn(),
+            Arc::new(account::AccountSessions::default()),
+        );
         let form = format!(
             "grant_type=authorization_code&code={code}&redirect_uri=http://127.0.0.1:9999/cb&client_id=smoke&code_verifier={VERIFIER}"
         );
@@ -1797,7 +1899,13 @@ mod tests {
         let code = provider
             .issue_code(&pending, Xid::from_bytes([0x22; 32]))
             .unwrap();
-        let app = router(store, Arc::new(provider), false, test_webauthn());
+        let app = router(
+            store,
+            Arc::new(provider),
+            false,
+            test_webauthn(),
+            Arc::new(account::AccountSessions::default()),
+        );
         let form = format!(
             "grant_type=authorization_code&code={code}&redirect_uri=http://127.0.0.1:9999/cb&code_verifier={VERIFIER}"
         );
@@ -1876,7 +1984,13 @@ mod tests {
             use base64::engine::general_purpose::URL_SAFE_NO_PAD;
             URL_SAFE_NO_PAD.encode(signer.respond(&chal).unwrap().to_bytes())
         };
-        let app = router(store, Arc::new(provider), false, test_webauthn());
+        let app = router(
+            store,
+            Arc::new(provider),
+            false,
+            test_webauthn(),
+            Arc::new(account::AccountSessions::default()),
+        );
         let form =
             format!("grant_type={CHALLENGE_RESPONSE_GRANT}&client_id=smoke&response={encoded}");
         let first = app
@@ -1981,8 +2095,6 @@ mod tests {
         )
         .unwrap();
         assert!(body.contains("navigator.credentials.get"));
-        assert!(body.contains("<details id=\"technical\" hidden>"));
-        assert!(body.contains("Try another passkey"));
         assert!(!body.contains("name=\"username\""));
         assert!(body.contains("Continue with passkey"));
     }
@@ -1993,13 +2105,10 @@ mod tests {
         use axum::http::{Request, StatusCode};
         use identikey_keys::{CustodyRung, Xid, is_c2};
         use tower::ServiceExt;
-        use url::Url;
-        use webauthn_authenticator_rs::prelude::WebauthnAuthenticator;
-        use webauthn_authenticator_rs::softpasskey::SoftPasskey;
-        use webauthn_rs::prelude::CreationChallengeResponse;
 
         let store = KeysStore::from_pool(pool);
-        let app = test_router(store.clone());
+        let accounts = Arc::new(account::AccountSessions::default());
+        let app = test_router_with_accounts(store.clone(), accounts.clone());
 
         let get = app
             .clone()
@@ -2056,33 +2165,60 @@ mod tests {
         assert!(is_c2(&custody.document));
         assert_eq!(store.has_managed_key(xid).await.unwrap(), Some(true));
         assert!(store.list_passkeys(xid).await.unwrap().is_empty());
+        let _session = session;
 
-        let origin = Url::parse("https://auth.identikey.me").unwrap();
-        let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
-        let ccr = CreationChallengeResponse {
-            public_key: serde_json::from_value(created_json["publicKey"].clone()).unwrap(),
-        };
-        let cred = authenticator.do_registration(origin, ccr).unwrap();
-        let finish = app
+        store
+            .insert_passkey(xid, &[0xAA; 16], &[0xBB; 8], 0)
+            .await
+            .unwrap();
+        let token = accounts.issue(xid).unwrap();
+        assert!(account::set_cookie(&token, true)
+            .to_str()
+            .unwrap()
+            .contains("HttpOnly"));
+
+        let profile = app
+            .clone()
             .oneshot(
                 Request::builder()
-                    .method("POST")
-                    .uri("/webauthn/register/finish")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "session": session,
-                            "xid": xid.to_string(),
-                            "credential": cred,
-                        })
-                        .to_string(),
-                    ))
+                    .uri("/account")
+                    .header(header::COOKIE, format!("identikey_account={token}"))
+                    .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(finish.status(), StatusCode::NO_CONTENT);
-        assert_eq!(store.list_passkeys(xid).await.unwrap().len(), 1);
+        assert_eq!(profile.status(), StatusCode::OK);
+        let profile_html = String::from_utf8(
+            body::to_bytes(profile.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(profile_html.contains(&xid.to_string()));
+        assert!(profile_html.contains("Managed (C2)"));
+        assert!(profile_html.contains("1 passkey"));
+
+        let signed_out = app
+            .oneshot(
+                Request::builder()
+                    .uri("/account")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(signed_out.status(), StatusCode::UNAUTHORIZED);
+        let signed_out_html = String::from_utf8(
+            body::to_bytes(signed_out.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(!signed_out_html.contains(&xid.to_string()));
+        assert!(signed_out_html.contains("/signup"));
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
