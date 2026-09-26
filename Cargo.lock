@@ -1719,12 +1719,16 @@ dependencies = [
 name = "identikey-oidc-client"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.2.17",
  "josekit",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
+ "url",
 ]
 
 [[package]]
