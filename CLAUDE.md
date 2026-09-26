@@ -89,10 +89,10 @@ Apex `identikey.me` must be in **both** `MJOLNIR_GATEWAY_APEXES`
 domain"). Bind is `0.0.0.0:8080` in `start_command` — `PORT` is
 ignored. Do not set `IDENTIKEY_DEV_LOGIN`. Host: `root@45.76.77.97`.
 
-Live (2026-09-24, `35aee29`): app `identikey`, snapshot
-`deploy-0f2fa7f0ba65c6255d3b011d89e452a7f3c8cc30247806e73c53f4959dbb7dfa`,
-service VM `31b4dc3b-ed0c-47a9-b395-872fcf78e57c` (cut over from
-`1769d148-8949-457b-806f-1e467046da94`). Public
+Live (2026-09-26, `ecf9917`): app `identikey`, snapshot
+`deploy-2b09ecef0080ecd38c6f06f8c172314644e7912400188aaf3952d8f881ccf168`,
+service VM `4wNvm9hzpAoeRmJKdyUo1q` (cut over from
+`31b4dc3b-ed0c-47a9-b395-872fcf78e57c`, which was `35aee29`). Public
 `https://auth.identikey.me` — DNS A `45.76.77.97` (grey-cloud), HTTP-01
 cert SAN `auth.identikey.me` until 2026-11-25, `/health` 200, discovery
 200, JWKS EdDSA kid `JZnOxfXDaklXwH9yyeEbqi6AMkD68zE74w3mv7_A3yk`
@@ -100,7 +100,18 @@ cert SAN `auth.identikey.me` until 2026-11-25, `/health` 200, discovery
 400 (client_id required). `/signup` 200. Unsigned `GET /account` is 401
 hosted HTML (`Your account — IdentiKey`); first-party register/finish
 sets `identikey_account` and `next: /account`. OIDC signup still
-returns to `/authorize/passkey`. No `IDENTIKEY_DEV_LOGIN` in the guest.
+returns to `/authorize/passkey`. No `IDENTIKEY_DEV_LOGIN` in the guest
+(`/authorize/dev` is 404).
+
+`IDENTIKEY_MANAGED_WRAP_KEY` is set (64 hex, kid defaults to `v1`).
+Do not rotate it: blobs sealed at signup after this cutover open only
+with that key. `POST /managed-challenge/begin` is the real handler
+(empty JSON is 422, not the old SPA 405). Signups from this binary mint
+Ed25519 operational keys. Accounts created on `35aee29` and earlier are
+still Schnorr and cannot use the responder; remint via signup. `mj
+deploy` packs untracked files that are not gitignored —
+`.identikey-dev-data/` (local signing JWK and pairwise salt) must stay
+ignored. Deploy a clean tree, not a dirty checkout.
 
 Encoding (cite protocol `docs/standards/encoding-conventions.md`).
 Bytes stay bytes in Postgres, Rust, and CBOR. A **text** boundary
