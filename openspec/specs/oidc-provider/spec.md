@@ -6,7 +6,8 @@ routes on `identikey-server`. Folded from `add-pairwise-salt`,
 `add-refresh-lifecycle`, and `add-pairwise-export` (2026-08-18),
 `add-oidf-conformance`, `add-confidential-clients`, and
 `add-urn-grant` (2026-08-19), `add-passkey-ceremonies`
-(2026-08-20), and `add-hosted-login-ui` (2026-08-27).
+(2026-08-20), `add-hosted-login-ui` (2026-08-27), and
+`add-reference-reading-log` (2026-09-26).
 
 The refuse-list is `docs/oidc-implementation-checklist.md`. OIDF
 Basic OP is documented locally and is not a required CI job.
@@ -245,3 +246,28 @@ production login surface.
 - WHEN `GET /authorize` is called
 - THEN the response redirects to `/authorize/passkey`
 - AND that page is HTML for assertion, not the flag-gated dev form
+
+### Requirement: Reference reading is recorded and not copied
+
+The repository SHALL keep a reference-reading note at
+`docs/oidc/reference-reading.md`. That note SHALL name ory/fosite,
+panva/node-oidc-provider, and zitadel/oidc as Apache-2.0 or MIT
+works that may be read and SHALL NOT be pasted into this tree. It
+SHALL name kanidm as MPL-2.0 and read-only at a distance, with no
+checkout in this repository. The note SHALL NOT contain source from
+those projects. A later reading SHALL be recordable there as what
+was consulted and what was decided, without a code excerpt.
+
+#### Scenario: A note names the set
+
+- GIVEN the reference-reading note
+- WHEN someone looks up where to read about an OIDC ambiguity
+- THEN fosite, node-oidc-provider, and zitadel/oidc are listed as
+  readable and not to be pasted
+- AND kanidm is listed as not to be checked out
+
+#### Scenario: No reference source is committed
+
+- GIVEN this repository
+- WHEN the tree is searched for a checkout of those projects
+- THEN none is present
