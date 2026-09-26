@@ -23,6 +23,10 @@ Thumbs.db
 # Pairwise salt (ADR-009). Generated at first boot; never commit.
 /pairwise.salt
 
+# Local OP data dir (signing JWK, pairwise salt). `mj deploy` packs
+# untracked files that are not gitignored, so this must stay ignored.
+.identikey-dev-data/
+
 # Env
 .env
 .env.*
