@@ -218,7 +218,11 @@ yet depend on `identikey-auth`. `IDENTIKEY_DEV_LOGIN` stands in for
 managed `/authorize` at `/authorize/dev`. Production login is passkey
 assertion: `/authorize` redirects to `/authorize/passkey`. First
 account: `GET`/`POST /signup` (`c2_native` + `create_managed`) then
-`POST /webauthn/register/finish`. Register an existing XID at
-`POST /webauthn/register/begin` then `finish`. Assertion of an
+`POST /webauthn/register/finish`. Adding a passkey to an existing XID
+(`POST /webauthn/register/begin` then `finish`) requires that XID's
+`identikey_account` session cookie (403 otherwise, even for unknown
+XIDs); `POST /signup` and a successful `finish` issue it. A XID alone
+is public, so it never authorizes enrollment (takeover fixed
+2026-09-28). Backup ownership proofs are future work. Assertion of an
 unknown credential still inserts no account. The blob is not used
 to Sign yet. Elect-key export at signup is not this surface.

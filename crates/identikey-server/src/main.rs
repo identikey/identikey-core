@@ -346,13 +346,45 @@ fn ceremony_http(err: ceremonies::CeremonyError) -> Response {
     oauth_error(StatusCode::BAD_REQUEST, "invalid_request", &err.to_string())
 }
 
+/// XID of the first-party account whose session cookie this request carries.
+fn signed_in_xid(state: &AppState, headers: &HeaderMap) -> Option<Xid> {
+    let cookie = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok());
+    let token = account::parse_cookie(cookie)?;
+    state.accounts.lookup(token).ok().flatten()
+}
+
+/// Mint a first-party account session for `xid` as a `Set-Cookie` value.
+fn account_cookie(state: &AppState, xid: Xid) -> Option<HeaderValue> {
+    let token = state.accounts.issue(xid).ok()?;
+    let secure = state
+        .webauthn
+        .expected_origins
+        .iter()
+        .any(|origin| origin.starts_with("https://"));
+    Some(account::set_cookie(&token, secure))
+}
+
+/// Adding a passkey is adding a way in, so it needs the account session
+/// (from signup or a prior enrollment). A XID alone is public: it is the
+/// public `sub` and the Mjolnir owner id. Refuse unknown and foreign XIDs
+/// alike so the answer does not reveal which accounts exist.
 async fn register_begin(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<ceremonies::RegisterBegin>,
 ) -> Response {
     let Ok(xid) = Xid::parse(&body.xid) else {
         return ceremony_http(ceremonies::CeremonyError::UnknownAccount);
     };
+    if signed_in_xid(&state, &headers) != Some(xid) {
+        return oauth_error(
+            StatusCode::FORBIDDEN,
+            "access_denied",
+            "sign in to this account before adding a passkey",
+        );
+    }
     match state.ceremonies.begin_register(&state.store, xid).await {
         Ok((session, public_key)) => Json(ceremonies::CeremonyOptions {
             session,
@@ -376,14 +408,9 @@ async fn register_finish(
         .await
     {
         Ok(()) => {
-            let Ok(token) = state.accounts.issue(xid) else {
+            let Some(cookie) = account_cookie(&state, xid) else {
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             };
-            let secure = state
-                .webauthn
-                .expected_origins
-                .iter()
-                .any(|origin| origin.starts_with("https://"));
             (
                 StatusCode::OK,
                 [
@@ -391,7 +418,7 @@ async fn register_finish(
                         header::CONTENT_TYPE,
                         HeaderValue::from_static("application/json"),
                     ),
-                    (account::cookie_header(), account::set_cookie(&token, secure)),
+                    (account::cookie_header(), cookie),
                 ],
                 serde_json::json!({ "next": "/account" }).to_string(),
             )
@@ -662,13 +689,21 @@ async fn signup(State(state): State<AppState>) -> Response {
             );
         }
     };
+    // The new account's session lets this browser retry enrollment through
+    // register/begin; nobody else can.
+    let Some(cookie) = account_cookie(&state, xid) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
     match state.ceremonies.begin_register(&state.store, xid).await {
-        Ok((session, public_key)) => Json(ceremonies::SignupOptions {
-            xid: xid.to_string(),
-            session,
-            public_key,
-        })
-        .into_response(),
+        Ok((session, public_key)) => (
+            [(account::cookie_header(), cookie)],
+            Json(ceremonies::SignupOptions {
+                xid: xid.to_string(),
+                session,
+                public_key,
+            }),
+        )
+            .into_response(),
         Err(err) => ceremony_http(err),
     }
 }
@@ -2332,7 +2367,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert!(store.get_account(missing).await.unwrap().is_none());
         let _ = body::to_bytes(response.into_body(), usize::MAX).await;
     }
@@ -2353,7 +2388,9 @@ mod tests {
             .create_managed(CustodyRung::C2, &doc, &[0x51, 0x47])
             .await
             .unwrap();
-        let app = test_router(store);
+        let accounts = Arc::new(account::AccountSessions::default());
+        let cookie = format!("identikey_account={}", accounts.issue(xid).unwrap());
+        let app = test_router_with_accounts(store, accounts);
         let body = format!(r#"{{"xid":"{xid}"}}"#);
         let first = app
             .clone()
@@ -2362,6 +2399,7 @@ mod tests {
                     .method("POST")
                     .uri("/webauthn/register/begin")
                     .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, &cookie)
                     .body(Body::from(body.clone()))
                     .unwrap(),
             )
@@ -2398,6 +2436,7 @@ mod tests {
                     .method("POST")
                     .uri("/webauthn/register/begin")
                     .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, &cookie)
                     .body(Body::from(body))
                     .unwrap(),
             )
@@ -2411,6 +2450,108 @@ mod tests {
         .unwrap();
         assert_eq!(second_json["publicKey"]["user"]["id"], user_id);
         assert_ne!(first_json["session"], second_json["session"]);
+    }
+
+    /// Account takeover regression: a public XID must not be enough to add a
+    /// passkey. Without a session, or with another account's session, begin
+    /// is refused and issues no ceremony.
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn register_begin_requires_that_accounts_session(pool: sqlx::PgPool) {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use bc_components::PrivateKeyBase;
+        use identikey_keys::{CustodyRung, c2_native};
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool);
+        let mut xids = Vec::new();
+        for _ in 0..2 {
+            let doc = c2_native(&PrivateKeyBase::new(), &PrivateKeyBase::new()).unwrap();
+            xids.push(
+                store
+                    .create_managed(CustodyRung::C2, &doc, &[0x51, 0x47])
+                    .await
+                    .unwrap(),
+            );
+        }
+        let (victim, attacker) = (xids[0], xids[1]);
+        let accounts = Arc::new(account::AccountSessions::default());
+        let attacker_cookie = format!("identikey_account={}", accounts.issue(attacker).unwrap());
+        let victim_cookie = format!("identikey_account={}", accounts.issue(victim).unwrap());
+        let app = test_router_with_accounts(store, accounts);
+        let begin = |cookie: Option<String>| {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/webauthn/register/begin")
+                .header(header::CONTENT_TYPE, "application/json");
+            if let Some(cookie) = cookie {
+                request = request.header(header::COOKIE, cookie);
+            }
+            request
+                .body(Body::from(format!(r#"{{"xid":"{victim}"}}"#)))
+                .unwrap()
+        };
+
+        for cookie in [
+            None,
+            Some(attacker_cookie),
+            Some("identikey_account=not-a-session".to_owned()),
+        ] {
+            let response = app.clone().oneshot(begin(cookie)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        let response = app.oneshot(begin(Some(victim_cookie))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Signup hands its browser the new account's session, so a cancelled
+    /// prompt can be retried through register/begin without a second account.
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn signup_session_can_retry_enrollment(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let app = test_router(KeysStore::from_pool(pool));
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/signup")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        let cookie = created
+            .headers()
+            .get(header::SET_COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .unwrap()
+            .to_owned();
+        let json: serde_json::Value = serde_json::from_slice(
+            &body::to_bytes(created.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let xid = json["xid"].as_str().unwrap();
+        let retry = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webauthn/register/begin")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::from(format!(r#"{{"xid":"{xid}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(retry.status(), StatusCode::OK);
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
@@ -2429,7 +2570,9 @@ mod tests {
             .create_managed(CustodyRung::C2, &doc, &[0x51, 0x47])
             .await
             .unwrap();
-        let app = test_router(store.clone());
+        let accounts = Arc::new(account::AccountSessions::default());
+        let cookie = format!("identikey_account={}", accounts.issue(xid).unwrap());
+        let app = test_router_with_accounts(store.clone(), accounts);
         let begin = app
             .clone()
             .oneshot(
@@ -2437,6 +2580,7 @@ mod tests {
                     .method("POST")
                     .uri("/webauthn/register/begin")
                     .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, &cookie)
                     .body(Body::from(format!(r#"{{"xid":"{xid}"}}"#)))
                     .unwrap(),
             )
@@ -2546,7 +2690,9 @@ mod tests {
             .unwrap();
         let origin = Url::parse("https://auth.identikey.me").unwrap();
         let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
-        let app = test_router(store.clone());
+        let accounts = Arc::new(account::AccountSessions::default());
+        let cookie = format!("identikey_account={}", accounts.issue(xid).unwrap());
+        let app = test_router_with_accounts(store.clone(), accounts);
 
         let begin = app
             .clone()
@@ -2555,6 +2701,7 @@ mod tests {
                     .method("POST")
                     .uri("/webauthn/register/begin")
                     .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, &cookie)
                     .body(Body::from(format!(r#"{{"xid":"{xid}"}}"#)))
                     .unwrap(),
             )
