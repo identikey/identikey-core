@@ -102,10 +102,15 @@ Apex `identikey.me` must be in **both** `MJOLNIR_GATEWAY_APEXES`
 domain"). Bind is `0.0.0.0:8080` in `start_command` — `PORT` is
 ignored. Do not set `IDENTIKEY_DEV_LOGIN`. Host: `root@45.76.77.97`.
 
-Live (2026-09-26, `ecf9917`): app `identikey`, snapshot
-`deploy-2b09ecef0080ecd38c6f06f8c172314644e7912400188aaf3952d8f881ccf168`,
-service VM `4wNvm9hzpAoeRmJKdyUo1q` (cut over from
-`31b4dc3b-ed0c-47a9-b395-872fcf78e57c`, which was `35aee29`). Public
+Live (2026-09-29, `4884e07`, register/begin takeover fix): app
+`identikey`, snapshot
+`deploy-111de4983a6febe64d747ae0089e9eeec098c9e25a69075b8dc15c36f7e4cc77`,
+service VM `Ybwq8bBxJhQTCZfi6yA4cQ` (cut over from
+`4wNvm9hzpAoeRmJKdyUo1q`, which was `ecf9917`). Unsigned
+`register/begin` is 403 `access_denied`. Audit before the fix: 13
+accounts, 3 passkeys, none added after signup. `mj deploy` needs
+`mj login --issuer https://auth.identikey.me`; the CLI's default
+issuer is still Keycloak and its token gets 401. Public
 `https://auth.identikey.me` — DNS A `45.76.77.97` (grey-cloud), HTTP-01
 cert SAN `auth.identikey.me` until 2026-11-25, `/health` 200, discovery
 200, JWKS EdDSA kid `JZnOxfXDaklXwH9yyeEbqi6AMkD68zE74w3mv7_A3yk`
