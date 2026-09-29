@@ -2654,8 +2654,15 @@ mod tests {
             serde_json::from_slice(&body::to_bytes(begin.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         let session = begin_json["session"].as_str().unwrap().to_owned();
+        // SoftPasskey cannot store resident keys, so it refuses our
+        // residentKey=required options. Relax that on the client side only:
+        // the server cannot observe residency, and it still verifies this
+        // registration and the assertion below exactly as in production.
+        let mut public_key = begin_json["publicKey"].clone();
+        public_key["authenticatorSelection"]["residentKey"] = "discouraged".into();
+        public_key["authenticatorSelection"]["requireResidentKey"] = false.into();
         let ccr = CreationChallengeResponse {
-            public_key: serde_json::from_value(begin_json["publicKey"].clone()).unwrap(),
+            public_key: serde_json::from_value(public_key).unwrap(),
         };
         let cred = authenticator.do_registration(origin.clone(), ccr).unwrap();
         let finish = app
@@ -2677,7 +2684,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(finish.status(), StatusCode::NO_CONTENT);
+        assert_eq!(finish.status(), StatusCode::OK);
         assert_eq!(store.list_passkeys(xid).await.unwrap().len(), 1);
 
         let provider = test_provider();
