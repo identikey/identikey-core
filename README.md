@@ -1,195 +1,67 @@
-# IdentiKey Core
+# identikey-core
 
-The identity platform core for IdentiKey — providing native mobile authentication, JWT token issuance, passkey management, and Keycloak integration for user storage.
+The IdentiKey OpenID Provider: a Rust OIDC server with passkey login,
+managed and self-custody keys, and pairwise subjects. Production runs at
+`https://auth.identikey.me`
+([discovery](https://auth.identikey.me/.well-known/openid-configuration)).
 
-## Architecture Overview
+## Run it locally
 
-IdentiKey Core serves as the **identity layer** for the IdentiKey platform:
+Prerequisites: Rust (stable), PostgreSQL, [Bun](https://bun.sh/) for the
+web build.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Mobile/Native Apps                          │
-│               (Apple/Google Sign In, Passkeys)                  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    IdentiKey Core                               │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │ Auth Endpoints: /apple-provision, /google-provision,       ││
-│  │                 /passkey-*, /token/*                        ││
-│  │ JWT Signing: EdDSA (Ed25519), JWKS, Token Introspection    ││
-│  │ WebAuthn: Passkey Registration & Authentication            ││
-│  │ Device Trust: Master vs Temporary Devices                  ││
-│  └─────────────────────────────────────────────────────────────┘│
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │ Admin Layer (CLI + MCP)                                    ││
-│  │ User management, debugging, configuration                  ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   Keycloak (User Store + Credentials)           │
-│  Users, Passkeys, Groups/Guilds, Roles, Standard OIDC for Web  │
-└─────────────────────────────────────────────────────────────────┘
+```sh
+createdb identikey-core-sqlx
+scripts/dev-server.sh
 ```
 
-### Key Design Decisions
+The first run copies `.env.example` to `.env` (gitignored), fills in your
+Postgres user and a fresh `IDENTIKEY_MANAGED_WRAP_KEY`, then runs
+`cargo run -p identikey-server` on `http://localhost:8080`. Variables
+already set in your shell take precedence. sqlx query macros also read
+`DATABASE_URL` from `.env`, so a plain `cargo build` works too.
 
-1. **IdentiKey issues its own JWTs** for mobile/native auth (no Keycloak preview features needed)
-2. **Social login as bootstrap** — Apple/Google for one-time identity verification, then passkey enrollment
-3. **Passkeys for ongoing auth** — FIDO2/WebAuthn, stored in Keycloak credentials (works for mobile & web)
-4. **Keycloak for user storage** — Admin API for CRUD, standard OIDC still works for web apps
-5. **Device trust model** — Master devices (with passkeys) vs temporary devices (short-lived tokens)
+Try `/signup`, `/account`, `/.well-known/openid-configuration`, or a
+code+PKCE `/authorize` with the `smoke` client that `.env.example`
+registers. `IDENTIKEY_DEV_LOGIN=1` enables `/authorize/dev`; never set
+it in production.
 
-## Prerequisites
+The server also serves the static SvelteKit app from `web/build`:
 
-- [Bun](https://bun.sh/) runtime
-- Access to a Keycloak instance with admin credentials
-- PostgreSQL database (for devices, challenges, refresh tokens)
-
-## Installation
-
-```bash
-cd web
-bun install
+```sh
+cd web && bun install && NODE_ENV=production bun run build
 ```
 
-## Configuration
+## Tests
 
-Create a `.env` file:
-
-```env
-# Keycloak Admin API
-KEYCLOAK_URL=https://auth.identikey.io
-KEYCLOAK_REALM=identikey
-KEYCLOAK_CLIENT_ID=admin-cli
-KEYCLOAK_CLIENT_SECRET=your-client-secret
-
-# IdentiKey Token Signing
-IDENTIKEY_ISSUER=https://connect.identikey.io
-# Generate via: bun --cwd web run generate-key
-IDENTIKEY_SIGNING_KEY='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","kid":"...","use":"sig","alg":"EdDSA"}'
-
-# Bootstrap Verification (Social Login)
-APPLE_SERVICES_ID=ai.morphist.app
-GOOGLE_CLIENT_ID=your-google-oauth-client-id
-
-# Database
-DATABASE_URL=postgresql://user:pass@localhost:5432/identikey
-
-LOG_LEVEL=info
+```sh
+cargo test --workspace          # schema tests need Postgres, see CLAUDE.md
+cd web && bun vitest --run
 ```
 
-## Admin CLI
+After changing a `sqlx::query!` or a migration, regenerate `.sqlx/`
+with `cargo sqlx prepare --workspace -- --all-targets` and commit it.
 
-The CLI provides administrative access to IdentiKey:
-
-```bash
-# Run via npm script
-bun --cwd web run cli users list
-bun --cwd web run cli users --help
-
-# Or install globally as `kc`
-bun link
-
-# User management
-kc users list
-kc users list --search "john"
-kc users get <user-id>
-kc users create --username newuser --email user@example.com
-kc users update <user-id> --firstName John
-kc users delete <user-id>
-kc users reset-password <user-id> --password "newpass" --temporary
-kc users credentials <user-id>
-
-# Auth flow inspection (for debugging)
-kc auth-flows list
-kc auth-flows executions <flow-alias>
-```
-
-All commands support `--json` for machine-readable output.
-
-## MCP Server
-
-Run the MCP server for AI agent integration:
-
-```bash
-bun --cwd web run mcp
-```
-
-Add to your MCP client config (e.g., Cursor):
-
-```json
-{
-	"mcpServers": {
-		"identikey": {
-			"command": "bun",
-			"args": ["run", "mcp"],
-			"cwd": "/path/to/identikey-core/web"
-		}
-	}
-}
-```
-
-Available MCP tools:
-- `list_users`, `get_user`, `create_user`, `update_user`, `delete_user`
-- `reset_user_password`, `get_user_credentials`, `delete_user_credential`
-- `list_login_flows`, `get_login_flow`, `list_flow_executions`
-
-## Auth Endpoints (Coming Soon)
-
-Native mobile authentication endpoints:
-
-| Endpoint | Purpose |
-|----------|---------|
-| `POST /apple-provision` | Verify Apple token, create user, return WebAuthn challenge |
-| `POST /google-provision` | Verify Google token, create user, return WebAuthn challenge |
-| `POST /passkey-register` | Store passkey in Keycloak, issue tokens |
-| `POST /passkey-auth/start` | Return authentication challenge |
-| `POST /passkey-auth/finish` | Verify assertion, issue tokens |
-| `POST /token/refresh` | Refresh access token |
-| `POST /token/revoke` | Revoke refresh token(s) |
-| `POST /device-authorize` | QR-based temporary device auth |
-| `GET /.well-known/jwks.json` | Public keys for token validation |
-| `GET /.well-known/openid-configuration` | OIDC discovery |
-| `POST /introspect` | Token validation for resource servers |
-
-## Development
-
-```bash
-bun --cwd web run dev          # SvelteKit dev server
-bun --cwd web run test:unit    # Unit tests
-bun --cwd web run test:e2e     # E2E tests
-bun --cwd web run test         # All tests
-bun --cwd web run lint         # Linting
-bun --cwd web run format       # Formatting
-```
-
-## Project Structure
+## Layout
 
 ```
-identikey-core/
-├── crates/                      # Rust OIDC, custody, recovery, and server crates
-├── web/
-│   ├── src/
-│   │   ├── lib/                # UI support and frozen TypeScript-era modules
-│   │   ├── mcp/                # Legacy MCP server for AI agents
-│   │   ├── cli/                # Legacy CLI commands
-│   │   └── routes/             # SvelteKit routes
-│   ├── static/                 # Static assets
-│   └── drizzle/                # Legacy TypeScript migrations
-├── docs/                       # Architecture and product docs
-└── ...
+crates/
+  identikey-keys/         managed custody (C2): accounts, credentials, migrations
+  identikey-oidc/         OIDC provider over the custody ladder
+  identikey-oidc-client/  relying-party JWT/JWKS validator (not the OP)
+  identikey-recovery/     assisted key recovery (C3): guardians, SSKR
+  identikey-server/       axum binary: hosted pages, WebAuthn, web assets
+web/                      static SvelteKit app served from web/build
+docs/                     architecture, OIDC certification, standards
+scripts/dev-server.sh     local OP launcher
 ```
 
 ## Documentation
 
-- [PRD](docs/prd.md) — Product requirements
-- [Architecture](docs/architecture.md) — Technical design
-- [Epics](docs/epics.md) — Implementation breakdown
-- [Apple Auth Analysis](docs/identikey-apple-auth-architecture-analysis.md) — Native auth architecture
+- [Architecture](docs/ARCHITECTURE.md)
+- [Custody ladder](docs/custody-ladder.md)
+- [OIDC certification](docs/oidc/README.md)
+- `CLAUDE.md`: deploy, clients, encoding conventions, and operator notes
 
 ## Contributing
 

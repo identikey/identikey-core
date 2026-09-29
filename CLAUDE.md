@@ -21,25 +21,24 @@ cache against a database that has those migrations applied:
 Commit the updated `.sqlx/` directory. CI runs `cargo sqlx prepare --check`
 and fails if you forget.
 
-Run the local OP with `scripts/dev-server.sh`. It loads `.env.server`
-(gitignored), and on first run creates it from `.env.server.example`
-with a fresh `IDENTIKEY_MANAGED_WRAP_KEY` (boot fails without one).
-Shell env wins. Do not put OP vars in the root `.env`: that is the
-Keycloak-era web app's (Vite `envDir: '..'`, issuer
-`connect.identikey.io`, Drizzle DB). sqlx macros also read the root
-`.env`, and its user-less URL gives the `anonymous` build error. The
-script exports the right `DATABASE_URL` before `cargo run`.
+Run the local OP with `scripts/dev-server.sh`. It loads the root
+`.env` (gitignored), and on first run creates it from `.env.example`
+with your Postgres user and a fresh `IDENTIKEY_MANAGED_WRAP_KEY` (boot
+fails without one). Shell env wins. The server does not read `.env`
+itself; sqlx macros do, so keep `DATABASE_URL` there with a user in it.
+The Keycloak-era TypeScript backend (web CLI, MCP, Drizzle) was removed
+2026-09-28; `web/` is only the static app.
 
 Local OIDC (code+PKCE) for hooking an app, after `add-oidc-endpoints`
-and `add-dev-authorize`. These are the values in `.env.server.example`:
+and `add-dev-authorize`. These are the values in `.env.example`:
 
     IDENTIKEY_DEV_LOGIN=1
     IDENTIKEY_CLIENT_ID=smoke
     IDENTIKEY_CLIENT_REDIRECT=http://127.0.0.1:9999/cb
     IDENTIKEY_CLIENT_AUTH_METHOD=none
-    IDENTIKEY_ISSUER=http://127.0.0.1:8080
+    IDENTIKEY_ISSUER=http://localhost:8080
     WEBAUTHN_RP_ID=localhost
-    WEBAUTHN_EXPECTED_ORIGIN=http://localhost
+    WEBAUTHN_EXPECTED_ORIGIN=http://localhost:8080
     DATABASE_URL=postgres://$USER@localhost:5432/identikey-core-sqlx
 
 Confidential clients (optional extra registrations, secrets hashed at boot):
@@ -82,8 +81,7 @@ release is running, laptop `mj deploy` still ignores the key and you
 must rpc `Orchestrator.deploy(..., base_image: "ubuntu-24.04")`.
 Source lands in `/var/lib/mjolnir/deploy/src/identikey` (`git archive`
 of HEAD, or `mj deploy` tarball). Bun defaults `NODE_ENV` to
-development — the web build step must set `NODE_ENV=production` or
-pino will look for missing `pino-pretty`.
+development — the web build step sets `NODE_ENV=production`.
 
 Related Mjolnir beads from the first ship: `mjolnir-bhcr` (live
 deploy-node-bun has the agent unit and no binary), `mjolnir-hjnz`

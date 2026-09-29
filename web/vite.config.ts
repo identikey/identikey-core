@@ -7,7 +7,6 @@ import { sveltekit } from '@sveltejs/kit/vite';
 const playwrightExecutable = process.env.PLAYWRIGHT_EXECUTABLE_PATH;
 
 export default defineConfig({
-	envDir: '..',
 	plugins: [tailwindcss(), sveltekit(), devtoolsJson()],
 	test: {
 		expect: { requireAssertions: true },
@@ -25,8 +24,7 @@ export default defineConfig({
 						),
 						instances: [{ browser: 'chromium', headless: true }]
 					},
-					include: ['src/**/*.svelte.{test,spec}.{js,ts}'],
-					exclude: ['src/lib/server/**']
+					include: ['src/**/*.svelte.{test,spec}.{js,ts}']
 				}
 			},
 			{
@@ -34,7 +32,6 @@ export default defineConfig({
 				test: {
 					name: 'server',
 					environment: 'node',
-					setupFiles: ['./vitest.setup.ts'],
 					include: ['src/**/*.{test,spec}.{js,ts}'],
 					exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
 				}
