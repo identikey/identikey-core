@@ -1686,13 +1686,11 @@ mod tests {
                 .await,
             Err(ManagedChallengeError::Document(_))
         ));
-        let row = sqlx::query(
-            "SELECT state FROM managed_challenge_attempts WHERE request_id = $1",
-        )
-        .bind(begun.request_id)
-        .fetch_one(store.pool())
-        .await
-        .unwrap();
+        let row = sqlx::query("SELECT state FROM managed_challenge_attempts WHERE request_id = $1")
+            .bind(begun.request_id)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
         assert_eq!(row.try_get::<Option<String>, _>("state").unwrap(), None);
         assert!(matches!(
             store
@@ -1879,14 +1877,8 @@ mod tests {
         assert_eq!(c4.public_key.alg, ClassicalAlg::Ed25519);
         assert_eq!(managed.public_key.bytes.len(), c3.public_key.bytes.len());
         assert_eq!(managed.public_key.bytes.len(), c4.public_key.bytes.len());
-        assert_eq!(
-            managed.signature.bytes.len(),
-            c3.signature.bytes.len()
-        );
-        assert_eq!(
-            managed.signature.bytes.len(),
-            c4.signature.bytes.len()
-        );
+        assert_eq!(managed.signature.bytes.len(), c3.signature.bytes.len());
+        assert_eq!(managed.signature.bytes.len(), c4.signature.bytes.len());
         for response in [&managed, &c3, &c4] {
             verify_classical(
                 &response.public_key,

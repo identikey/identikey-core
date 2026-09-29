@@ -215,7 +215,10 @@ mod tests {
         assert_ne!(sa, xid().to_string());
         assert_ne!(sb, xid().to_string());
         assert_eq!(bs58::decode(&sa).into_vec().unwrap().len(), 32);
-        assert!(!sa.chars().any(|c| matches!(c, '0' | 'O' | 'I' | 'l' | '-' | '_')));
+        assert!(
+            !sa.chars()
+                .any(|c| matches!(c, '0' | 'O' | 'I' | 'l' | '-' | '_'))
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use dcbor::prelude::*;
-use identikey_log::{codec, Hash32, Hlc, Op};
+use identikey_log::{Hash32, Hlc, Op, codec};
 
 const KIND_JOIN: &str = "keyspace.join";
 const KIND_CHANGE: &str = "keyspace.change";
@@ -739,7 +739,7 @@ fn encode_login_join(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use identikey_log::{codec, Author, Hlc, Op};
+    use identikey_log::{Author, Hlc, Op, codec};
 
     use super::*;
 
@@ -894,10 +894,11 @@ mod tests {
         .unwrap();
         let snap = r.get(&access).unwrap();
         assert_eq!(snap.epoch, 0);
-        assert!(snap
-            .wraps
-            .iter()
-            .any(|w| w.recipient.as_slice() == member.as_slice()));
+        assert!(
+            snap.wraps
+                .iter()
+                .any(|w| w.recipient.as_slice() == member.as_slice())
+        );
     }
 
     #[test]

@@ -128,11 +128,7 @@ pub struct OidcClient {
 impl OidcClient {
     /// Fetch discovery + JWKS from `issuer`. `audience` is this RP
     /// (Conduit: the Matrix server name).
-    pub async fn discover(
-        issuer: &str,
-        audience: &str,
-        http: reqwest::Client,
-    ) -> Result<Self> {
+    pub async fn discover(issuer: &str, audience: &str, http: reqwest::Client) -> Result<Self> {
         let issuer = issuer.trim_end_matches('/').to_owned();
         let url = format!("{issuer}/.well-known/openid-configuration");
         let disco: Discovery = http
@@ -203,9 +199,8 @@ impl OidcClient {
 
     /// Authorization-code URL with PKCE S256. `scope` is always `openid`.
     pub fn authorize_url(&self, req: &AuthorizeRequest) -> Result<String> {
-        let mut url = Url::parse(&self.authorization_endpoint).map_err(|e| {
-            OidcClientError::BadAuthorizeUrl(e.to_string())
-        })?;
+        let mut url = Url::parse(&self.authorization_endpoint)
+            .map_err(|e| OidcClientError::BadAuthorizeUrl(e.to_string()))?;
         url.query_pairs_mut()
             .append_pair("response_type", "code")
             .append_pair("client_id", &req.client_id)
@@ -237,10 +232,7 @@ impl OidcClient {
             .http
             .post(&self.token_endpoint)
             .header("content-type", "application/x-www-form-urlencoded")
-            .header(
-                "authorization",
-                basic_auth_header(client_id, client_secret),
-            )
+            .header("authorization", basic_auth_header(client_id, client_secret))
             .body(body)
             .send()
             .await
@@ -260,13 +252,11 @@ impl OidcClient {
                         e.error_description.unwrap_or_default()
                     )
                 })
-                .unwrap_or_else(|| {
-                    String::from_utf8_lossy(&bytes).into_owned()
-                });
+                .unwrap_or_else(|| String::from_utf8_lossy(&bytes).into_owned());
             return Err(OidcClientError::Token(msg));
         }
-        let parsed: TokenResponseBody = serde_json::from_slice(&bytes)
-            .map_err(|e| OidcClientError::Token(e.to_string()))?;
+        let parsed: TokenResponseBody =
+            serde_json::from_slice(&bytes).map_err(|e| OidcClientError::Token(e.to_string()))?;
         Ok(TokenSet {
             access_token: parsed.access_token,
             id_token: parsed.id_token,
@@ -286,9 +276,12 @@ impl OidcClient {
         now_unix: u64,
         expected_nonce: Option<&str>,
     ) -> Result<OidcIdentity> {
-        let header = jwt::decode_header(token)
-            .map_err(|e| OidcClientError::Malformed(e.to_string()))?;
-        let kid = header.claim("kid").and_then(|v| v.as_str()).map(str::to_owned);
+        let header =
+            jwt::decode_header(token).map_err(|e| OidcClientError::Malformed(e.to_string()))?;
+        let kid = header
+            .claim("kid")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
 
         let jwk = self.lookup_jwk(kid.as_deref()).await?;
         let verifier = EdDSA
@@ -333,10 +326,10 @@ impl OidcClient {
         if iss.trim_end_matches('/') != self.issuer {
             return Err(OidcClientError::BadIssuer);
         }
-        let aud_ok = payload.audience().map(|list| {
-            list.iter()
-                .any(|a| a == &self.audience)
-        }).unwrap_or(false);
+        let aud_ok = payload
+            .audience()
+            .map(|list| list.iter().any(|a| a == &self.audience))
+            .unwrap_or(false);
         if !aud_ok {
             return Err(OidcClientError::BadAudience);
         }
@@ -474,7 +467,14 @@ mod tests {
     async fn valid_token_yields_sub() {
         let pair = keypair();
         let client = client_for(&pair);
-        let token = mint(&pair, "https://idp.example", "conduit.example", "xid-alice", 300, None);
+        let token = mint(
+            &pair,
+            "https://idp.example",
+            "conduit.example",
+            "xid-alice",
+            300,
+            None,
+        );
         let id = client.validate(&token, now_unix()).await.unwrap();
         assert_eq!(id.subject, "xid-alice");
         assert_eq!(id.issuer, "https://idp.example");
@@ -484,7 +484,14 @@ mod tests {
     async fn wrong_audience_fails() {
         let pair = keypair();
         let client = client_for(&pair);
-        let token = mint(&pair, "https://idp.example", "other-rp", "xid-alice", 300, None);
+        let token = mint(
+            &pair,
+            "https://idp.example",
+            "other-rp",
+            "xid-alice",
+            300,
+            None,
+        );
         let err = client.validate(&token, now_unix()).await.unwrap_err();
         assert!(matches!(err, OidcClientError::BadAudience));
     }
@@ -493,7 +500,14 @@ mod tests {
     async fn expired_fails() {
         let pair = keypair();
         let client = client_for(&pair);
-        let token = mint(&pair, "https://idp.example", "conduit.example", "xid-alice", -1, None);
+        let token = mint(
+            &pair,
+            "https://idp.example",
+            "conduit.example",
+            "xid-alice",
+            -1,
+            None,
+        );
         let err = client.validate(&token, now_unix()).await.unwrap_err();
         assert!(matches!(err, OidcClientError::Expired));
     }
@@ -502,7 +516,14 @@ mod tests {
     async fn wrong_issuer_fails() {
         let pair = keypair();
         let client = client_for(&pair);
-        let token = mint(&pair, "https://evil.example", "conduit.example", "xid-alice", 300, None);
+        let token = mint(
+            &pair,
+            "https://evil.example",
+            "conduit.example",
+            "xid-alice",
+            300,
+            None,
+        );
         let err = client.validate(&token, now_unix()).await.unwrap_err();
         assert!(matches!(err, OidcClientError::BadIssuer));
     }

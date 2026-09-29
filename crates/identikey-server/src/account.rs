@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use axum::http::{header, HeaderValue};
+use axum::http::{HeaderValue, header};
 use identikey_keys::Xid;
 use uuid::Uuid;
 
