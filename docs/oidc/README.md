@@ -60,12 +60,21 @@ Register two `client_secret_basic` clients and one
 export IDENTIKEY_DEV_LOGIN=1
 export IDENTIKEY_CLIENT_ID=smoke
 export IDENTIKEY_CLIENT_REDIRECT=http://127.0.0.1:9999/cb
+export IDENTIKEY_CLIENT_SECTOR=127.0.0.1
 export IDENTIKEY_CLIENTS='[
-  {"id":"basic-1","redirect":"https://127.0.0.1:8443/test/a/identikey-basic/callback","secret":"basic-1-secret","auth":"client_secret_basic"},
-  {"id":"basic-2","redirect":"https://127.0.0.1:8443/test/a/identikey-basic/callback","secret":"basic-2-secret","auth":"client_secret_basic"},
-  {"id":"post-1","redirect":"https://127.0.0.1:8443/test/a/identikey-basic/callback","secret":"post-1-secret","auth":"client_secret_post"}
+  {"id":"basic-1","redirect":"https://127.0.0.1:8443/test/a/identikey-basic/callback","sector":"127.0.0.1","secret":"basic-1-secret","auth":"client_secret_basic"},
+  {"id":"basic-2","redirect":"https://127.0.0.1:8443/test/a/identikey-basic/callback","sector":"127.0.0.1","secret":"basic-2-secret","auth":"client_secret_basic"},
+  {"id":"post-1","redirect":"https://127.0.0.1:8443/test/a/identikey-basic/callback","sector":"127.0.0.1","secret":"post-1-secret","auth":"client_secret_post"}
 ]'
 ```
+
+Pairwise clients (including the default subject type) require `sector` in
+`IDENTIKEY_CLIENTS`, or `IDENTIKEY_CLIENT_SECTOR` for the primary client. Pins
+are opaque and passed to subject derivation verbatim. Before rollout, run
+`identikey-server check-clients`; it reports each configured pin beside the
+legacy redirect-derived sector and exits non-zero on a mismatch. The command
+needs no database, network, signing key, or pairwise salt. Public clients may
+omit `sector`.
 
 The suite will not paste a XID into `/authorize/dev` by itself.
 

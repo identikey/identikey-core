@@ -35,6 +35,7 @@ and `add-dev-authorize`. These are the values in `.env.example`:
     IDENTIKEY_DEV_LOGIN=1
     IDENTIKEY_CLIENT_ID=smoke
     IDENTIKEY_CLIENT_REDIRECT=http://127.0.0.1:9999/cb
+    IDENTIKEY_CLIENT_SECTOR=127.0.0.1
     IDENTIKEY_CLIENT_AUTH_METHOD=none
     IDENTIKEY_ISSUER=http://localhost:8080
     WEBAUTHN_RP_ID=localhost
@@ -45,7 +46,12 @@ Confidential clients (optional extra registrations, secrets hashed at boot):
 
     IDENTIKEY_CLIENT_SECRET=...                 # with IDENTIKEY_CLIENT_ID
     IDENTIKEY_CLIENT_AUTH_METHOD=client_secret_basic
-    IDENTIKEY_CLIENTS='[{"id":"basic-1","redirect":"https://127.0.0.1:8443/test/a/identikey-basic/callback","secret":"...","auth":"client_secret_basic"}]'
+    IDENTIKEY_CLIENTS='[{"id":"basic-1","redirect":"https://127.0.0.1:8443/test/a/identikey-basic/callback","sector":"127.0.0.1","secret":"...","auth":"client_secret_basic"}]'
+
+Pairwise clients (the default subject type) require an opaque sector pin.
+Before deploying pinned registrations, run `identikey-server check-clients`;
+it exits non-zero unless every pairwise pin exactly matches the sector the
+previous redirect-derived loader used. Public clients do not require a pin.
 
 See `docs/oidc/README.md` for `oidcc-basic-certification-test-plan`. That
 plan is not a required CI job.
@@ -178,7 +184,7 @@ those redirect origins, including loopback port flexibility.
 World Tree site CMS (`wtnf-web`):
 
 ```json
-[{"id":"wtnf-web","auth":"none","redirect":"https://worldtree.network/admin/callback/","redirects":["http://127.0.0.1:5173/admin/callback/"]}]
+[{"id":"wtnf-web","auth":"none","redirect":"https://worldtree.network/admin/callback/","redirects":["http://127.0.0.1:5173/admin/callback/"],"sector":"worldtree.network"}]
 ```
 
 Append that object to the existing `IDENTIKEY_CLIENTS` array on the

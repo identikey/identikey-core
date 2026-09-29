@@ -15,6 +15,7 @@
 //!
 mod account;
 mod ceremonies;
+mod clients;
 mod managed_challenge;
 mod pages;
 mod webauthn;
@@ -33,10 +34,15 @@ use identikey_keys::{
     CustodyRung, KeysStore, ManagedKeyring, OperationalEd25519, Xid, c2_native,
     operational_ed25519_public,
 };
+use clients::{extra_clients, optional_client};
+#[cfg(test)]
+use clients::client_from_spec;
 use identikey_oidc::{
-    AuthorizeError, AuthorizeQuery, Client, OidcError, PairwiseSalt, Provider, SigningKey,
-    SubjectType, TokenEndpointAuthMethod, TokenRequest, parse_http_basic,
+    AuthorizeError, AuthorizeQuery, OidcError, PairwiseSalt, Provider, SigningKey,
+    TokenRequest, parse_http_basic,
 };
+#[cfg(test)]
+use identikey_oidc::{SubjectType, TokenEndpointAuthMethod};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
@@ -1050,120 +1056,6 @@ fn redirect_with_error(uri: &str, error: &str, description: &str, state: Option<
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ClientJson {
-    id: String,
-    #[serde(default)]
-    redirect: Option<String>,
-    #[serde(default)]
-    redirects: Vec<String>,
-    #[serde(default)]
-    secret: Option<String>,
-    #[serde(default)]
-    auth: Option<String>,
-    #[serde(default)]
-    subject_type: Option<String>,
-}
-
-fn sector_from_redirect(redirect: &str) -> String {
-    url::Url::parse(redirect)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_owned))
-        .unwrap_or_else(|| "default".into())
-}
-
-fn client_from_spec(
-    id: String,
-    redirects: Vec<String>,
-    secret: Option<String>,
-    auth: Option<String>,
-    subject_type: Option<String>,
-) -> Result<Client, BoxError> {
-    if id.is_empty() || redirects.is_empty() || redirects.iter().any(String::is_empty) {
-        return Err("OIDC client id and redirect are required".into());
-    }
-    let method = match (auth.as_deref(), secret.as_deref()) {
-        (Some(raw), _) => TokenEndpointAuthMethod::parse(raw).map_err(|e| e.to_string())?,
-        (None, Some(s)) if !s.is_empty() => TokenEndpointAuthMethod::ClientSecretBasic,
-        (None, _) => TokenEndpointAuthMethod::None,
-    };
-    let Some(primary) = redirects.first() else {
-        return Err("OIDC client id and redirect are required".into());
-    };
-    let sector = sector_from_redirect(primary);
-    let mut client = Client::new(id, sector);
-    if let Some(raw) = subject_type.as_deref().filter(|s| !s.is_empty()) {
-        client = client.with_subject_type(SubjectType::parse(raw)?);
-    }
-    for redirect in redirects {
-        client = client.with_redirect(redirect);
-    }
-    match (method, secret.as_deref().filter(|s| !s.is_empty())) {
-        (TokenEndpointAuthMethod::None, Some(_)) => {
-            Err("public client (token_endpoint_auth_method=none) must not have a secret".into())
-        }
-        (TokenEndpointAuthMethod::None, None) => Ok(client),
-        (confidential, Some(secret)) => Ok(client.with_secret(confidential, secret)),
-        (confidential, None) => Err(format!(
-            "confidential client {} requires a secret",
-            confidential.as_str()
-        )
-        .into()),
-    }
-}
-
-fn merge_redirects(primary: Option<String>, extra: Vec<String>) -> Vec<String> {
-    let mut redirects = Vec::new();
-    if let Some(primary) = primary.filter(|s| !s.is_empty()) {
-        redirects.push(primary);
-    }
-    for uri in extra {
-        if !uri.is_empty() && !redirects.contains(&uri) {
-            redirects.push(uri);
-        }
-    }
-    redirects
-}
-
-fn optional_client() -> Result<Option<Client>, BoxError> {
-    let id = match std::env::var("IDENTIKEY_CLIENT_ID") {
-        Ok(id) if !id.is_empty() => id,
-        _ => return Ok(None),
-    };
-    let redirect = std::env::var("IDENTIKEY_CLIENT_REDIRECT").unwrap_or_default();
-    let secret = std::env::var("IDENTIKEY_CLIENT_SECRET").ok();
-    let auth = std::env::var("IDENTIKEY_CLIENT_AUTH_METHOD").ok();
-    let subject_type = std::env::var("IDENTIKEY_CLIENT_SUBJECT_TYPE").ok();
-    Ok(Some(client_from_spec(
-        id,
-        merge_redirects(Some(redirect), Vec::new()),
-        secret,
-        auth,
-        subject_type,
-    )?))
-}
-
-fn extra_clients() -> Result<Vec<Client>, BoxError> {
-    let raw = match std::env::var("IDENTIKEY_CLIENTS") {
-        Ok(raw) if !raw.is_empty() => raw,
-        _ => return Ok(Vec::new()),
-    };
-    let specs: Vec<ClientJson> = serde_json::from_str(&raw)
-        .map_err(|e| format!("IDENTIKEY_CLIENTS is not valid JSON: {e}"))?;
-    specs
-        .into_iter()
-        .map(|spec| {
-            client_from_spec(
-                spec.id,
-                merge_redirects(spec.redirect, spec.redirects),
-                spec.secret,
-                spec.auth,
-                spec.subject_type,
-            )
-        })
-        .collect()
-}
-
 /// The bind address used when `IDENTIKEY_BIND` is unset.
 ///
 /// Loopback is the right default: a misconfigured auth server should be
@@ -1214,6 +1106,13 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> Result<(), BoxError> {
+    if std::env::args().nth(1).as_deref() == Some("check-clients") {
+        if !clients::check_clients()? {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1309,7 +1208,7 @@ async fn main() -> Result<(), BoxError> {
 )]
 mod tests {
     use super::*;
-    use identikey_oidc::s256_challenge;
+    use identikey_oidc::{s256_challenge, Client};
 
     fn test_provider() -> Arc<Provider> {
         let salt = PairwiseSalt::from_hex(&"ab".repeat(32)).unwrap();
@@ -1929,6 +1828,7 @@ mod tests {
             Some("s3cret".into()),
             Some("client_secret_basic".into()),
             None,
+            Some("127.0.0.1".into()),
         )
         .unwrap();
         assert_eq!(
@@ -1950,6 +1850,7 @@ mod tests {
                 Some(format!("{id}-secret")),
                 Some(auth.into()),
                 None,
+                Some("127.0.0.1".into()),
             )
             .unwrap();
             assert_eq!(client.token_endpoint_auth_method.as_str(), auth);
@@ -1962,6 +1863,7 @@ mod tests {
                 Some("nope".into()),
                 Some("none".into()),
                 None,
+                Some("127.0.0.1".into()),
             )
             .is_err()
         );
@@ -1972,6 +1874,7 @@ mod tests {
                 None,
                 Some("client_secret_basic".into()),
                 None,
+                Some("127.0.0.1".into()),
             )
             .is_err()
         );
@@ -1982,6 +1885,7 @@ mod tests {
             None,
             Some("none".into()),
             Some("public".into()),
+            None,
         )
         .unwrap();
         assert_eq!(mjolnir.subject_type, SubjectType::Public);

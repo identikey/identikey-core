@@ -1,11 +1,11 @@
 # Tasks
 
-- [ ] `ClientJson.sector` and `IDENTIKEY_CLIENT_SECTOR`; both go through `client_from_spec`, which takes the sector verbatim and never derives it
-- [ ] Boot refuses a pairwise client whose sector is missing or empty, naming the client; public clients need none
-- [ ] `legacy_sector` in a preflight module reproduces `merge_redirects` precedence, `Url::parse(..).host_str()`, and the literal `default` fallback; nothing on the boot or request path calls it
-- [ ] `identikey-server check-clients`: candidate loader over primary + JSON config, one row per client (id, source, subject type, pin, legacy, match), no secrets, non-zero exit on refusal or any pairwise mismatch
-- [ ] Tests (fixed salt + XID) compare the legacy-derived `sub` with the pinned `sub` for: primary and JSON clients; omitted and explicit pairwise subject type; singular-vs-plural redirect precedence; host case normalization by `Url`; hostless and unparseable redirects (`default`); redirect addition, reordering, replacement, and removal; empty and missing pins refused; public client equals the XID with no sector; sanitized fixtures of taskmaster, taskmaster-laptop, Conduit `localhost`, and wtnf-web
-- [ ] `.env.example`, `CLAUDE.md` client examples, and `docs/oidc/README.md` show `sector` and `check-clients`
+- [x] `ClientJson.sector` and `IDENTIKEY_CLIENT_SECTOR`; both go through `client_from_spec`, which takes the sector verbatim and never derives it
+- [x] Boot refuses a pairwise client whose sector is missing or empty, naming the client; public clients need none
+- [x] `legacy_sector` in a preflight module reproduces `merge_redirects` precedence, `Url::parse(..).host_str()`, and the literal `default` fallback; nothing on the boot or request path calls it
+- [x] `identikey-server check-clients`: candidate loader over primary + JSON config, one row per client (id, source, subject type, pin, legacy, match), no secrets, non-zero exit on refusal or any pairwise mismatch
+- [x] Tests (fixed salt + XID) compare the legacy-derived `sub` with the pinned `sub` for: primary and JSON clients; omitted and explicit pairwise subject type; singular-vs-plural redirect precedence; host case normalization by `Url`; hostless and unparseable redirects (`default`); redirect addition, reordering, replacement, and removal; empty and missing pins refused; public client equals the XID with no sector; sanitized fixtures of taskmaster, taskmaster-laptop, Conduit `localhost`, and wtnf-web
+- [x] `.env.example`, `CLAUDE.md` client examples, and `docs/oidc/README.md` show `sector` and `check-clients`
 - [ ] ASK: approve the live rollout (design.md steps 0–4), then cut over (step 5) with the baseline `sub` comparison
 - [x] Fresh advise after preparation
 
