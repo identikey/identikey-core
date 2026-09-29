@@ -7,7 +7,7 @@
 - [ ] Tests (fixed salt + XID) compare the legacy-derived `sub` with the pinned `sub` for: primary and JSON clients; omitted and explicit pairwise subject type; singular-vs-plural redirect precedence; host case normalization by `Url`; hostless and unparseable redirects (`default`); redirect addition, reordering, replacement, and removal; empty and missing pins refused; public client equals the XID with no sector; sanitized fixtures of taskmaster, taskmaster-laptop, Conduit `localhost`, and wtnf-web
 - [ ] `.env.example`, `CLAUDE.md` client examples, and `docs/oidc/README.md` show `sector` and `check-clients`
 - [ ] ASK: approve the live rollout (design.md steps 0–4), then cut over (step 5) with the baseline `sub` comparison
-- [ ] Fresh advise after preparation
+- [x] Fresh advise after preparation
 
 ## Owed from advise (2026-09-29, astra-arch-review)
 
