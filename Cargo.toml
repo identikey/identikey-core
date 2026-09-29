@@ -54,6 +54,7 @@ webauthn-rs = { version = "0.5", features = [
 # --- Serialisation, errors, observability --------------------------------
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_cbor_2 = "0.13"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

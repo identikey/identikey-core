@@ -142,6 +142,7 @@ impl CeremonyHub {
         session: &str,
         xid: Xid,
         credential: RegisterPublicKeyCredential,
+        nickname: Option<&str>,
     ) -> Result<(), CeremonyError> {
         if store.get_account(xid).await?.is_none() {
             return Err(CeremonyError::UnknownAccount);
@@ -162,10 +163,22 @@ impl CeremonyHub {
             .webauthn
             .finish_passkey_registration(&credential, &state)
             .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        // Read presentation metadata only after webauthn-rs has verified the
+        // same response. It is stored as a UX hint and never affects acceptance.
+        let (aaguid, backed_up) =
+            registration_presentation_metadata(credential.response.attestation_object.as_ref());
         let json =
             serde_json::to_vec(&passkey).map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
         store
-            .insert_passkey(xid, passkey.cred_id().as_slice(), &json, 0)
+            .insert_passkey_with_metadata(
+                xid,
+                passkey.cred_id().as_slice(),
+                &json,
+                0,
+                aaguid,
+                backed_up,
+                nickname,
+            )
             .await?;
         Ok(())
     }
@@ -277,8 +290,8 @@ impl CeremonyHub {
             .webauthn
             .start_passkey_authentication(&passkeys)
             .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
-        let state = serde_json::to_vec(&state)
-            .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        let state =
+            serde_json::to_vec(&state).map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
         Ok((client_public_key(&challenge)?, state))
     }
 
@@ -293,8 +306,8 @@ impl CeremonyHub {
     ) -> Result<(Uuid, Vec<u8>), CeremonyError> {
         let state: PasskeyAuthentication = serde_json::from_slice(state_bytes)
             .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
-        let proof = serde_json::to_vec(&credential)
-            .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        let proof =
+            serde_json::to_vec(&credential).map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
         let cred_id = credential.get_credential_id().to_vec();
         let stored = store
             .get_passkey_by_credential_id(&cred_id)
@@ -372,6 +385,46 @@ fn client_public_key(challenge: &impl Serialize) -> Result<serde_json::Value, Ce
     Ok(passkey_manager_compat(public_key))
 }
 
+/// Extract AAGUID and the backup-state bit from verified registration authData.
+/// Malformed data degrades to absent presentation metadata.
+fn registration_presentation_metadata(attestation_object: &[u8]) -> (Option<[u8; 16]>, bool) {
+    const FLAGS_OFFSET: usize = 32;
+    const AAGUID_START: usize = 37;
+    const AAGUID_END: usize = 53;
+    const ATTESTED_CREDENTIAL_DATA: u8 = 0x40;
+    const BACKUP_STATE: u8 = 0x10;
+
+    let Ok(serde_cbor_2::Value::Map(fields)) =
+        serde_cbor_2::from_slice::<serde_cbor_2::Value>(attestation_object)
+    else {
+        return (None, false);
+    };
+    let auth_data = fields
+        .into_iter()
+        .find_map(|(key, value)| match (key, value) {
+            (serde_cbor_2::Value::Text(key), serde_cbor_2::Value::Bytes(bytes))
+                if key == "authData" =>
+            {
+                Some(bytes)
+            }
+            _ => None,
+        });
+    let Some(auth_data) = auth_data else {
+        return (None, false);
+    };
+    let Some(flags) = auth_data.get(FLAGS_OFFSET).copied() else {
+        return (None, false);
+    };
+    let backed_up = flags & BACKUP_STATE != 0;
+    if flags & ATTESTED_CREDENTIAL_DATA == 0 {
+        return (None, backed_up);
+    }
+    let aaguid = auth_data
+        .get(AAGUID_START..AAGUID_END)
+        .and_then(|bytes| bytes.try_into().ok());
+    (aaguid, backed_up)
+}
+
 /// Options 1Password (and iCloud / Google Password Manager) can intercept.
 ///
 /// Do not set `authenticatorAttachment` or `hints: ["client-device"]` — those
@@ -425,6 +478,7 @@ pub struct RegisterFinish {
     pub session: String,
     pub xid: String,
     pub credential: RegisterPublicKeyCredential,
+    pub nickname: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -467,4 +521,43 @@ pub struct SignupOptions {
     pub session: String,
     #[serde(rename = "publicKey")]
     pub public_key: serde_json::Value,
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "panicking on failure is the assertion in a test"
+)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    #[test]
+    fn passkey_legibility_extracts_verified_registration_metadata() {
+        let expected = [0x42; 16];
+        let mut auth_data = vec![0; 32];
+        auth_data.push(0x40 | 0x10); // attested credential data + backup state
+        auth_data.extend_from_slice(&[0; 4]);
+        auth_data.extend_from_slice(&expected);
+        let value = serde_cbor_2::Value::Map(BTreeMap::from([(
+            serde_cbor_2::Value::Text("authData".into()),
+            serde_cbor_2::Value::Bytes(auth_data),
+        )]));
+        let encoded = serde_cbor_2::to_vec(&value).unwrap();
+
+        assert_eq!(
+            registration_presentation_metadata(&encoded),
+            (Some(expected), true)
+        );
+    }
+
+    #[test]
+    fn passkey_legibility_malformed_attestation_metadata_is_absent() {
+        assert_eq!(
+            registration_presentation_metadata(b"not cbor"),
+            (None, false)
+        );
+    }
 }

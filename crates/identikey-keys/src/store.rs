@@ -93,6 +93,15 @@ pub struct StoredPasskey {
     pub sign_counter: i64,
 }
 
+/// Passkey fields safe to show in account-management UI. No key material.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasskeyPresentation {
+    pub aaguid: Option<[u8; 16]>,
+    pub backed_up: bool,
+    pub nickname: Option<String>,
+    pub last_used_at: Option<OffsetDateTime>,
+}
+
 /// A credential listed as a device. No public keys, no trust flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceRecord {
@@ -388,19 +397,50 @@ impl KeysStore {
         cose_public_key: &[u8],
         sign_counter: i64,
     ) -> Result<Uuid, StoreError> {
-        let rec = sqlx::query!(
-            "INSERT INTO credentials
-                (xid, kind, webauthn_credential_id, cose_public_key, sign_counter)
-             VALUES ($1, 'passkey', $2, $3, $4)
-             RETURNING id",
-            xid.as_bytes().as_slice(),
+        self.insert_passkey_with_metadata(
+            xid,
             webauthn_credential_id,
             cose_public_key,
-            sign_counter
+            sign_counter,
+            None,
+            false,
+            None,
         )
+        .await
+    }
+
+    /// Insert a verified passkey plus presentation-only registration metadata.
+    ///
+    /// AAGUID is deliberately written but never read by ceremony lookup.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_passkey_with_metadata(
+        &self,
+        xid: Xid,
+        webauthn_credential_id: &[u8],
+        cose_public_key: &[u8],
+        sign_counter: i64,
+        aaguid: Option<[u8; 16]>,
+        backed_up: bool,
+        nickname: Option<&str>,
+    ) -> Result<Uuid, StoreError> {
+        let nickname = nickname.map(str::trim).filter(|value| !value.is_empty());
+        let id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO credentials
+                (xid, kind, webauthn_credential_id, cose_public_key, sign_counter,
+                 aaguid, backed_up, nickname)
+             VALUES ($1, 'passkey', $2, $3, $4, $5, $6, $7)
+             RETURNING id",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .bind(webauthn_credential_id)
+        .bind(cose_public_key)
+        .bind(sign_counter)
+        .bind(aaguid.as_ref().map(<[u8; 16]>::as_slice))
+        .bind(backed_up)
+        .bind(nickname)
         .fetch_one(&self.pool)
         .await?;
-        Ok(rec.id)
+        Ok(id)
     }
 
     pub async fn get_passkey_by_credential_id(
@@ -448,6 +488,46 @@ impl KeysStore {
                     rec.cose_public_key,
                     rec.sign_counter,
                 )
+            })
+            .collect()
+    }
+
+    /// Non-revoked passkeys for account presentation. Never returns key material.
+    pub async fn list_passkey_presentations(
+        &self,
+        xid: Xid,
+    ) -> Result<Vec<PasskeyPresentation>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT aaguid, backed_up, nickname, last_used_at
+             FROM credentials
+             WHERE xid = $1
+               AND kind = 'passkey'
+               AND revoked_at IS NULL
+             ORDER BY created_at ASC",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                use sqlx::Row;
+
+                let raw: Option<Vec<u8>> = row.try_get("aaguid")?;
+                let aaguid = raw
+                    .map(|bytes| {
+                        bytes.try_into().map_err(|_| {
+                            StoreError::Document("stored AAGUID is not 16 bytes".into())
+                        })
+                    })
+                    .transpose()?;
+                Ok(PasskeyPresentation {
+                    aaguid,
+                    backed_up: row
+                        .try_get::<Option<bool>, _>("backed_up")?
+                        .unwrap_or(false),
+                    nickname: row.try_get("nickname")?,
+                    last_used_at: row.try_get("last_used_at")?,
+                })
             })
             .collect()
     }
@@ -504,12 +584,10 @@ impl KeysStore {
         let mut tx = self.pool.begin().await?;
         // Same custody→credential lock order as an A3 managed-signing claim.
         // Whichever transaction wins defines whether the key may be used.
-        let custody = sqlx::query(
-            "SELECT xid FROM custody_records WHERE xid = $1 FOR UPDATE",
-        )
-        .bind(xid.as_bytes().as_slice())
-        .fetch_optional(&mut *tx)
-        .await?;
+        let custody = sqlx::query("SELECT xid FROM custody_records WHERE xid = $1 FOR UPDATE")
+            .bind(xid.as_bytes().as_slice())
+            .fetch_optional(&mut *tx)
+            .await?;
         if custody.is_none() {
             return Err(StoreError::NotFound);
         }
@@ -1327,6 +1405,87 @@ mod tests {
         assert!(
             matches!(missing, StoreError::NotFound),
             "unexpected error: {missing}"
+        );
+    }
+
+    #[sqlx::test]
+    async fn passkey_legibility_persists_metadata_without_filtering_ceremony_loads(pool: PgPool) {
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let ours = PrivateKeyBase::new();
+        let doc = c2_native(&user, &ours).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &blob())
+            .await
+            .unwrap();
+        let first_aaguid = [0x11; 16];
+        let second_aaguid = [0x22; 16];
+
+        store
+            .insert_passkey_with_metadata(
+                xid,
+                b"first-credential",
+                b"first-key-json",
+                0,
+                Some(first_aaguid),
+                true,
+                Some("  Work key  "),
+            )
+            .await
+            .unwrap();
+        store
+            .insert_passkey_with_metadata(
+                xid,
+                b"second-credential",
+                b"second-key-json",
+                0,
+                Some(second_aaguid),
+                false,
+                Some("   "),
+            )
+            .await
+            .unwrap();
+
+        let presented = store.list_passkey_presentations(xid).await.unwrap();
+        let presented: Vec<_> = presented
+            .iter()
+            .map(|row| (row.aaguid, row.backed_up, row.nickname.as_deref()))
+            .collect();
+        assert_eq!(
+            presented,
+            [
+                (Some(first_aaguid), true, Some("Work key")),
+                (Some(second_aaguid), false, None),
+            ]
+        );
+
+        // Ceremony loading remains keyed only by XID / credential id. Different
+        // presentation AAGUIDs neither filter nor rank the accepted passkeys.
+        let ceremony_rows = store.list_passkeys(xid).await.unwrap();
+        let ceremony_ids: Vec<&[u8]> = ceremony_rows
+            .iter()
+            .map(|row| row.credential_id.as_slice())
+            .collect();
+        assert_eq!(
+            ceremony_ids,
+            [
+                b"first-credential".as_slice(),
+                b"second-credential".as_slice()
+            ]
+        );
+        assert!(
+            store
+                .get_passkey_by_credential_id(b"first-credential")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .get_passkey_by_credential_id(b"second-credential")
+                .await
+                .unwrap()
+                .is_some()
         );
     }
 

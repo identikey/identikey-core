@@ -28,6 +28,7 @@ tower-http.workspace = true
 sqlx.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_cbor_2.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

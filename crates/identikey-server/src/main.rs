@@ -18,6 +18,7 @@ mod ceremonies;
 mod clients;
 mod managed_challenge;
 mod pages;
+mod passkey_metadata;
 mod webauthn;
 
 use std::net::SocketAddr;
@@ -30,16 +31,16 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use bc_components::{PrivateKeyBase, XIDProvider};
+#[cfg(test)]
+use clients::client_from_spec;
+use clients::{extra_clients, optional_client};
 use identikey_keys::{
     CustodyRung, KeysStore, ManagedKeyring, OperationalEd25519, Xid, c2_native,
     operational_ed25519_public,
 };
-use clients::{extra_clients, optional_client};
-#[cfg(test)]
-use clients::client_from_spec;
 use identikey_oidc::{
-    AuthorizeError, AuthorizeQuery, OidcError, PairwiseSalt, Provider, SigningKey,
-    TokenRequest, parse_http_basic,
+    AuthorizeError, AuthorizeQuery, OidcError, PairwiseSalt, Provider, SigningKey, TokenRequest,
+    parse_http_basic,
 };
 #[cfg(test)]
 use identikey_oidc::{SubjectType, TokenEndpointAuthMethod};
@@ -124,9 +125,18 @@ fn router_with_keyring(
         .route("/devices/ssh_git", post(add_ssh_git))
         .route("/devices/ssh_git/revoke", post(revoke_ssh_git))
         .route("/managed-challenge/begin", post(managed_challenge::begin))
-        .route("/managed-challenge/finish/a3", post(managed_challenge::finish_a3))
-        .route("/managed-challenge/finish/a4", post(managed_challenge::finish_a4))
-        .route("/managed-challenge/retrieve", post(managed_challenge::retrieve))
+        .route(
+            "/managed-challenge/finish/a3",
+            post(managed_challenge::finish_a3),
+        )
+        .route(
+            "/managed-challenge/finish/a4",
+            post(managed_challenge::finish_a4),
+        )
+        .route(
+            "/managed-challenge/retrieve",
+            post(managed_challenge::retrieve),
+        )
         .route("/challenge", get(challenge).post(challenge))
         .route("/token", post(token))
         .route("/userinfo", get(userinfo).post(userinfo))
@@ -410,7 +420,13 @@ async fn register_finish(
     };
     match state
         .ceremonies
-        .finish_register(&state.store, &body.session, xid, body.credential)
+        .finish_register(
+            &state.store,
+            &body.session,
+            xid,
+            body.credential,
+            body.nickname.as_deref(),
+        )
         .await
     {
         Ok(()) => {
@@ -466,8 +482,20 @@ async fn account_page(State(state): State<AppState>, headers: HeaderMap) -> Resp
         }
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let passkeys = match state.store.list_passkeys(xid).await {
-        Ok(rows) => rows.len(),
+    let passkeys = match state.store.list_passkey_presentations(xid).await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|row| {
+                let metadata = row.aaguid.as_ref().and_then(passkey_metadata::resolve);
+                pages::AccountPasskey {
+                    nickname: row.nickname,
+                    provider_name: metadata.as_ref().map(|entry| entry.name.clone()),
+                    icon: metadata.and_then(|entry| entry.icon),
+                    backed_up: row.backed_up,
+                    last_used: row.last_used_at.map(|value| value.date().to_string()),
+                }
+            })
+            .collect::<Vec<_>>(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     let rung = match custody.rung {
@@ -480,7 +508,7 @@ async fn account_page(State(state): State<AppState>, headers: HeaderMap) -> Resp
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        pages::account(&xid.to_string(), rung, passkeys),
+        pages::account(&xid.to_string(), rung, &passkeys),
     )
         .into_response()
 }
@@ -1090,10 +1118,14 @@ fn managed_keyring(raw: Option<String>, kid: Option<String>) -> Result<ManagedKe
     let mut key = [0_u8; 32];
     for (index, pair) in raw.as_bytes().chunks_exact(2).enumerate() {
         let text = std::str::from_utf8(pair).map_err(|_| "invalid managed wrap key")?;
-        let slot = key.get_mut(index).ok_or("invalid managed wrap key length")?;
+        let slot = key
+            .get_mut(index)
+            .ok_or("invalid managed wrap key length")?;
         *slot = u8::from_str_radix(text, 16).map_err(|_| "invalid managed wrap key")?;
     }
-    let kid = kid.filter(|value| !value.is_empty()).unwrap_or_else(|| "v1".into());
+    let kid = kid
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "v1".into());
     Ok(ManagedKeyring::single(kid, key))
 }
 
@@ -1139,7 +1171,10 @@ async fn main() -> Result<(), BoxError> {
         .mark_claimed_managed_challenges_indeterminate()
         .await?;
     if indeterminate > 0 {
-        tracing::warn!(indeterminate, "terminalized managed signing claims left by restart");
+        tracing::warn!(
+            indeterminate,
+            "terminalized managed signing claims left by restart"
+        );
     }
     tracing::info!("database migrated");
 
@@ -1208,7 +1243,7 @@ async fn main() -> Result<(), BoxError> {
 )]
 mod tests {
     use super::*;
-    use identikey_oidc::{s256_challenge, Client};
+    use identikey_oidc::{Client, s256_challenge};
 
     fn test_provider() -> Arc<Provider> {
         let salt = PairwiseSalt::from_hex(&"ab".repeat(32)).unwrap();
@@ -2199,10 +2234,12 @@ mod tests {
             .await
             .unwrap();
         let token = accounts.issue(xid).unwrap();
-        assert!(account::set_cookie(&token, true)
-            .to_str()
-            .unwrap()
-            .contains("HttpOnly"));
+        assert!(
+            account::set_cookie(&token, true)
+                .to_str()
+                .unwrap()
+                .contains("HttpOnly")
+        );
 
         let profile = app
             .clone()
@@ -2226,7 +2263,8 @@ mod tests {
         assert!(profile_html.contains(&xid.to_string()));
         assert!(!profile_html.contains(&xid.to_hex()));
         assert!(profile_html.contains("Managed (C2)"));
-        assert!(profile_html.contains("1 passkey"));
+        assert!(profile_html.contains("<span>Passkey</span>"));
+        assert!(profile_html.contains("Not backed up · Never used"));
 
         let signed_out = app
             .oneshot(
