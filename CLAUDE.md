@@ -21,8 +21,17 @@ cache against a database that has those migrations applied:
 Commit the updated `.sqlx/` directory. CI runs `cargo sqlx prepare --check`
 and fails if you forget.
 
+Run the local OP with `scripts/dev-server.sh`. It loads `.env.server`
+(gitignored), and on first run creates it from `.env.server.example`
+with a fresh `IDENTIKEY_MANAGED_WRAP_KEY` (boot fails without one).
+Shell env wins. Do not put OP vars in the root `.env`: that is the
+Keycloak-era web app's (Vite `envDir: '..'`, issuer
+`connect.identikey.io`, Drizzle DB). sqlx macros also read the root
+`.env`, and its user-less URL gives the `anonymous` build error. The
+script exports the right `DATABASE_URL` before `cargo run`.
+
 Local OIDC (code+PKCE) for hooking an app, after `add-oidc-endpoints`
-and `add-dev-authorize`:
+and `add-dev-authorize`. These are the values in `.env.server.example`:
 
     IDENTIKEY_DEV_LOGIN=1
     IDENTIKEY_CLIENT_ID=smoke
