@@ -102,15 +102,22 @@ Apex `identikey.me` must be in **both** `MJOLNIR_GATEWAY_APEXES`
 domain"). Bind is `0.0.0.0:8080` in `start_command` — `PORT` is
 ignored. Do not set `IDENTIKEY_DEV_LOGIN`. Host: `root@45.76.77.97`.
 
-Live (2026-09-29, `4884e07`, register/begin takeover fix): app
-`identikey`, snapshot
-`deploy-111de4983a6febe64d747ae0089e9eeec098c9e25a69075b8dc15c36f7e4cc77`,
-service VM `Ybwq8bBxJhQTCZfi6yA4cQ` (cut over from
-`4wNvm9hzpAoeRmJKdyUo1q`, which was `ecf9917`). Unsigned
-`register/begin` is 403 `access_denied`. Audit before the fix: 13
-accounts, 3 passkeys, none added after signup. `mj deploy` needs
-`mj login --issuer https://auth.identikey.me`; the CLI's default
-issuer is still Keycloak and its token gets 401. Public
+Live (2026-09-30, `2ed829d`: sector pins, passkey list, recovery UI,
+takeover fix): app `identikey`, service VM `FaxZyk8oBEEt9vuUQqfvoF`,
+owner `3dLGACrVKP67MtW4kwbG54JqBGS5nSb46uZVkJNueWKJ` (cut over from
+`Ybwq8bBxJhQTCZfi6yA4cQ`, which was `4884e07`). Sector-pin rollout
+verified: pairwise salt sha256 prefix `e96107c3ac49` unchanged and the
+`taskmaster-laptop` probe `sub` identical before and after. Unsigned
+`register/begin` is 403. Deploy notes: `mj` tokens expire fast; the
+host path is `git archive` into `/var/lib/mjolnir/deploy/src/identikey`
+plus `Mjolnir.Deploy.Orchestrator.deploy(..., deployer: <base58 owner>)`
+over `bin/mjolnir rpc` with `/etc/mjolnir/env` sourced. Build VMs have
+stalled mid-`cargo` (`mjolnir-mne7`); `codegen-units = 16` and 8 GB
+(`:deploy_build_memory_mb`, runtime only) got a clean ~48 min build.
+Takeover audit (2026-09-29, before the fix): 13 accounts, 3 passkeys,
+none added after signup. `mj login --issuer https://auth.identikey.me`
+(the older CLI still defaults to Keycloak and its token gets 401).
+Public
 `https://auth.identikey.me` — DNS A `45.76.77.97` (grey-cloud), HTTP-01
 cert SAN `auth.identikey.me` until 2026-11-25, `/health` 200, discovery
 200, JWKS EdDSA kid `JZnOxfXDaklXwH9yyeEbqi6AMkD68zE74w3mv7_A3yk`
