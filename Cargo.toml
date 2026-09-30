@@ -89,5 +89,5 @@ indexing_slicing = "deny"
 
 [profile.release]
 lto = "thin"
-codegen-units = 1
+codegen-units = 16
 strip = "debuginfo"
