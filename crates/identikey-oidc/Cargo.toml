@@ -28,3 +28,8 @@ url.workspace = true
 getrandom = "0.2"
 hkdf = "0.12"
 base64 = "0.22"
+
+sqlx.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

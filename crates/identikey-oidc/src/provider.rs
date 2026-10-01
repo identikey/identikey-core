@@ -1,4 +1,4 @@
-//! In-memory authorization-code provider.
+//! Authorization-code provider with durable, rotating refresh sessions.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -139,6 +139,7 @@ struct AccessGrant {
     expires_at: Instant,
 }
 
+#[derive(Clone)]
 struct RefreshGrant {
     client_id: String,
     xid: Xid,
@@ -154,6 +155,7 @@ pub struct Provider {
     access: Mutex<HashMap<String, AccessGrant>>,
     /// SHA-256 of the refresh token → grant. The raw token is never stored.
     refresh: Mutex<HashMap<[u8; 32], RefreshGrant>>,
+    refresh_pool: Option<sqlx::PgPool>,
     challenges: ChallengeIssuer,
     nonces: Mutex<InMemoryNonceStore>,
     /// identikey-auth public key (alg + bytes) → XID. Never a user private key.
@@ -183,9 +185,18 @@ impl Provider {
             codes: Mutex::new(HashMap::new()),
             access: Mutex::new(HashMap::new()),
             refresh: Mutex::new(HashMap::new()),
+            refresh_pool: None,
             nonces: Mutex::new(InMemoryNonceStore::new()),
             subjects: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Production refresh sessions share the account database, so replacing a
+    /// service VM does not sign every relying party out. Only token hashes persist.
+    #[must_use]
+    pub fn with_refresh_pool(mut self, pool: sqlx::PgPool) -> Self {
+        self.refresh_pool = Some(pool);
+        self
     }
 
     pub fn generate(issuer: impl Into<String>, salt: PairwiseSalt) -> Result<Self, OidcError> {
@@ -347,14 +358,14 @@ impl Provider {
         Ok(code)
     }
 
-    pub fn token(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
+    pub async fn token(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
         match req.grant_type.as_deref() {
-            Some("authorization_code") => self.exchange_code(req),
+            Some("authorization_code") => self.exchange_code(req).await,
             Some("password") => Err(OidcError::unsupported_grant_type(
                 "resource owner password is refused",
             )),
-            Some("refresh_token") => self.exchange_refresh(req),
-            Some(CHALLENGE_RESPONSE_GRANT) => self.exchange_urn(req),
+            Some("refresh_token") => self.exchange_refresh(req).await,
+            Some(CHALLENGE_RESPONSE_GRANT) => self.exchange_urn(req).await,
             _ => Err(OidcError::invalid_request("grant_type is required")),
         }
     }
@@ -403,7 +414,7 @@ impl Provider {
     }
 
     #[must_use]
-    pub fn introspect(&self, token: &str) -> Introspection {
+    pub async fn introspect(&self, token: &str) -> Introspection {
         if let Ok(Some(grant)) = self.lookup_access(token) {
             return Introspection {
                 active: true,
@@ -412,7 +423,7 @@ impl Provider {
                 token_type: Some("Bearer"),
             };
         }
-        match self.lookup_refresh(token) {
+        match self.lookup_refresh(token).await {
             Ok(Some(grant)) => Introspection {
                 active: true,
                 sub: Some(grant.sub),
@@ -428,18 +439,28 @@ impl Provider {
         }
     }
 
-    pub fn revoke(&self, token: &str) -> Result<(), OidcError> {
-        let mut access = lock(&self.access)?;
-        if access.remove(token).is_some() {
-            return Ok(());
+    pub async fn revoke(&self, token: &str) -> Result<(), OidcError> {
+        {
+            let mut access = lock(&self.access)?;
+            if access.remove(token).is_some() {
+                return Ok(());
+            }
         }
-        drop(access);
-        let mut refresh = lock(&self.refresh)?;
-        refresh.remove(&hash_token(token));
+        let hash = hash_token(token);
+        if let Some(pool) = &self.refresh_pool {
+            sqlx::query("DELETE FROM oidc_refresh_sessions WHERE issuer = $1 AND token_hash = $2")
+                .bind(&self.issuer)
+                .bind(hash.as_slice())
+                .execute(pool)
+                .await
+                .map_err(refresh_store_error)?;
+        } else {
+            lock(&self.refresh)?.remove(&hash);
+        }
         Ok(())
     }
 
-    fn exchange_urn(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
+    async fn exchange_urn(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
         let client_id = request_client_id(req)?;
         let client = self.authenticate(req, client_id)?;
         let encoded = req
@@ -454,21 +475,22 @@ impl Provider {
             OidcError::invalid_grant("response is not a valid identikey-auth Response")
         })?;
         let now = unix_now()?;
-        let mut nonces = lock(&self.nonces)?;
-        let verified = verify_response(
-            &parsed,
-            &self.issuer,
-            now,
-            CHALLENGE_SKEW_SECS,
-            VerifyPolicy::PqOptional,
-            &mut *nonces,
-        )
-        .map_err(auth_to_oidc)?;
-        drop(nonces);
+        let verified = {
+            let mut nonces = lock(&self.nonces)?;
+            verify_response(
+                &parsed,
+                &self.issuer,
+                now,
+                CHALLENGE_SKEW_SECS,
+                VerifyPolicy::PqOptional,
+                &mut *nonces,
+            )
+            .map_err(auth_to_oidc)?
+        };
         let xid = self
             .subject_for(&verified.public_key)
             .ok_or_else(|| OidcError::invalid_grant("unknown subject"))?;
-        self.mint_tokens(&client.id, xid, None)
+        self.mint_tokens(&client.id, xid, None, None).await
     }
 
     fn subject_for(&self, public_key: &ClassicalPublicKey) -> Option<Xid> {
@@ -479,7 +501,7 @@ impl Provider {
             .copied()
     }
 
-    fn exchange_code(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
+    async fn exchange_code(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
         let client_id = request_client_id(req)?;
         let client = self.authenticate(req, client_id)?;
         let code = req
@@ -490,57 +512,61 @@ impl Provider {
         let client_id = client.id.as_str();
         let redirect = req.redirect_uri.as_deref().unwrap_or("");
 
-        let mut codes = lock(&self.codes)?;
-        let entry = codes
-            .get_mut(code)
-            .ok_or_else(|| OidcError::invalid_grant("unknown authorization code"))?;
-        if entry.used {
-            if let Some(token) = entry.issued_access.clone() {
-                drop(codes);
-                let mut access = lock(&self.access)?;
-                access.remove(&token);
-            }
-            return Err(OidcError::invalid_grant(
-                "authorization code has already been used",
-            ));
-        }
-        if Instant::now() >= entry.expires_at {
-            return Err(OidcError::invalid_grant("authorization code expired"));
-        }
-        if entry.client_id != client_id {
-            return Err(OidcError::invalid_grant(
-                "code was issued to another client",
-            ));
-        }
-        if entry.redirect_uri != redirect {
-            return Err(OidcError::invalid_grant("redirect_uri does not match"));
-        }
-
-        match (&entry.challenge, req.code_verifier.as_deref()) {
-            (None, Some(_)) => {
+        let (xid, nonce) = {
+            let mut codes = lock(&self.codes)?;
+            let entry = codes
+                .get_mut(code)
+                .ok_or_else(|| OidcError::invalid_grant("unknown authorization code"))?;
+            if entry.used {
+                if let Some(token) = entry.issued_access.clone() {
+                    drop(codes);
+                    let mut access = lock(&self.access)?;
+                    access.remove(&token);
+                }
                 return Err(OidcError::invalid_grant(
-                    "code_verifier rejected; no challenge was stored",
+                    "authorization code has already been used",
                 ));
             }
-            (Some(_), None) => {
-                return Err(OidcError::invalid_request("code_verifier is required"));
+            if Instant::now() >= entry.expires_at {
+                return Err(OidcError::invalid_grant("authorization code expired"));
             }
-            (Some(challenge), Some(verifier)) => {
-                if !pkce_s256_matches(verifier, challenge) {
-                    return Err(OidcError::invalid_grant("code_verifier does not match"));
+            if entry.client_id != client_id {
+                return Err(OidcError::invalid_grant(
+                    "code was issued to another client",
+                ));
+            }
+            if entry.redirect_uri != redirect {
+                return Err(OidcError::invalid_grant("redirect_uri does not match"));
+            }
+
+            match (&entry.challenge, req.code_verifier.as_deref()) {
+                (None, Some(_)) => {
+                    return Err(OidcError::invalid_grant(
+                        "code_verifier rejected; no challenge was stored",
+                    ));
+                }
+                (Some(_), None) => {
+                    return Err(OidcError::invalid_request("code_verifier is required"));
+                }
+                (Some(challenge), Some(verifier)) => {
+                    if !pkce_s256_matches(verifier, challenge) {
+                        return Err(OidcError::invalid_grant("code_verifier does not match"));
+                    }
+                }
+                (None, None) => {
+                    return Err(OidcError::invalid_request("PKCE is required"));
                 }
             }
-            (None, None) => {
-                return Err(OidcError::invalid_request("PKCE is required"));
-            }
-        }
 
-        let xid = entry.xid;
-        let nonce = entry.nonce.clone();
-        entry.used = true;
-        drop(codes);
+            let xid = entry.xid;
+            let nonce = entry.nonce.clone();
+            entry.used = true;
+            (xid, nonce)
+        };
 
-        let issued = self.mint_tokens(client_id, xid, nonce.as_deref())?;
+        let issued = self
+            .mint_tokens(client_id, xid, nonce.as_deref(), None)
+            .await?;
         {
             let mut codes = lock(&self.codes)?;
             if let Some(entry) = codes.get_mut(code) {
@@ -550,7 +576,7 @@ impl Provider {
         Ok(issued)
     }
 
-    fn exchange_refresh(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
+    async fn exchange_refresh(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
         let presented = req
             .refresh_token
             .as_deref()
@@ -558,17 +584,10 @@ impl Provider {
             .ok_or_else(|| OidcError::invalid_request("refresh_token is required"))?;
         let presented_id = optional_request_client_id(req)?;
         let hashed = hash_token(presented);
-        let grant = {
-            let refresh = lock(&self.refresh)?;
-            refresh
-                .get(&hashed)
-                .map(|g| RefreshGrant {
-                    client_id: g.client_id.clone(),
-                    xid: g.xid,
-                    sub: g.sub.clone(),
-                })
-                .ok_or_else(|| OidcError::invalid_grant("unknown or revoked refresh token"))?
-        };
+        let grant = self
+            .lookup_refresh(presented)
+            .await?
+            .ok_or_else(|| OidcError::invalid_grant("unknown or revoked refresh token"))?;
         if let Some(client_id) = presented_id {
             if client_id != grant.client_id {
                 return Err(OidcError::invalid_grant(
@@ -577,20 +596,16 @@ impl Provider {
             }
         }
         self.authenticate(req, &grant.client_id)?;
-        {
-            let mut refresh = lock(&self.refresh)?;
-            if refresh.remove(&hashed).is_none() {
-                return Err(OidcError::invalid_grant("unknown or revoked refresh token"));
-            }
-        }
-        self.mint_tokens(&grant.client_id, grant.xid, None)
+        self.mint_tokens(&grant.client_id, grant.xid, None, Some(hashed))
+            .await
     }
 
-    fn mint_tokens(
+    async fn mint_tokens(
         &self,
         client_id: &str,
         xid: Xid,
         nonce: Option<&str>,
+        previous: Option<[u8; 32]>,
     ) -> Result<TokenResponse, OidcError> {
         let client = self
             .client(client_id)
@@ -603,6 +618,16 @@ impl Provider {
             .map_err(|e| OidcError::server_error(e.to_string()))?;
         let access_token = random_token()?;
         let refresh_token = random_token()?;
+        self.store_refresh(
+            hash_token(&refresh_token),
+            RefreshGrant {
+                client_id: client_id.to_owned(),
+                xid,
+                sub: sub.clone(),
+            },
+            previous,
+        )
+        .await?;
         {
             let mut access = lock(&self.access)?;
             access.insert(
@@ -611,17 +636,6 @@ impl Provider {
                     sub: sub.clone(),
                     client_id: client_id.to_owned(),
                     expires_at: Instant::now() + ACCESS_TTL,
-                },
-            );
-        }
-        {
-            let mut refresh = lock(&self.refresh)?;
-            refresh.insert(
-                hash_token(&refresh_token),
-                RefreshGrant {
-                    client_id: client_id.to_owned(),
-                    xid,
-                    sub,
                 },
             );
         }
@@ -665,13 +679,63 @@ impl Provider {
             && map.keys().all(|stored| stored.as_slice() != raw.as_bytes())
     }
 
-    fn lookup_refresh(&self, token: &str) -> Result<Option<RefreshGrant>, OidcError> {
-        let refresh = lock(&self.refresh)?;
-        Ok(refresh.get(&hash_token(token)).map(|g| RefreshGrant {
-            client_id: g.client_id.clone(),
-            xid: g.xid,
-            sub: g.sub.clone(),
-        }))
+    async fn lookup_refresh(&self, token: &str) -> Result<Option<RefreshGrant>, OidcError> {
+        let hash = hash_token(token);
+        if let Some(pool) = &self.refresh_pool {
+            let row: Option<(String, Vec<u8>, String)> = sqlx::query_as(
+                "SELECT client_id, xid, sub FROM oidc_refresh_sessions WHERE issuer = $1 AND token_hash = $2"
+            ).bind(&self.issuer).bind(hash.as_slice()).fetch_optional(pool).await
+                .map_err(refresh_store_error)?;
+            row.map(|(client_id, bytes, sub)| {
+                let xid = Xid::try_from_slice(&bytes)
+                    .map_err(|_| OidcError::server_error("invalid refresh session identity"))?;
+                Ok(RefreshGrant {
+                    client_id,
+                    xid,
+                    sub,
+                })
+            })
+            .transpose()
+        } else {
+            Ok(lock(&self.refresh)?.get(&hash).cloned())
+        }
+    }
+
+    /// Rotation is one compare-and-swap, including across server instances.
+    /// A failed database write leaves the previous credential usable.
+    async fn store_refresh(
+        &self,
+        hash: [u8; 32],
+        grant: RefreshGrant,
+        previous: Option<[u8; 32]>,
+    ) -> Result<(), OidcError> {
+        if let Some(pool) = &self.refresh_pool {
+            if let Some(old) = previous {
+                let result = sqlx::query(
+                    "UPDATE oidc_refresh_sessions SET token_hash = $3, sub = $4, refreshed_at = now() \
+                     WHERE issuer = $1 AND token_hash = $2 AND client_id = $5"
+                ).bind(&self.issuer).bind(old.as_slice()).bind(hash.as_slice())
+                    .bind(&grant.sub).bind(&grant.client_id).execute(pool).await.map_err(refresh_store_error)?;
+                if result.rows_affected() != 1 {
+                    return Err(OidcError::invalid_grant("unknown or revoked refresh token"));
+                }
+            } else {
+                sqlx::query(
+                    "INSERT INTO oidc_refresh_sessions (issuer, token_hash, client_id, xid, sub) VALUES ($1, $2, $3, $4, $5)"
+                ).bind(&self.issuer).bind(hash.as_slice()).bind(&grant.client_id)
+                    .bind(grant.xid.as_bytes().as_slice()).bind(&grant.sub)
+                    .execute(pool).await.map_err(refresh_store_error)?;
+            }
+        } else {
+            let mut refresh = lock(&self.refresh)?;
+            if let Some(old) = previous {
+                if refresh.remove(&old).is_none() {
+                    return Err(OidcError::invalid_grant("unknown or revoked refresh token"));
+                }
+            }
+            refresh.insert(hash, grant);
+        }
+        Ok(())
     }
 
     fn lookup_access(&self, token: &str) -> Result<Option<AccessGrant>, OidcError> {
@@ -999,6 +1063,11 @@ pub fn s256_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(digest)
 }
 
+fn refresh_store_error(err: sqlx::Error) -> OidcError {
+    tracing::error!(error = %err, "refresh session persistence failed");
+    OidcError::server_error("refresh session storage unavailable")
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -1034,6 +1103,111 @@ mod tests {
         }
     }
 
+    fn refresh_request(token: &str) -> TokenRequest {
+        TokenRequest {
+            grant_type: Some("refresh_token".into()),
+            client_id: Some("smoke".into()),
+            refresh_token: Some(token.into()),
+            ..TokenRequest::default()
+        }
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn durable_refresh_survives_restart_rotation_and_revocation(pool: sqlx::PgPool) {
+        let p = provider().with_refresh_pool(pool.clone());
+        let first = p.mint_tokens("smoke", xid(), None, None).await.unwrap();
+        let refresh = first.refresh_token.unwrap();
+        let initial_sub = p.introspect(&refresh).await.sub;
+        let hash: Vec<u8> = sqlx::query_scalar("SELECT token_hash FROM oidc_refresh_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(hash, hash_token(&refresh));
+        assert_ne!(hash, refresh.as_bytes());
+        drop(p);
+
+        let restarted = provider().with_refresh_pool(pool.clone());
+        assert!(restarted.introspect(&refresh).await.active);
+        let mut wrong_client = refresh_request(&refresh);
+        wrong_client.client_id = Some("other".into());
+        assert_eq!(
+            restarted.token(&wrong_client).await.unwrap_err().error,
+            "invalid_grant"
+        );
+        let second = restarted.token(&refresh_request(&refresh)).await.unwrap();
+        let rotated = second.refresh_token.unwrap();
+        assert_ne!(rotated, refresh);
+        assert_eq!(restarted.introspect(&rotated).await.sub, initial_sub);
+        assert_eq!(
+            restarted
+                .token(&refresh_request(&refresh))
+                .await
+                .unwrap_err()
+                .error,
+            "invalid_grant"
+        );
+        drop(restarted);
+
+        let restarted = provider().with_refresh_pool(pool.clone());
+        assert!(restarted.introspect(&rotated).await.active);
+        restarted.revoke(&rotated).await.unwrap();
+        drop(restarted);
+        let restarted = provider().with_refresh_pool(pool);
+        assert!(!restarted.introspect(&rotated).await.active);
+        assert_eq!(
+            restarted
+                .token(&refresh_request(&rotated))
+                .await
+                .unwrap_err()
+                .error,
+            "invalid_grant"
+        );
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn durable_refresh_has_one_winner_across_server_instances(pool: sqlx::PgPool) {
+        let a = provider().with_refresh_pool(pool.clone());
+        let b = provider().with_refresh_pool(pool.clone());
+        let first = a.mint_tokens("smoke", xid(), None, None).await.unwrap();
+        let refresh = first.refresh_token.unwrap();
+        let req = refresh_request(&refresh);
+        let (left, right) = tokio::join!(a.token(&req), b.token(&req));
+        assert_ne!(left.is_ok(), right.is_ok());
+        let winner = left.or(right).unwrap().refresh_token.unwrap();
+        assert!(a.introspect(&winner).await.active);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM oidc_refresh_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let mut other_issuer = provider().with_refresh_pool(pool);
+        other_issuer.issuer = "https://other.example".into();
+        assert!(!other_issuer.introspect(&winner).await.active);
+        other_issuer.revoke(&winner).await.unwrap();
+        assert!(a.introspect(&winner).await.active);
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn failed_rotation_preserves_previous_session(pool: sqlx::PgPool) {
+        let p = provider().with_refresh_pool(pool.clone());
+        let first = p.mint_tokens("smoke", xid(), None, None).await.unwrap();
+        let refresh = first.refresh_token.unwrap();
+        // Force the single rotation statement to fail after lookup, then repair.
+        sqlx::query("ALTER TABLE oidc_refresh_sessions ADD CONSTRAINT reject_rotation CHECK (false) NOT VALID")
+            .execute(&pool).await.unwrap();
+        assert_eq!(
+            p.token(&refresh_request(&refresh)).await.unwrap_err().error,
+            "server_error"
+        );
+        assert!(p.introspect(&refresh).await.active);
+        sqlx::query("ALTER TABLE oidc_refresh_sessions DROP CONSTRAINT reject_rotation")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(p.token(&refresh_request(&refresh)).await.is_ok());
+    }
+
     #[test]
     fn missing_pkce_is_refused() {
         let p = provider();
@@ -1060,8 +1234,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn code_is_one_time() {
+    #[tokio::test]
+    async fn code_is_one_time() {
         let p = provider();
         let pending = p.validate_authorize(&good_query()).unwrap();
         let code = p.issue_code(&pending, xid()).unwrap();
@@ -1077,16 +1251,16 @@ mod tests {
             refresh_token: None,
             response: None,
         };
-        let first = p.token(&req).unwrap();
+        let first = p.token(&req).await.unwrap();
         assert!(!first.access_token.is_empty());
         assert_eq!(first.id_token.split('.').count(), 3);
-        let second = p.token(&req).unwrap_err();
+        let second = p.token(&req).await.unwrap_err();
         assert_eq!(second.error, "invalid_grant");
         assert!(p.userinfo(&first.access_token).is_err());
     }
 
-    #[test]
-    fn pkce_downgrade_refused() {
+    #[tokio::test]
+    async fn pkce_downgrade_refused() {
         let p = provider();
         let pending = p.validate_authorize(&good_query()).unwrap();
         let missing_verifier = p.issue_code(&pending, xid()).unwrap();
@@ -1103,6 +1277,7 @@ mod tests {
                 refresh_token: None,
                 response: None,
             })
+            .await
             .unwrap_err();
         assert_eq!(err.error, "invalid_request");
 
@@ -1120,6 +1295,7 @@ mod tests {
                 refresh_token: None,
                 response: None,
             })
+            .await
             .unwrap_err();
         assert_eq!(err.error, "invalid_grant");
     }
@@ -1140,8 +1316,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn refresh_rotates_and_stores_only_hash() {
+    #[tokio::test]
+    async fn refresh_rotates_and_stores_only_hash() {
         let p = provider();
         let pending = p.validate_authorize(&good_query()).unwrap();
         let code = p.issue_code(&pending, xid()).unwrap();
@@ -1158,6 +1334,7 @@ mod tests {
                 refresh_token: None,
                 response: None,
             })
+            .await
             .unwrap();
         let t1 = first.refresh_token.clone().unwrap();
         assert!(p.refresh_is_hashed(&t1));
@@ -1175,6 +1352,7 @@ mod tests {
                 refresh_token: Some(t1.clone()),
                 response: None,
             })
+            .await
             .unwrap();
         let t2 = second.refresh_token.clone().unwrap();
         assert_ne!(t1, t2);
@@ -1193,12 +1371,13 @@ mod tests {
                 refresh_token: Some(t1),
                 response: None,
             })
+            .await
             .unwrap_err();
         assert_eq!(replay.error, "invalid_grant");
     }
 
-    #[test]
-    fn revoked_refresh_is_inactive() {
+    #[tokio::test]
+    async fn revoked_refresh_is_inactive() {
         let p = provider();
         let pending = p.validate_authorize(&good_query()).unwrap();
         let code = p.issue_code(&pending, xid()).unwrap();
@@ -1215,11 +1394,12 @@ mod tests {
                 refresh_token: None,
                 response: None,
             })
+            .await
             .unwrap();
         let refresh = issued.refresh_token.unwrap();
-        assert!(p.introspect(&refresh).active);
-        p.revoke(&refresh).unwrap();
-        assert!(!p.introspect(&refresh).active);
+        assert!(p.introspect(&refresh).await.active);
+        p.revoke(&refresh).await.unwrap();
+        assert!(!p.introspect(&refresh).await.active);
         let err = p
             .token(&TokenRequest {
                 grant_type: Some("refresh_token".into()),
@@ -1233,6 +1413,7 @@ mod tests {
                 refresh_token: Some(refresh),
                 response: None,
             })
+            .await
             .unwrap_err();
         assert_eq!(err.error, "invalid_grant");
     }
@@ -1302,8 +1483,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn wrong_secret_is_refused() {
+    #[tokio::test]
+    async fn wrong_secret_is_refused() {
         let p = confidential_provider();
         let pending = pending_for(&p, "basic-1");
         let code = p.issue_code(&pending, xid()).unwrap();
@@ -1320,6 +1501,7 @@ mod tests {
                 refresh_token: None,
                 response: None,
             })
+            .await
             .unwrap_err();
         assert_eq!(err.error, "invalid_client");
         // Code was not consumed: the right secret still works.
@@ -1336,12 +1518,13 @@ mod tests {
                 refresh_token: None,
                 response: None,
             })
+            .await
             .unwrap();
         assert!(!issued.access_token.is_empty());
     }
 
-    #[test]
-    fn public_client_still_uses_pkce_only() {
+    #[tokio::test]
+    async fn public_client_still_uses_pkce_only() {
         let p = confidential_provider();
         let pending = pending_for(&p, "smoke");
         let code = p.issue_code(&pending, xid()).unwrap();
@@ -1358,12 +1541,13 @@ mod tests {
                 refresh_token: None,
                 response: None,
             })
+            .await
             .unwrap();
         assert!(!issued.access_token.is_empty());
     }
 
-    #[test]
-    fn public_client_sending_secret_is_refused() {
+    #[tokio::test]
+    async fn public_client_sending_secret_is_refused() {
         let p = confidential_provider();
         let pending = pending_for(&p, "smoke");
         let code = p.issue_code(&pending, xid()).unwrap();
@@ -1380,12 +1564,13 @@ mod tests {
                 refresh_token: None,
                 response: None,
             })
+            .await
             .unwrap_err();
         assert_eq!(err.error, "invalid_client");
     }
 
-    #[test]
-    fn confidential_still_requires_pkce() {
+    #[tokio::test]
+    async fn confidential_still_requires_pkce() {
         let p = confidential_provider();
         let pending = pending_for(&p, "post-1");
         let code = p.issue_code(&pending, xid()).unwrap();
@@ -1402,12 +1587,13 @@ mod tests {
                 refresh_token: None,
                 response: None,
             })
+            .await
             .unwrap_err();
         assert_eq!(err.error, "invalid_request");
     }
 
-    #[test]
-    fn client_secret_post_succeeds() {
+    #[tokio::test]
+    async fn client_secret_post_succeeds() {
         let p = confidential_provider();
         let pending = pending_for(&p, "post-1");
         let code = p.issue_code(&pending, xid()).unwrap();
@@ -1424,6 +1610,7 @@ mod tests {
                 refresh_token: None,
                 response: None,
             })
+            .await
             .unwrap();
         assert!(!issued.access_token.is_empty());
     }
@@ -1454,11 +1641,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn urn_grant_mints_through_subject_seam() {
+    #[tokio::test]
+    async fn urn_grant_mints_through_subject_seam() {
         let p = provider();
         let (_signer, encoded) = urn_signed(&p);
-        let issued = p.token(&urn_req(encoded)).unwrap();
+        let issued = p.token(&urn_req(encoded)).await.unwrap();
         let expected = subject(
             &PairwiseSalt::from_hex(&"ab".repeat(32)).unwrap(),
             xid(),
@@ -1469,23 +1656,23 @@ mod tests {
         assert_eq!(info.sub, expected);
     }
 
-    #[test]
-    fn urn_grant_refuses_webauthn_assertion() {
+    #[tokio::test]
+    async fn urn_grant_refuses_webauthn_assertion() {
         let p = provider();
         let fake = URL_SAFE_NO_PAD.encode(
             br#"{"id":"cred","response":{"authenticatorData":"AA","clientDataJSON":"AA","signature":"AA"}}"#,
         );
-        let err = p.token(&urn_req(fake)).unwrap_err();
+        let err = p.token(&urn_req(fake)).await.unwrap_err();
         assert_eq!(err.error, "invalid_grant");
     }
 
-    #[test]
-    fn urn_grant_refuses_nonce_replay() {
+    #[tokio::test]
+    async fn urn_grant_refuses_nonce_replay() {
         let p = provider();
         let (_signer, encoded) = urn_signed(&p);
-        let first = p.token(&urn_req(encoded.clone())).unwrap();
+        let first = p.token(&urn_req(encoded.clone())).await.unwrap();
         assert!(!first.access_token.is_empty());
-        let replay = p.token(&urn_req(encoded)).unwrap_err();
+        let replay = p.token(&urn_req(encoded)).await.unwrap_err();
         assert_eq!(replay.error, "invalid_grant");
         assert!(replay.description.contains("replay"));
     }

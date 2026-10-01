@@ -8,6 +8,21 @@ Basic OP (`oidcc-basic-certification-test-plan`) can be run locally
 once confidential clients are registered. It is **not** a required
 CI job.
 
+## Saved sessions
+
+Production stores refresh-session hashes in `oidc_refresh_sessions` in the
+existing `DATABASE_URL` database (migration 0005). Sessions survive OP restarts
+and replacement service VMs. Each successful refresh atomically replaces the
+old hash; revocation deletes it. Raw refresh tokens never enter the database.
+The one-hour API token lifetime is unchanged. Short-lived authorization codes
+and access-token introspection state remain in memory.
+
+`Provider::new` keeps an in-memory store for isolated consumers and tests;
+`identikey-server` always attaches `store.pool()` using `with_refresh_pool`.
+Storage failures fail token issuance rather than returning an unsaved session.
+Existing sessions issued before this fix live only in the old process and
+normally require one new login after rollout.
+
 ## Pin
 
 `images.lock` holds the release tag and sha256 digests. Re-pin is a

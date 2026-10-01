@@ -980,7 +980,7 @@ async fn token(
         refresh_token: form.refresh_token,
         response: form.response,
     };
-    match state.provider.token(&req) {
+    match state.provider.token(&req).await {
         Ok(issued) => Json(issued).into_response(),
         Err(err) => token_error(err, used_basic),
     }
@@ -1008,13 +1008,15 @@ async fn userinfo(State(state): State<AppState>, headers: HeaderMap) -> Response
 
 async fn introspect(State(state): State<AppState>, Form(body): Form<TokenBody>) -> Response {
     let token = body.token.unwrap_or_default();
-    Json(state.provider.introspect(&token)).into_response()
+    Json(state.provider.introspect(&token).await).into_response()
 }
 
 async fn revoke(State(state): State<AppState>, Form(body): Form<TokenBody>) -> Response {
     let token = body.token.unwrap_or_default();
-    let _ = state.provider.revoke(&token);
-    StatusCode::OK.into_response()
+    match state.provider.revoke(&token).await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(err) => token_error(err, false),
+    }
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
@@ -1026,6 +1028,8 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
 fn token_error(err: OidcError, used_basic: bool) -> Response {
     let status = if err.error == "invalid_client" {
         StatusCode::UNAUTHORIZED
+    } else if err.error == "server_error" {
+        StatusCode::INTERNAL_SERVER_ERROR
     } else {
         StatusCode::BAD_REQUEST
     };
@@ -1195,7 +1199,7 @@ async fn main() -> Result<(), BoxError> {
 
     let issuer =
         std::env::var("IDENTIKEY_ISSUER").unwrap_or_else(|_| format!("http://{DEFAULT_BIND}"));
-    let provider = Provider::new(issuer, signing, salt);
+    let provider = Provider::new(issuer, signing, salt).with_refresh_pool(store.pool().clone());
     if let Some(client) = optional_client()? {
         tracing::info!(
             client_id = %client.id,
