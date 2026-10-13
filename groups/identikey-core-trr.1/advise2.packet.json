@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-guild-keyspaces-advise4",
+  "node_id": "identikey-core-trr.1",
+  "capability": "guild-keyspaces",
+  "change_id": "add-guild-keyspaces",
+  "requester": {
+    "id": "agt-grok-4-6",
+    "kind": "model",
+    "harness": "grok",
+    "interface": "grok-4.6",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-grok-4-6" }
+  },
+  "assignee": {
+    "id": "agt-fable-5-1",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-fable-5-1" }
+  },
+  "goal": "Re-advise add-guild-keyspaces after the author amended against your 2026-09-11 send-back. Write openspec/changes/add-guild-keyspaces/reviews/2026-09-11-advise-2.md in /Users/dukejones/work/IdentiKey/identikey-core. First three lines after the title MUST be > **ADVISE:** accept OR > **ADVISE:** send-back then > **READER:** fable-5.1-arch-review then > **SPAWN:** <parent of SPAWN_PROMPT_FILE>. Verdict is accept or send-back only. Do not write accept-with-nits. Do not implement. Do not fold.",
+  "non_goals": [
+    "Implement add-keyspace-runtime",
+    "Fold the change"
+  ],
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-guild-keyspaces/proposal.md",
+      "invariant": "Why: consume identikey-keyspace-v1; do not Elect-rewrite join; no radio SHALLs in this crate"
+    },
+    {
+      "symbol": "openspec/specs/managed-custody/spec.md",
+      "invariant": "managed-custody is not modified"
+    },
+    {
+      "symbol": "/Users/dukejones/work/IdentiKey/identikey-protocol/docs/standards/identikey-keyspace-v1.md",
+      "invariant": "Wire already exists; do not fork kinds, genesis id, admin field, or epoch merge"
+    },
+    {
+      "symbol": "crates/identikey-keys/src/privilege.rs:118",
+      "invariant": "c2_native takes PublicKeysProvider; production signup uses PrivateKeyBase::new()"
+    },
+    {
+      "symbol": "crates/identikey-server/src/main.rs:406",
+      "invariant": "signup constructs user PrivateKeyBase, persists only identikey blob"
+    },
+    {
+      "symbol": "crates/identikey-keys/src/privilege.rs:22",
+      "invariant": "IDENTIKEY_C2_PRIVILEGES is Sign+Auth"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "python3 -c \"from pathlib import Path; p=Path('/Users/dukejones/work/IdentiKey/identikey-core/openspec/changes/add-guild-keyspaces/reviews/2026-09-11-advise-2.md'); t=p.read_text(); assert '> **ADVISE:** accept' in t or '> **ADVISE:** send-back' in t; assert '> **READER:** fable-5.1-arch-review' in t; assert '> **SPAWN:**' in t; print('ok')\"",
+    "criteria": [
+      "reviews/2026-09-11-advise-2.md exists",
+      "ADVISE is accept or send-back",
+      "READER is fable-5.1-arch-review"
+    ]
+  },
+  "out_of_scope": [
+    { "item": "Runtime apply/wrap/rotate", "tracked_as": "add-keyspace-runtime" },
+    { "item": "Access-node wrap-on-login", "tracked_as": "identikey-core-trr.2" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-guild-keyspaces/reviews/",
+      "openspec/changes/add-guild-keyspaces/tasks.md"
+    ],
+    "do_not": ["deploy", "push", "fold"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "skill-host",
+  "role": "reader",
+  "inherited": [
+    "Repo root: /Users/dukejones/work/IdentiKey/identikey-core. Write the review there.",
+    "Blind pass: (1) Why plus living specs plus cited code. (2) 10-line independent take: pin, refuse, one tradeoff. (3) THEN open design.md, tasks.md, specs/guild-keyspaces/spec.md, docs/ARCHITECTURE.md ADR-012, and add-keyspace-runtime/design.md. Steelman against your take.",
+    "Do not open design.md or ADR-012 until after the independent take.",
+    "Send-back adds owed boxes on tasks.md. Accept unblocks fold of this architecture node. Do not flip the banner.",
+    "Prior reviews: 2026-09-01-advise.md, advise2.md, 2026-09-11-advise.md. You are a fresh gating reader of HEAD after 1770682."
+  ]
+}

@@ -42,9 +42,12 @@ Thumbs.db
 .omc
 .omx/
 .spawns/
-groups/
 
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
 .beads-credential-key
+
+# Intention scratch (conductor isolate, spawn stage, harness session)
+.worktrees/
+groups/*/inventory.json

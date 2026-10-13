@@ -1,0 +1,119 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-client-sector-pin-advise2",
+  "node_id": "identikey-core-2zj.1",
+  "capability": "oidc-provider",
+  "change_id": "add-client-sector-pin",
+  "requester": {
+    "id": "agt-opus-5-5",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "claude-opus-5-5",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "agt-opus-5-5"
+    }
+  },
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "astra-arch-review"
+    }
+  },
+  "goal": "Advise add-client-sector-pin. Write openspec/changes/add-client-sector-pin/reviews/2026-09-29-advise-2.md in /Users/dukejones/work/IdentiKey/identikey-core. First three lines after the title MUST be > **ADVISE:** accept OR > **ADVISE:** send-back, then > **READER:** astra-arch-review, then > **SPAWN:** <parent of SPAWN_PROMPT_FILE>. Verdict is accept or send-back only. Do not write accept-with-nits. Do not implement. Do not fold. On send-back, add owed '- [ ]' boxes to tasks.md. This is a fresh re-advise after the author amended the contract for send-back R1/R2 (commit 576edfe). On accept, check the '- [ ] Fresh advise after preparation' box in tasks.md and name the reviewed commit.",
+  "non_goals": [
+    "Implement the change",
+    "Fold the change",
+    "Design the Postgres registry (identikey-core-2zj.2)",
+    "Owner-signed records (2zj.3)",
+    "Dynamic registration (2zj.4)"
+  ],
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-client-sector-pin/proposal.md",
+      "invariant": "Why: pairwise sector is the first redirect's host; editing redirects silently re-mints pairwise subs"
+    },
+    {
+      "symbol": "openspec/specs/oidc-provider/spec.md",
+      "invariant": "One seam computes every token subject: pairwise = KDF(salt, xid, sector); public = base58btc XID"
+    },
+    {
+      "symbol": "crates/identikey-server/src/main.rs:1052",
+      "invariant": "sector_from_redirect derives the sector from a redirect host"
+    },
+    {
+      "symbol": "crates/identikey-server/src/main.rs:1059",
+      "invariant": "client_from_spec uses redirects.first() as the sector source"
+    },
+    {
+      "symbol": "crates/identikey-server/src/main.rs:1130",
+      "invariant": "extra_clients parses IDENTIKEY_CLIENTS"
+    },
+    {
+      "symbol": "crates/identikey-server/src/main.rs:1112",
+      "invariant": "optional_client builds the primary client from IDENTIKEY_CLIENT_* env"
+    },
+    {
+      "symbol": "crates/identikey-oidc/src/subject.rs:74",
+      "invariant": "Client.sector_identifier already exists"
+    },
+    {
+      "symbol": "docs/ARCHITECTURE.md:686",
+      "invariant": "sub_rp = KDF(salt, XID, sector_identifier)"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "python3 -c \"from pathlib import Path; t=Path('/Users/dukejones/work/IdentiKey/identikey-core/openspec/changes/add-client-sector-pin/reviews/2026-09-29-advise-2.md').read_text(); assert '> **ADVISE:** accept' in t or '> **ADVISE:** send-back' in t; assert '> **READER:** astra-arch-review' in t; assert '> **SPAWN:**' in t; print('ok')\"",
+    "criteria": [
+      "openspec/changes/add-client-sector-pin/reviews/2026-09-29-advise-2.md exists",
+      "ADVISE is accept or send-back",
+      "READER is astra-arch-review"
+    ]
+  },
+  "out_of_scope": [
+    {
+      "item": "Postgres client registry",
+      "tracked_as": "identikey-core-2zj.2"
+    },
+    {
+      "item": "Owner-signed client records",
+      "tracked_as": "identikey-core-2zj.3"
+    },
+    {
+      "item": "RFC 7591/7592 registration",
+      "tracked_as": "identikey-core-2zj.4"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-client-sector-pin/reviews/",
+      "openspec/changes/add-client-sector-pin/tasks.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "edit source files",
+      "touch the uncommitted add-passkey-legibility worktree changes"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "change",
+  "density": "lean",
+  "surface": "skill-host",
+  "role": "reader",
+  "inherited": [
+    "Repo root: /Users/dukejones/work/IdentiKey/identikey-core. The worktree has uncommitted changes from a separate add-passkey-legibility act; read them if useful, never edit them.",
+    "Blind pass: proposal.md Why + living spec + cited code, then write a 10-line independent take (what you would pin, refuse, one tradeoff) at the top of the review body, THEN open design.md, tasks.md, specs/oidc-provider/spec.md, steer.md and compare. Steelman against your take.",
+    "Live pairwise clients (per CLAUDE.md): primary IDENTIKEY_CLIENT_ID=taskmaster, taskmaster-laptop, Conduit 'localhost', wtnf-web. Public: ml-control-plane, mjolnir-cli, mjolnir-term.",
+    "The key risk to judge: any path where a deployed binary computes a different pairwise sub for an existing person than today. Also judge the boot-refusal blast radius (a missing sector takes down login for every RP).",
+    "Send-back adds owed boxes. Accept unblocks act. Do not flip the banner.",
+    "Prior review: reviews/2026-09-29-advise.md (send-back R1 high, R2 medium). Judge whether the amended design.md, tasks.md, and spec delta at HEAD 576edfe fully answer R1 and R2, and whether the amendment introduced new risk. Still do the blind take first from proposal Why + living spec + code, then read the prior review, then the amended files."
+  ]
+}

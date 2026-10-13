@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-guild-keyspaces-adr",
+  "node_id": "identikey-core-trr.1",
+  "capability": "guild-keyspaces",
+  "change_id": "add-guild-keyspaces",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "agt-sonnet-5",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "sonnet-5",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-sonnet-5" }
+  },
+  "goal": "docs/ARCHITECTURE.md contains ADR-012: identikey-keys is a replica/cache of identikey-keyspace-v1; product word guild; wrap-target is latest PUK; IdentiKey Sign+Auth is not a wrap-target; Postgres is not the home. Repo root is /Users/dukejones/work/IdentiKey/identikey-core. Edit files there. Spawn cwd is scratch.",
+  "non_goals": [
+    "Implement keyspace.* apply/wrap/rotate (add-keyspace-runtime)",
+    "Fold living guild-keyspaces spec",
+    "Access-node wrap-on-login (identikey-core-trr.2)",
+    "Radio SSID or Lightning Admin verbs"
+  ],
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-guild-keyspaces/design.md",
+      "invariant": "Cite identikey-keyspace-v1; do not fork kinds, genesis id, admin field, or epoch conflict"
+    },
+    {
+      "symbol": "openspec/changes/add-guild-keyspaces/specs/guild-keyspaces/spec.md",
+      "invariant": "Join does not Elect; wrap-target is latest PUK; Sign+Auth off roster; fade is administering not remaining wraps"
+    },
+    {
+      "symbol": "openspec/changes/add-guild-keyspaces/reviews/2026-09-01-advise2.md",
+      "invariant": "accept-with-nits: no eighth kind, no keyspace.rewrap, nest admin is outer roster, no guardian request-to-bytes API"
+    },
+    {
+      "symbol": "/Users/dukejones/work/IdentiKey/identikey-protocol/docs/standards/identikey-keyspace-v1.md",
+      "invariant": "Wire is protocol §3 id, §4.1 kinds, §5 actor vs wrap-target, §6.1 admin, §8 epoch, §9 bodies, §10 profiles"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "python3 -c \"from pathlib import Path; p=Path('/Users/dukejones/work/IdentiKey/identikey-core/docs/ARCHITECTURE.md').read_text(); assert '## ADR-012' in p; assert 'identikey-keyspace-v1' in p; assert 'keyspace.rewrap' not in p; assert 'guild.*' not in p; i=p.index('## ADR-012'); chunk=p[i:i+8000]; assert 'PUK' in chunk; assert 'Sign' in chunk; assert 'Postgres' in chunk; assert 'house' in chunk and 'access-node' in chunk; print('ok')\"",
+    "criteria": [
+      "ADR-012 heading exists in docs/ARCHITECTURE.md",
+      "Cites identikey-keyspace-v1",
+      "No keyspace.rewrap kind and no guild.* kinds",
+      "Names PUK wrap-target, Sign not on roster, Postgres as cache, house and access-node profiles"
+    ]
+  },
+  "out_of_scope": [
+    { "item": "Runtime wrap/join/leave/rotate", "tracked_as": "add-keyspace-runtime" },
+    { "item": "Access-node wrap-on-login", "tracked_as": "identikey-core-trr.2" },
+    { "item": "Fleet client SSID", "tracked_as": "client-network-name" },
+    { "item": "Lightning Admin SSID knob", "tracked_as": "mjolnir-mesh-st1.3" },
+    { "item": "Lightning Admin v2 verbs", "tracked_as": "add-lightning-admin-guild" },
+    { "item": "Wallet keyspace-membership assertion", "tracked_as": "none" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "docs/ARCHITECTURE.md"
+    ],
+    "do_not": ["deploy", "push", "fold"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "explicit",
+  "surface": "skill-host",
+  "role": "worker",
+  "inherited": [
+    "Repo root: /Users/dukejones/work/IdentiKey/identikey-core. Write ADR-012 there. Do not write into .spawns/.",
+    "Match existing ADR voice in docs/ARCHITECTURE.md: Context / Decision / Rationale / Consequences. Insert ADR-012 after ADR-011 and before Open questions.",
+    "Cite protocol sections; do not restate kinds, genesis id, admin field, or epoch-merge rules.",
+    "Nest authorization is protocol §6.1 (outer admin). Wrap-list change is keyspace.epoch-begin then epoch-commit.",
+    "managed-custody living spec is not modified. identikey-oidc must not emit a claim named guilds.",
+    "Bead identikey-core-trr.1 is already in_progress held by Duke Jones; this packet is the worker write under that claim."
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-guild-keyspaces-fold",
+  "node_id": "identikey-core-trr.1",
+  "capability": "guild-keyspaces",
+  "change_id": "add-guild-keyspaces",
+  "requester": {
+    "id": "agt-grok-4-6",
+    "kind": "model",
+    "harness": "grok",
+    "interface": "grok-4.6",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-grok-4-6" }
+  },
+  "assignee": {
+    "id": "agt-opus-5-fold",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-opus-5-fold" }
+  },
+  "goal": "Fold add-guild-keyspaces into living specs and archive it. Repo is /Users/dukejones/work/IdentiKey/identikey-core. Follow plugins/intention/references/fold-steps.md. Create openspec/specs/guild-keyspaces/spec.md from the change deltas. git mv the change to openspec/changes/archive/2026-09-11-add-guild-keyspaces. Append LEARNINGS for surprises (Schnorr+X25519 vs Ed25519; ikp-2l8). Do not implement leftover runtime. Do not fold add-keyspace-runtime. Advise accept is reviews/2026-09-11-advise-3.md with READER fable-5.1-arch-review.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-guild-keyspaces/specs/guild-keyspaces/spec.md",
+      "invariant": "ADDED requirements become the living guild-keyspaces spec"
+    },
+    {
+      "symbol": "openspec/changes/add-guild-keyspaces/proposal.md",
+      "invariant": "ACTIVE BUILD, all owed boxes checked, other-family accept"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "python3 -c \"from pathlib import Path; assert Path('openspec/specs/guild-keyspaces/spec.md').is_file(); assert not Path('openspec/changes/add-guild-keyspaces').is_dir(); assert Path('openspec/changes/archive/2026-09-11-add-guild-keyspaces').is_dir(); t=Path('openspec/specs/guild-keyspaces/spec.md').read_text(); assert 'SHALL' in t; print('ok')\"",
+    "criteria": [
+      "living spec exists",
+      "change dir is archived",
+      "SHALLs live in openspec/specs/"
+    ]
+  },
+  "out_of_scope": [
+    { "item": "Runtime apply path", "tracked_as": "add-keyspace-runtime" },
+    { "item": "Protocol x25519 alg", "tracked_as": "ikp-2l8" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/specs/guild-keyspaces/",
+      "openspec/changes/add-guild-keyspaces/",
+      "openspec/changes/archive/",
+      "docs/LEARNINGS.md"
+    ],
+    "do_not": ["deploy"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "folder"
+}

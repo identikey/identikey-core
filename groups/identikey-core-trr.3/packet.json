@@ -1,0 +1,87 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-keyspace-runtime-act",
+  "node_id": "identikey-core-trr.3",
+  "capability": "guild-keyspaces",
+  "change_id": "add-keyspace-runtime",
+  "requester": {
+    "id": "agt-grok-4-6",
+    "kind": "model",
+    "harness": "grok",
+    "interface": "grok-4.6",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-grok-4-6" }
+  },
+  "assignee": {
+    "id": "agt-opus-5",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-opus-5" }
+  },
+  "goal": "IMPLEMENT Rust for add-keyspace-runtime. Do not write an advise review. Do not add owed advise boxes. Pin identikey-log and apply keyspace ops in identikey-keys. Repo /Users/dukejones/work/IdentiKey/identikey-core. Pin identikey-log git dep at rev 093ceb13148d5fb5267ad309ecdfea15f2637d9e (same repo allow-git as identikey-auth). Type protocol §9 bodies. Apply keyspace.* from verified ops. Refuse Sign as actor and wrap-target. PUK selector on c2_native documents is the X25519 encapsulation half. Do not mint PublicKey.alg x25519; C2 roster join waits on identikey-protocol ikp-2l8 — tests for apply use a synthetic Ed25519 admin actor, not a c2_native row as admin. Optional Postgres cache of roster/epoch/wraps. Concurrent epoch-begin: apply neither until nack or later begin parents exactly one. Check owed boxes in openspec/changes/add-keyspace-runtime/tasks.md. Edit and stop; conductor persists.",
+  "non_goals": [
+    "Fold add-keyspace-runtime",
+    "Mint alg x25519",
+    "Access-node wrap-on-login",
+    "Elect-key export",
+    "Amend identikey-log",
+    "Import recrypt or identikey-storage-auth"
+  ],
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-keyspace-runtime/specs/guild-keyspaces/spec.md",
+      "invariant": "Apply typed bodies; Sign refused; wrap recipient is X25519 encapsulation half; C2 is Wrap.recipient until ikp-2l8"
+    },
+    {
+      "symbol": "docs/ARCHITECTURE.md",
+      "invariant": "ADR-012 mapping; do not wrap to managed_key_blob"
+    },
+    {
+      "symbol": "/Users/dukejones/work/IdentiKey/identikey-protocol/docs/standards/identikey-keyspace-v1.md",
+      "invariant": "Kinds, bodies, admin, epoch conflict; no eighth kind"
+    },
+    {
+      "symbol": "crates/identikey-keys/src/privilege.rs:22",
+      "invariant": "IDENTIKEY_C2_PRIVILEGES Sign+Auth is not actor and not wrap-target"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "cargo test -p identikey-keys --offline -- --nocapture 2>/dev/null; cargo test -p identikey-keys -- --test-threads=1",
+    "criteria": [
+      "Genesis join id equals content_hash",
+      "Sign as Op.actor refused",
+      "Concurrent epoch-begin neither applied",
+      "clippy -D warnings on identikey-keys",
+      "tasks.md boxes checked"
+    ]
+  },
+  "out_of_scope": [
+    { "item": "Protocol x25519 PublicKey.alg", "tracked_as": "ikp-2l8" },
+    { "item": "Access-node wrap-on-login", "tracked_as": "identikey-core-trr.2" },
+    { "item": "Fold living spec", "tracked_as": "fold" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "deny.toml",
+      "crates/identikey-keys/",
+      ".sqlx/",
+      "openspec/changes/add-keyspace-runtime/tasks.md"
+    ],
+    "do_not": ["deploy", "push", "fold"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "worker",
+  "inherited": [
+    "Repo: /Users/dukejones/work/IdentiKey/identikey-core. DATABASE_URL must include a username (not postgres://localhost). PGUSER or user in URL. Do not sqlx migrate identikey-core-test (old Drizzle). Use identikey-core-sqlx for prepare.",
+    "Workspace rust-version 1.85, clippy unwrap_used/expect_used/panic deny.",
+    "identikey-auth git dep already pinned; add identikey-log the same way.",
+    "You are IMPLEMENTING Rust, not advising. Do not write reviews/. Do not add ADVISE owed boxes. Write crates/identikey-keys code and tests. Living spec is already folded at openspec/specs/guild-keyspaces/spec.md (read-only). add-guild-keyspaces is archived."
+  ]
+}

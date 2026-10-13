@@ -1,0 +1,136 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-client-sector-pin-act-2",
+  "node_id": "identikey-core-2zj.1",
+  "capability": "oidc-provider",
+  "role": "worker",
+  "surface": "packet-only",
+  "requester": {
+    "id": "agt-opus-5-5",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "claude-opus-5-5",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "agt-opus-5-5"
+    }
+  },
+  "assignee": {
+    "id": "sol-implement",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "effort": "medium",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "sol-implement"
+    }
+  },
+  "goal": "You are the IMPLEMENTER, not a reviewer; write product code and tests. Implement the ACTIVE BUILD change add-client-sector-pin in /Users/dukejones/work/IdentiKey/identikey-core, accepted by astra-arch-review at 576edfe (reviews/2026-09-29-advise-2.md). Make a pairwise client's sector registered configuration (IDENTIKEY_CLIENTS 'sector', IDENTIKEY_CLIENT_SECTOR for the primary client), passed verbatim to the subject KDF, never derived from redirects at boot or request time; refuse boot for a pairwise client with a missing/empty sector naming the client; add `identikey-server check-clients` preflight with an exact `legacy_sector` reproduction; and the legacy-vs-pinned equality tests. Edit only constraints.paths. Check off the implementation boxes you complete in tasks.md (NOT the ASK rollout box).",
+  "non_goals": [
+    "Live rollout or escrow edits",
+    "Postgres client registry (identikey-core-2zj.2)",
+    "Owner-signed records (2zj.3)",
+    "Dynamic registration (2zj.4)",
+    "Changing the salt, XID encoding, subject-type defaults, or the KDF in identikey-oidc"
+  ],
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-client-sector-pin/design.md",
+      "invariant": "Shape, Legacy semantics, Preflight sections are the contract"
+    },
+    {
+      "symbol": "openspec/changes/add-client-sector-pin/specs/oidc-provider/spec.md",
+      "invariant": "Two ADDED requirements with scenarios"
+    },
+    {
+      "symbol": "openspec/changes/add-client-sector-pin/tasks.md",
+      "invariant": "Implementation boxes 1-6 are this act's owed work"
+    },
+    {
+      "symbol": "openspec/changes/add-client-sector-pin/reviews/2026-09-29-advise-2.md",
+      "invariant": "Operational boundary: check-clients is a migration comparison, isolated from boot/request; needs no DB, network, or salt"
+    },
+    {
+      "symbol": "crates/identikey-server/src/main.rs:1033",
+      "invariant": "sector_from_redirect: Url::parse(..).host_str(), else literal \"default\""
+    },
+    {
+      "symbol": "crates/identikey-server/src/main.rs:1040",
+      "invariant": "client_from_spec currently derives sector from redirects.first()"
+    },
+    {
+      "symbol": "crates/identikey-server/src/main.rs:1080",
+      "invariant": "merge_redirects: singular redirect first if non-empty, then redirects in order, skipping empty and duplicates"
+    },
+    {
+      "symbol": "crates/identikey-server/src/main.rs:1093",
+      "invariant": "optional_client: primary client from IDENTIKEY_CLIENT_* env"
+    },
+    {
+      "symbol": "crates/identikey-server/src/main.rs:1111",
+      "invariant": "extra_clients: IDENTIKEY_CLIENTS JSON"
+    },
+    {
+      "symbol": "crates/identikey-server/src/main.rs:1181",
+      "invariant": "main: add a check-clients argv branch before any store/port/salt/webauthn setup"
+    },
+    {
+      "symbol": "crates/identikey-oidc/src/subject.rs:151",
+      "invariant": "subject(salt, xid, client) is the single seam; unchanged"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "cargo test -p identikey-server --locked && cargo test -p identikey-oidc --locked && cargo clippy -p identikey-server --locked -- -D warnings",
+    "criteria": [
+      "Pairwise client without sector (missing or empty) fails construction with an error naming the client id, via both primary env and JSON",
+      "Public client without sector builds; its sub equals the base58btc XID",
+      "Sector is passed verbatim (no trim/case/URL normalization)",
+      "No boot/request-path code calls legacy_sector or sector_from_redirect",
+      "legacy_sector reproduces merge precedence, Url host extraction incl. case normalization, and the literal default fallback",
+      "check-clients prints id, source, subject type, pin, legacy, match per client, never secrets, exits non-zero on loader refusal or any pairwise mismatch; needs no salt/DB/network",
+      "Tests compare legacy-derived sub vs pinned sub with a fixed salt+XID across: primary and JSON; omitted and explicit pairwise; singular-vs-plural precedence; host case; hostless/unparseable redirect -> default; redirect add/reorder/replace/remove; sanitized fixtures of taskmaster (https://taskmaster.dev/auth/callback), taskmaster-laptop (http://127.0.0.1:5173/auth/callback), Conduit localhost (http://127.0.0.1:8008/_matrix/client/v3/login/identikey/callback plus http://localhost:8008/...), wtnf-web (redirect https://worldtree.network/admin/callback/, redirects [http://127.0.0.1:5173/admin/callback/], auth none)",
+      ".env.example, CLAUDE.md client examples, and docs/oidc/README.md show sector and check-clients"
+    ]
+  },
+  "out_of_scope": [
+    {
+      "item": "Live escrow backfill and deploy",
+      "tracked_as": "add-client-sector-pin tasks.md ASK box (human)"
+    },
+    {
+      "item": "Postgres registry",
+      "tracked_as": "identikey-core-2zj.2"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "crates/identikey-server/src/main.rs",
+      "crates/identikey-server/src/clients.rs",
+      ".env.example",
+      "CLAUDE.md",
+      "docs/oidc/README.md",
+      "openspec/changes/add-client-sector-pin/tasks.md"
+    ],
+    "do_not": [
+      "push",
+      "deploy",
+      "edit living specs or other change files",
+      "touch untracked files not in paths (they belong to a parked add-passkey-legibility act)",
+      "change git refs or the index",
+      "add dependencies"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "change",
+  "density": "lean",
+  "inherited": [
+    "Repo root: /Users/dukejones/work/IdentiKey/identikey-core, branch main, HEAD 9364557. Tracked tree is clean; untracked passkey files exist and are not yours.",
+    "You may move client parsing (ClientJson, client_from_spec, merge_redirects, optional_client, extra_clients, legacy_sector, check-clients) into a new crates/identikey-server/src/clients.rs module; keep main.rs wiring minimal.",
+    "CLI style: `identikey-server check-clients` as argv[1]; exit code 0 on all-match, non-zero otherwise.",
+    "Run the acceptance command; report exact failures if any.",
+    "Workers edit files only; the conductor persists."
+  ]
+}

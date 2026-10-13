@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-guild-keyspaces-advise3",
+  "node_id": "identikey-core-trr.1",
+  "capability": "guild-keyspaces",
+  "change_id": "add-guild-keyspaces",
+  "requester": {
+    "id": "agt-grok-4-6",
+    "kind": "model",
+    "harness": "grok",
+    "interface": "grok-4.6",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-grok-4-6" }
+  },
+  "assignee": {
+    "id": "agt-fable-5-1",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-fable-5-1" }
+  },
+  "goal": "Other-family architecture read of add-guild-keyspaces. Author family is grok. Write openspec/changes/add-guild-keyspaces/reviews/2026-09-11-advise.md in the repo /Users/dukejones/work/IdentiKey/identikey-core. First three lines after the title MUST be: > **ADVISE:** accept   OR   > **ADVISE:** send-back then > **READER:** fable-5.1-arch-review then > **SPAWN:** <parent of SPAWN_PROMPT_FILE>. Verdict is accept or send-back only. Do not write accept-with-nits. Do not implement. Do not fold. Do not edit design.md.",
+  "non_goals": [
+    "Implement add-keyspace-runtime",
+    "Fold the change",
+    "Amend ADR-012 prose unless send-back adds an owed box on tasks.md"
+  ],
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-guild-keyspaces/proposal.md",
+      "invariant": "Why: consume identikey-keyspace-v1; do not Elect-rewrite join; no radio SHALLs in this crate"
+    },
+    {
+      "symbol": "openspec/specs/managed-custody/spec.md",
+      "invariant": "managed-custody is not modified by this change"
+    },
+    {
+      "symbol": "/Users/dukejones/work/IdentiKey/identikey-protocol/docs/standards/identikey-keyspace-v1.md",
+      "invariant": "Wire already exists; this crate must not fork kinds, genesis id, admin field, or epoch merge"
+    },
+    {
+      "symbol": "crates/identikey-keys/src/privilege.rs:22",
+      "invariant": "IDENTIKEY_C2_PRIVILEGES is Sign+Auth; that public is not a wrap-target and not a keyspace admin"
+    },
+    {
+      "symbol": "crates/identikey-keys/src/store.rs:487",
+      "invariant": "revoke_device does not edit a PTK wrap-list"
+    },
+    {
+      "symbol": "crates/identikey-oidc/src/signing.rs:112",
+      "invariant": "ID token claims are issuer/subject/audience/iat; no guilds claim"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "python3 -c \"from pathlib import Path; p=Path('/Users/dukejones/work/IdentiKey/identikey-core/openspec/changes/add-guild-keyspaces/reviews/2026-09-11-advise.md'); t=p.read_text(); assert '> **ADVISE:** accept' in t or '> **ADVISE:** send-back' in t; assert '> **READER:** fable-5.1-arch-review' in t; assert '> **SPAWN:**' in t; print('ok')\"",
+    "criteria": [
+      "reviews/2026-09-11-advise.md exists",
+      "ADVISE is accept or send-back",
+      "READER is fable-5.1-arch-review",
+      "SPAWN names the spawn directory"
+    ]
+  },
+  "out_of_scope": [
+    { "item": "Runtime apply/wrap/rotate", "tracked_as": "add-keyspace-runtime" },
+    { "item": "Access-node wrap-on-login", "tracked_as": "identikey-core-trr.2" },
+    { "item": "Radio SSID / Lightning Admin", "tracked_as": "mjolnir-mesh-st1.3" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-guild-keyspaces/reviews/",
+      "openspec/changes/add-guild-keyspaces/tasks.md"
+    ],
+    "do_not": ["deploy", "push", "fold"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "skill-host",
+  "role": "reader",
+  "inherited": [
+    "Repo root: /Users/dukejones/work/IdentiKey/identikey-core. Write the review there, not in .spawns/.",
+    "Blind pass order: (1) Why in proposal.md plus living specs plus cited code. (2) Write a 10-line independent take: what you would pin, what you would refuse, one tradeoff. (3) THEN open design.md, tasks.md, specs/guild-keyspaces/spec.md, and docs/ARCHITECTURE.md ADR-012. Steelman against your take. Concerns the author must have answered, not a competing design.",
+    "Do not open design.md or tasks.md until after the independent take.",
+    "Send-back: add owed boxes on tasks.md. Accept: no new boxes required. Do not flip the ACTIVE BUILD banner.",
+    "guild-keyspaces is not yet in openspec/specs/; the living capability is still being ADDED by this change.",
+    "Prior same-family reviews exist (2026-09-01-advise.md send-back, advise2.md). They do not count. You are the gating reader."
+  ]
+}

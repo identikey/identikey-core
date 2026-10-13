@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "id": "res-add-guild-keyspaces-adr",
+  "packet_id": "pkt-add-guild-keyspaces-adr",
+  "signer": {
+    "id": "agt-grok-4-6",
+    "kind": "model",
+    "harness": "grok",
+    "interface": "grok-4.6",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "agt-grok-4-6"
+    }
+  },
+  "topology": "solo",
+  "artifacts": [
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "role": "edit"
+    },
+    {
+      "path": "openspec/changes/add-guild-keyspaces/tasks.md",
+      "role": "edit"
+    }
+  ],
+  "evidence": {
+    "kind": "command",
+    "command": "python3 -c \"from pathlib import Path; p=Path('/Users/dukejones/work/IdentiKey/identikey-core/docs/ARCHITECTURE.md').read_text(); assert '## ADR-012' in p; assert 'identikey-keyspace-v1' in p; assert 'keyspace.rewrap' not in p; assert 'guild.*' not in p; i=p.index('## ADR-012'); chunk=p[i:i+8000]; assert 'PUK' in chunk; assert 'Sign' in chunk; assert 'Postgres' in chunk; assert 'house' in chunk and 'access-node' in chunk; print('ok')\"",
+    "exit_code": 0,
+    "output_tail": "ok"
+  },
+  "disposition": "pass",
+  "promoted": false,
+  "commit": {
+    "sha": "323ba21",
+    "paths": [
+      "docs/ARCHITECTURE.md",
+      "openspec/changes/add-guild-keyspaces/tasks.md"
+    ]
+  },
+  "summary": "ADR-012 landed: guilds are identikey-keyspace-v1 keyspaces; identikey-keys is a replica/cache. Wrap-target is latest PUK; Sign+Auth stays off the roster. Runtime remains add-keyspace-runtime.",
+  "raw_ref": "groups/identikey-core-trr.1/result.json",
+  "distilled": {
+    "disposition": "pass",
+    "summary": "ADR-012 landed: guilds are identikey-keyspace-v1 keyspaces; identikey-keys is a replica/cache.",
+    "verify_command": "python3 -c \"from pathlib import Path; p=Path('/Users/dukejones/work/IdentiKey/identikey-core/docs/ARCHITECTURE.md').read_text(); assert '## ADR-012' in p; print('ok')\"",
+    "verify_exit": 0,
+    "commit_sha": "323ba21",
+    "changed_files": [
+      "docs/ARCHITECTURE.md",
+      "openspec/changes/add-guild-keyspaces/tasks.md"
+    ],
+    "blockers": [],
+    "raw_ref": "groups/identikey-core-trr.1/result.json"
+  },
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "agt-grok-4-6",
+    "content_hash": "sha256:251c52f9ef685e113c2ac751c9027ce90e182cb238d9307ac06382341882696d",
+    "signed_at": "2026-09-01T09:36:43Z"
+  }
+}
