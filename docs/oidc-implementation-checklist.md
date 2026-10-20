@@ -14,7 +14,7 @@ code (RFC 8628) is implemented for clients that list that grant.
 | Authorization code | RFC 6749 §4.1 | `response_type=code` only |
 | PKCE `S256` | RFC 7636, RFC 9700 §2.1.1 | Required for every client. `plain` refused |
 | Refresh token | RFC 6749 §6, RFC 9700 §2.2.2 | Public clients: rotate on use (`add-refresh-lifecycle`) |
-| Device authorization | RFC 8628 | Opt-in per client. Passkey assertion bound to that pending row, plus an explicit confirm. User code is not enough |
+| Device authorization | RFC 8628 | Opt-in per client. The page names the client and the code. A passkey assertion bound to that pending row approves it. User code is not enough |
 | Bearer usage | RFC 6750 | Header only. No query-parameter access tokens |
 | Discovery | RFC 8414 + OIDC Discovery 1.0 | `/.well-known/openid-configuration` |
 | JWKS | OIDC Discovery `jwks_uri` | Signing key only. EdDSA / Ed25519 |

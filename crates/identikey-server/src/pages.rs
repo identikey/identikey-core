@@ -202,25 +202,22 @@ fn render_passkey(passkey: &AccountPasskey) -> String {
 pub struct DeviceConfirm {
     pub user_code: String,
     pub display_name: String,
-    pub created_unix: u64,
-    pub public_subject: bool,
 }
 
 /// `GET /device`. A missing or rejected code is the type-in form.
-/// A prefilled code still requires the checkbox. Nothing on this page approves by itself.
+/// A prefilled code shows the client and the code. The passkey approves it.
 #[must_use]
 pub fn device_confirm(confirm: Option<&DeviceConfirm>, rejected: bool) -> String {
     let form = match confirm {
         None => {
             let notice = if rejected {
-                "<p id=\"reject\" class=\"status\">That code is not valid. Check the terminal and try again.</p>"
+                "<p id=\"reject\" class=\"status\">That code is not valid.</p>"
             } else {
                 ""
             };
             format!(
                 "{notice}\
-                 <h1>Approve a sign-in</h1>\
-                 <p>Enter the code from the program that asked you to sign in.</p>\
+                 <h1>Sign in</h1>\
                  <form method=\"get\" action=\"/device\">\
                  <label for=\"user_code\">Code</label>\
                  <input id=\"user_code\" name=\"user_code\" autocomplete=\"one-time-code\" required/>\
@@ -231,12 +228,6 @@ pub fn device_confirm(confirm: Option<&DeviceConfirm>, rejected: bool) -> String
         Some(confirm) => {
             let name = html_escape(&confirm.display_name);
             let code = html_escape(&confirm.user_code);
-            let when = html_escape(&format_unix_utc(confirm.created_unix));
-            let public = if confirm.public_subject {
-                "<p>This application receives your account identifier, the base58btc XID, as its subject.</p>"
-            } else {
-                ""
-            };
             let payload = json_for_script(
                 &serde_json::json!({
                     "user_code": confirm.user_code,
@@ -244,47 +235,18 @@ pub fn device_confirm(confirm: Option<&DeviceConfirm>, rejected: bool) -> String
                 .to_string(),
             );
             format!(
-                "<h1>Approve a sign-in</h1>\
-                 <p><strong>{name}</strong> asked to sign in.</p>\
-                 <p>Did you just start this login on another machine?</p>\
-                 <p>The code is <code>{code}</code>. It must match the code in your terminal.</p>\
-                 <p>Requested <time id=\"requested\">{when}</time>.</p>\
-                 {public}\
+                "<h1>Sign in to {name}</h1>\
+                 <p class=\"device-code\"><code>{code}</code></p>\
                  {STATUS_PANEL}\
-                 <label class=\"confirm\"><input type=\"checkbox\" id=\"confirm\"/> I started this login and I want {name} to receive this account.</label>\
-                 <button type=\"button\" id=\"go\" disabled>Approve with passkey</button>\
-                 <button type=\"button\" id=\"deny\" class=\"action\">This was not me</button>\
+                 <button type=\"button\" id=\"go\">Approve</button>\
+                 <button type=\"button\" id=\"deny\" class=\"action\">Cancel</button>\
                  {TECHNICAL_DETAILS}\
                  <script type=\"application/json\" id=\"device\">{payload}</script>\
                  <script>{COMMON_JS}\n{DEVICE_JS}</script>"
             )
         }
     };
-    shell(
-        "Approve a sign-in — IdentiKey",
-        &format!("{LOCAL_NOTICE}{form}"),
-    )
-}
-
-fn format_unix_utc(secs: u64) -> String {
-    let days = (secs / 86_400) as i64;
-    let tod = secs % 86_400;
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let mut y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    if m <= 2 {
-        y += 1;
-    }
-    let h = tod / 3600;
-    let min = (tod % 3600) / 60;
-    let s = tod % 60;
-    format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}:{s:02} UTC")
+    shell("Sign in — IdentiKey", &format!("{LOCAL_NOTICE}{form}"))
 }
 
 #[cfg(test)]
@@ -292,27 +254,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn device_page_requires_a_checkbox_and_does_not_approve_itself() {
+    fn device_page_names_the_client_and_the_code() {
         let html = device_confirm(
             Some(&DeviceConfirm {
                 user_code: "ABCD-EFGH".into(),
                 display_name: "Mjolnir CLI".into(),
-                created_unix: 0,
-                public_subject: true,
             }),
             false,
         );
-        assert!(html.contains("id=\"confirm\""));
-        assert!(html.contains("disabled"));
-        assert!(html.contains("Mjolnir CLI"));
-        assert!(html.contains("Did you just start this login"));
-        assert!(html.contains("base58btc XID"));
+        assert!(html.contains("Sign in to Mjolnir CLI"));
         assert!(html.contains("ABCD-EFGH"));
-        assert!(html.contains("1970-01-01 00:00:00 UTC"));
-        assert!(!html.contains("autofocus"));
+        assert!(html.contains(">Approve</button>"));
+        assert!(!html.contains("checkbox"));
+        assert!(!html.contains("must match"));
+        assert!(!html.contains("base58btc"));
+        assert!(!html.contains("Signed in"));
         let rejected = device_confirm(None, true);
-        assert!(rejected.contains("That code is not valid"));
-        assert!(!rejected.contains("id=\"confirm\""));
+        assert!(rejected.contains("That code is not valid."));
+        assert!(!rejected.contains(">Approve</button>"));
     }
 
     #[test]

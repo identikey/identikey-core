@@ -121,8 +121,8 @@ token response as the authorization-code grant, once. A client without
 
 - GIVEN a pending device code whose user code was prefilled
 - WHEN the verification page is shown
-- THEN it names the client and requires a confirmation control that is
-  not already selected
+- THEN it names the client and shows the code, and the row stays pending
+  until the person approves with a passkey
 
 ### Requirement: Authorization code with PKCE
 

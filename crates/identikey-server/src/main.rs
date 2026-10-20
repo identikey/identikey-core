@@ -38,12 +38,12 @@ use identikey_keys::{
     CustodyRung, KeysStore, ManagedKeyring, OperationalEd25519, Xid, c2_native,
     operational_ed25519_public,
 };
-#[cfg(test)]
-use identikey_oidc::TokenEndpointAuthMethod;
 use identikey_oidc::{
-    AuthorizeError, AuthorizeQuery, OidcError, PairwiseSalt, Provider, SigningKey, SubjectType,
-    TokenRequest, parse_http_basic,
+    AuthorizeError, AuthorizeQuery, OidcError, PairwiseSalt, Provider, SigningKey, TokenRequest,
+    parse_http_basic,
 };
+#[cfg(test)]
+use identikey_oidc::{SubjectType, TokenEndpointAuthMethod};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
@@ -1131,8 +1131,6 @@ async fn device_page(
         Some(&pages::DeviceConfirm {
             user_code,
             display_name: client.display_name,
-            created_unix: prompt.created_unix,
-            public_subject: client.subject_type == SubjectType::Public,
         }),
         false,
     ))
@@ -3135,10 +3133,10 @@ mod tests {
                 .to_vec(),
         )
         .unwrap();
-        assert!(html.contains("id=\"confirm\""));
-        assert!(html.contains("disabled"));
-        assert!(html.contains("Mjolnir CLI"));
-        assert!(html.contains("base58btc XID"));
+        assert!(html.contains("Sign in to Mjolnir CLI"));
+        assert!(html.contains(&user_code));
+        assert!(html.contains(">Approve</button>"));
+        assert!(!html.contains("checkbox"));
 
         let pending = app
             .clone()

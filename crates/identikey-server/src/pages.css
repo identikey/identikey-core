@@ -149,6 +149,21 @@ li + li {
 .facts dd {
   margin: 0.15rem 0 0;
 }
+.device-code {
+  margin: 0.25rem 0 1.25rem;
+  text-align: center;
+}
+.device-code code {
+  display: block;
+  color: #e7ecf1;
+  font:
+    600 1.75rem/1.2 ui-monospace,
+    monospace;
+  letter-spacing: 0.08em;
+}
+#deny {
+  margin-top: 0.75rem;
+}
 .facts code {
   display: block;
   overflow-wrap: anywhere;
