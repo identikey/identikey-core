@@ -1,6 +1,6 @@
 # add-managed-session-bind
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 Bead `mjolnir-22ff.3.2`. Steer 2026-10-19. Parent ceremony is the folded C2 responder (`add-managed-challenge-responder`).
 
