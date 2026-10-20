@@ -91,10 +91,10 @@ pub use consent::{
 };
 pub use keyspace::{ApplyError, CachedRosterEntry, CachedWrap, KeyspaceReplica, ReplicaSnapshot};
 pub use managed_challenge::{
-    A3Authorization, BeginManagedChallenge, ChallengeAdmission, ManagedChallengeError,
-    ManagedChallengeProof, ManagedChallengeState, ManagedKeyEnvelope, ManagedKeyring,
-    OperationalEd25519, RetrievedManagedChallenge, consent_digest, operational_ed25519_public,
-    verifier_commitment,
+    A3Authorization, BeginManagedChallenge, ChallengeAdmission, CompletedManagedChallenge,
+    ManagedChallengeError, ManagedChallengeProof, ManagedChallengeState, ManagedKeyEnvelope,
+    ManagedKeyring, ManagedSessionBind, OperationalEd25519, RetrievedManagedChallenge,
+    bind_signing_bytes, consent_digest, operational_ed25519_public, verifier_commitment,
 };
 pub use privilege::{
     IDENTIKEY_C2_PRIVILEGES, PrivilegeError, USER_C2_PRIVILEGES, authorize_elect, c1, c2_native,

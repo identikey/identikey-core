@@ -10,7 +10,7 @@ Extend `/managed-challenge` begin, finish, and retrieve. Do not add a second rou
 
 ## Decision 2 — Channel is consented bytes
 
-Begin stores the channel bytes the client submits. Those bytes are what the edge handed the client beside the Challenge. Begin returns them, and the caller renders them (Decision 6). The OP signs them. The OP does not contact the edge and does not recompute `Blake3(SPKI || conn_id)` or the Iroh channel. The edge verifier already does that, and a mismatch fails there.
+Begin stores the channel bytes the client submits. The channel is the 32-byte binding the client derived for its edge connection. A v1 Challenge has no channel field. Begin returns them, and the caller renders them (Decision 6). The OP signs them. The OP does not contact the edge and does not recompute `Blake3(SPKI || conn_id)` or the Iroh channel. The edge verifier already does that, and a mismatch fails there.
 
 ## Decision 3 — Caller names the operation
 

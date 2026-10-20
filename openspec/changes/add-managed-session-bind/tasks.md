@@ -1,9 +1,9 @@
 # Tasks
 
-- [ ] Begin requires an Ed25519 ClassicalPublicKey, CanonicalTuple operation and resource, and a 32-byte channel; refuses P-256, bad tuples, the admission caps, and any other channel length before storing the row. The edge Challenge `aud` is canonical base58btc; 64-hex is refused. The A4 consent `aud` stays account `xid_hex`.
-- [ ] Consent transcript appends the map bytes, counted components, and the raw channel; the pinned digest is `7efc1d284ac45ec66c928a750c701ed266ce28e3dab0e306588928c79dce8c03`
-- [ ] One key-use claim signs the v1 Response and `bind_signing_bytes`; retrieve returns both or neither in the pinned JSON; the audit commit stores both signatures, operation, resource, and the session-key fingerprint
-- [ ] Tests: challenge-only begin refused; pre-migration row fails closed; A4 over `["vms","start"]` refused before decrypt; second client gets neither; channel stored without contacting an edge; begin echoes the stored bind fields; auth payload bytes differ from the bind bytes; joint vector matches `direct_challenge_canonical_bind_vector`; canonical base58 `aud` is admitted and 64-hex or non-canonical base58 is refused before the row
+- [x] Begin requires an Ed25519 ClassicalPublicKey, CanonicalTuple operation and resource, and a 32-byte channel; refuses P-256, bad tuples, the admission caps, and any other channel length before storing the row. The edge Challenge `aud` is canonical base58btc; 64-hex is refused. The A4 consent `aud` stays account `xid_hex`.
+- [x] Consent transcript appends the map bytes, counted components, and the raw channel; the pinned digest is `7efc1d284ac45ec66c928a750c701ed266ce28e3dab0e306588928c79dce8c03`
+- [x] One key-use claim signs the v1 Response and `bind_signing_bytes`; retrieve returns both or neither in the pinned JSON; the audit commit stores both signatures, operation, resource, and the session-key fingerprint
+- [x] Tests: challenge-only begin refused; pre-migration row fails closed; A4 over `["vms","start"]` refused before decrypt; second client gets neither; channel stored without contacting an edge; begin echoes the stored bind fields; auth payload bytes differ from the bind bytes; joint vector matches `direct_challenge_canonical_bind_vector`; canonical base58 `aud` is admitted and 64-hex or non-canonical base58 is refused before the row
 
 Do not implement until a fresh accepting reader records `READER:` on this contract.
 
@@ -35,3 +35,7 @@ These boxes amend the contract. They are not code.
 - [x] N2: retrieve `bind` either as `{alg, sig}` ClassicalSignature or state the client wraps it with `alg` `ed25519`
 - [x] N3: add session key, operation, resource, and channel to the attempt row's immutable fields
 - [x] N4: align the proposal's "Consent shows" line with Decision 6 (caller renders the bytes begin returns)
+
+## Implementation verification — 2026-10-20
+
+Implementation and regression tests are present. The four implementation boxes remain unchecked until the database-backed acceptance tests pass. `SQLX_OFFLINE=true cargo test -p identikey-keys managed_challenge --offline -- --test-threads=8` compiles and passes the eight database-independent tests, including both pinned vectors. The 17 database tests cannot set up PostgreSQL in this sandbox (`Operation not permitted`); TCP and the local socket are denied. `SQLX_OFFLINE=true cargo check -p identikey-server --offline` passes. The two new HTTP wire tests pass; the existing server signup test likewise cannot connect to PostgreSQL. Persistence and acceptance remain with the conductor.

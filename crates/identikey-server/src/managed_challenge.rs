@@ -7,7 +7,8 @@ use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use identikey_keys::{
-    A3Authorization, ManagedChallengeError, ManagedChallengeProof, RetrievedManagedChallenge, Xid,
+    A3Authorization, ManagedChallengeError, ManagedChallengeProof, ManagedSessionBind,
+    RetrievedManagedChallenge, Xid,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -22,12 +23,47 @@ pub struct BeginRequest {
     challenge: String,
     verifier_commitment: String,
     proof: String,
+    session_public_key: SessionPublicKey,
+    operation: Vec<String>,
+    resource: Vec<String>,
+    channel: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionPublicKey {
+    alg: String,
+    key: String,
+}
+
+#[derive(Serialize)]
+pub struct BindFields {
+    session_public_key: SessionPublicKey,
+    operation: Vec<String>,
+    resource: Vec<String>,
+    channel: String,
+}
+
+impl From<ManagedSessionBind> for BindFields {
+    fn from(bind: ManagedSessionBind) -> Self {
+        Self {
+            session_public_key: SessionPublicKey {
+                alg: "ed25519".into(),
+                key: URL_SAFE_NO_PAD.encode(bind.session_public_key.bytes),
+            },
+            operation: bind.operation,
+            resource: bind.resource,
+            channel: URL_SAFE_NO_PAD.encode(bind.channel),
+        }
+    }
 }
 
 #[derive(Serialize)]
 pub struct BeginResponse {
     request_id: Uuid,
     consent_challenge: String,
+    #[serde(flatten)]
+    fields: BindFields,
     #[serde(skip_serializing_if = "Option::is_none")]
     public_key: Option<serde_json::Value>,
 }
@@ -58,6 +94,10 @@ pub struct RetrieveResponse {
     state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     response: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bind: Option<String>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    fields: Option<BindFields>,
 }
 
 fn now() -> Result<u64, ManagedChallengeError> {
@@ -108,6 +148,21 @@ pub async fn begin(State(state): State<AppState>, Json(body): Json<BeginRequest>
         Ok(value) => value,
         Err(error) => return http_error(error),
     };
+    let bind = match (decode(&body.session_public_key.key), decode(&body.channel)) {
+        (Ok(key), Ok(channel)) if body.session_public_key.alg == "ed25519" => ManagedSessionBind {
+            session_public_key: identikey_auth::ClassicalPublicKey {
+                alg: identikey_auth::ClassicalAlg::Ed25519,
+                bytes: key,
+            },
+            operation: body.operation,
+            resource: body.resource,
+            channel,
+        },
+        _ => return http_error(ManagedChallengeError::InvalidProof),
+    };
+    if let Err(error) = bind.validate() {
+        return http_error(error);
+    }
     let (proof, public_key, webauthn_state) = match body.proof.as_str() {
         "a3" => match state
             .ceremonies
@@ -142,6 +197,7 @@ pub async fn begin(State(state): State<AppState>, Json(body): Json<BeginRequest>
                 Ok(now) => now,
                 Err(error) => return http_error(error),
             },
+            &bind,
         )
         .await
     {
@@ -149,6 +205,7 @@ pub async fn begin(State(state): State<AppState>, Json(body): Json<BeginRequest>
             request_id: result.request_id,
             consent_challenge: URL_SAFE_NO_PAD.encode(result.consent_challenge),
             public_key,
+            fields: result.bind.into(),
         })
         .into_response(),
         Err(error) => http_error(error),
@@ -242,24 +299,99 @@ pub async fn retrieve(
     {
         Ok(RetrievedManagedChallenge::Completed(response)) => Json(RetrieveResponse {
             state: "completed",
-            response: Some(URL_SAFE_NO_PAD.encode(response)),
+            response: Some(URL_SAFE_NO_PAD.encode(response.response)),
+            bind: Some(URL_SAFE_NO_PAD.encode(response.bind)),
+            fields: Some(response.fields.into()),
         })
         .into_response(),
         Ok(RetrievedManagedChallenge::Failed) => Json(RetrieveResponse {
             state: "failed",
             response: None,
+            bind: None,
+            fields: None,
         })
         .into_response(),
         Ok(RetrievedManagedChallenge::Indeterminate) => Json(RetrieveResponse {
             state: "indeterminate",
             response: None,
+            bind: None,
+            fields: None,
         })
         .into_response(),
         Ok(RetrievedManagedChallenge::Pending) => Json(RetrieveResponse {
             state: "pending",
             response: None,
+            bind: None,
+            fields: None,
         })
         .into_response(),
         Err(error) => http_error(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn managed_challenge_begin_requires_all_bind_fields() {
+        let valid = serde_json::json!({
+            "xid": "account", "challenge": "challenge", "verifier_commitment": "commitment", "proof": "a4",
+            "session_public_key": {"alg": "ed25519", "key": URL_SAFE_NO_PAD.encode([0x11;32])},
+            "operation": ["vms", "stop"], "resource": ["vm", "A"], "channel": URL_SAFE_NO_PAD.encode([0x22;32])
+        });
+        assert!(serde_json::from_value::<BeginRequest>(valid.clone()).is_ok());
+        for field in ["session_public_key", "operation", "resource", "channel"] {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<BeginRequest>(missing).is_err());
+        }
+        let bare = serde_json::json!({"xid":"account", "challenge":"challenge", "verifier_commitment":"commitment", "proof":"a4"});
+        assert!(serde_json::from_value::<BeginRequest>(bare).is_err());
+        let mut string_tuple = valid;
+        string_tuple["operation"] = serde_json::json!("vms:stop");
+        assert!(serde_json::from_value::<BeginRequest>(string_tuple).is_err());
+    }
+
+    #[test]
+    fn managed_challenge_retrieve_wire_is_raw_signature_and_stored_fields() {
+        let fields = ManagedSessionBind {
+            session_public_key: identikey_auth::ClassicalPublicKey {
+                alg: identikey_auth::ClassicalAlg::Ed25519,
+                bytes: vec![0x11; 32],
+            },
+            operation: vec!["vms".into(), "stop".into()],
+            resource: vec!["vm".into(), "A".into()],
+            channel: vec![0x22; 32],
+        };
+        let wire = serde_json::to_value(RetrieveResponse {
+            state: "completed",
+            response: Some("response".into()),
+            bind: Some(URL_SAFE_NO_PAD.encode([0x33; 64])),
+            fields: Some(fields.into()),
+        })
+        .unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "state":"completed", "response":"response", "bind":URL_SAFE_NO_PAD.encode([0x33;64]),
+                "session_public_key":{"alg":"ed25519", "key":URL_SAFE_NO_PAD.encode([0x11;32])},
+                "operation":["vms","stop"], "resource":["vm","A"], "channel":URL_SAFE_NO_PAD.encode([0x22;32])
+            })
+        );
+        let pending = serde_json::to_value(RetrieveResponse {
+            state: "pending",
+            response: None,
+            bind: None,
+            fields: None,
+        })
+        .unwrap();
+        assert_eq!(pending, serde_json::json!({"state":"pending"}));
+        assert!(
+            serde_json::from_value::<FinishA4Request>(serde_json::json!({
+                "request_id":Uuid::nil(), "response":"proof", "operation":["vms","start"]
+            }))
+            .is_err()
+        );
     }
 }

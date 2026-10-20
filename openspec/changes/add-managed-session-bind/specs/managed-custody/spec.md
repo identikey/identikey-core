@@ -243,7 +243,7 @@ The bind signing bytes SHALL be a port of Mjolnir `696fb00` `bind_signing_bytes`
 
 #### Scenario: Channel is not checked here
 
-- GIVEN channel bytes the client copied from an edge Challenge
+- GIVEN the 32-byte channel binding the client derived for its edge connection (a v1 Challenge has no channel field)
 - WHEN begin records them and the edge is not contacted
 - THEN the attempt is stored
 - AND the signature covers those bytes
