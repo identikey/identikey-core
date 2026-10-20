@@ -4,8 +4,8 @@ Living truth for identikey-keys mapping onto identikey-protocol
 `identikey-keyspace-v1` (product word **guild**, protocol word
 **keyspace**). Folded from `add-guild-keyspaces` (2026-09-11),
 `add-keyspace-runtime` (2026-09-15), and `add-access-node-wrap`
-(2026-09-15). Protocol `PublicKey.alg` `x25519` is identikey-protocol
-`ikp-2l8`.
+(2026-09-15). Protocol `PublicKey.alg` `x25519` landed as
+identikey-protocol `ikp-2l8` (2026-10-13).
 
 ### Requirement: Consume identikey-keyspace-v1
 
@@ -65,9 +65,10 @@ signing half as a wrap-target, SHALL NOT apply protocol §7.2
 C1 row as a member. A row whose user private is not held by the user
 MAY be named as a protocol §7 `Wrap.recipient`; unwrap SHALL fail until
 that private is user-held (inert on purpose; not a reason to wrap to
-`managed_key_blob`). Until identikey-protocol `ikp-2l8` adds
-`PublicKey.alg` `x25519`, that row SHALL NOT be written as a protocol
-§6 `RosterEntry`. PUK rotation of that encapsulation key SHALL
+`managed_key_blob`). A protocol §6 `RosterEntry` for that row SHALL
+name `PublicKey.alg` `x25519` and the 32-byte u-coordinate (identikey-protocol
+`ikp-2l8`). That key is a wrap-target. `admin: true` still requires an
+Ed25519 `actor`. PUK rotation of that encapsulation key SHALL
 be an Elect-gated XID document write, then `keyspace.epoch-begin` /
 `epoch-commit`.
 
@@ -97,13 +98,18 @@ be an Elect-gated XID document write, then `keyspace.epoch-begin` /
 - THEN the wrap is stored as protocol §7 `Wrap.recipient` and unwrap
   by that member fails until Elect export or a wallet holds the private
 
-#### Scenario: C2 is not a §6 RosterEntry until ikp-2l8
+#### Scenario: C2 roster entry names native X25519
 
-- GIVEN a stored C2 document whose only user PUK is native X25519
-- WHEN identikey-keys is asked to encode a protocol §6 `RosterEntry`
-  for that member
-- THEN it refuses rather than mint `alg: "x25519"`; join that needs
-  that entry waits on identikey-protocol `ikp-2l8`
+- GIVEN a stored C2 document whose user PUK is native X25519
+- WHEN identikey-keys encodes a protocol §6 `RosterEntry` for that member
+- THEN `PublicKey.alg` is `x25519` and `key` is the 32-byte u-coordinate
+- AND apply accepts the entry
+- AND that X25519 key is not `Op.actor`
+
+#### Scenario: Unknown roster alg is refused
+
+- WHEN a roster `PublicKey.alg` is other than `ed25519`, `x25519`, or `p256`
+- THEN encode and apply refuse the body
 
 #### Scenario: Schnorr cannot author a keyspace op
 
@@ -259,9 +265,10 @@ call that selector "the latest identity key". Members whose document
 actually carries Ed25519 or P-256 identity keys MAY use those as PUK
 per protocol §5; that is not the C2 constructor this crate ships.
 Wrap-list change SHALL be `keyspace.epoch-begin` then
-`keyspace.epoch-commit` only. A `keyspace.join` that needs a §6
-`RosterEntry` for a C2 row of this store SHALL wait on identikey-protocol
-`ikp-2l8`; until then that row is a §7 `Wrap.recipient` only.
+`keyspace.epoch-commit` only. A `keyspace.join` that writes a §6
+`RosterEntry` for a C2 row of this store SHALL use `PublicKey.alg`
+`x25519` (identikey-protocol `ikp-2l8`). A wrap-only join MAY still
+name that same public as a §7 `Wrap.recipient` without a roster line.
 
 #### Scenario: Epoch begin retargets wraps to the new PUK
 

@@ -1,8 +1,9 @@
 //! Replica of identikey-keyspace-v1 ops on identikey-log (ADR-012).
 //!
 //! Postgres, if used, is a cache of [`ReplicaSnapshot`]. The log is home.
-//! C2 rows of this store are §7 wrap recipients until identikey-protocol
-//! `ikp-2l8` adds `PublicKey.alg` `x25519`. Do not mint that alg here.
+//! A C2 encapsulation public is a §6 `RosterEntry` PUK with `alg`
+//! `x25519` (identikey-protocol `ikp-2l8`). That key is a wrap-target.
+//! `admin: true` still requires an Ed25519 `actor`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -18,6 +19,7 @@ const KIND_BEGIN: &str = "keyspace.epoch-begin";
 const KIND_COMMIT: &str = "keyspace.epoch-commit";
 
 const ALG_ED25519: &str = "ed25519";
+const ALG_X25519: &str = "x25519";
 const ALG_P256: &str = "p256";
 
 /// In-memory replica. Optional Postgres materialization stores [`ReplicaSnapshot`].
@@ -122,8 +124,6 @@ pub enum ApplyError {
     UnknownKeyspace,
     #[error("epoch conflict")]
     EpochConflict,
-    #[error("native x25519 PublicKey.alg is not minted here (ikp-2l8)")]
-    X25519RosterAlg,
     #[error("wrap-on-login is access-node only")]
     NotAccessNode,
     #[error("ChangeBody must not carry wraps")]
@@ -598,8 +598,8 @@ fn parse_puks(v: &CBOR) -> Result<Vec<PublicKey>, ApplyError> {
             return Err(ApplyError::BadBody);
         };
         let alg = text_field(&m, "alg").ok_or(ApplyError::BadBody)?;
-        if alg != ALG_ED25519 && alg != ALG_P256 {
-            return Err(ApplyError::X25519RosterAlg);
+        if !known_puk_alg(&alg) {
+            return Err(ApplyError::BadBody);
         }
         let key = get_cbor(&m, "key").ok_or(ApplyError::BadBody)?;
         out.push(PublicKey {
@@ -665,6 +665,10 @@ fn merge_wraps(dst: &mut Vec<Wrap>, src: Vec<Wrap>) {
     }
 }
 
+fn known_puk_alg(alg: &str) -> bool {
+    alg == ALG_ED25519 || alg == ALG_X25519 || alg == ALG_P256
+}
+
 /// Encode a genesis join body for tests.
 pub fn encode_genesis(
     actor: Hash32,
@@ -672,8 +676,8 @@ pub fn encode_genesis(
     puk: &[u8],
     wrap_recipient: &[u8],
 ) -> Result<Vec<u8>, ApplyError> {
-    if puk_alg != ALG_ED25519 && puk_alg != ALG_P256 {
-        return Err(ApplyError::X25519RosterAlg);
+    if !known_puk_alg(puk_alg) {
+        return Err(ApplyError::BadBody);
     }
     let mut puk_map = Map::new();
     puk_map.insert("alg", puk_alg);
@@ -858,11 +862,58 @@ mod tests {
     }
 
     #[test]
-    fn x25519_roster_alg_refused() {
+    fn x25519_puk_is_a_roster_entry() {
         let author = Author::from_seed(&[7u8; 32]);
         let actor = author.actor();
-        let err = encode_genesis(actor, "x25519", &[1u8; 32], &[2u8; 32]).unwrap_err();
-        assert_eq!(err, ApplyError::X25519RosterAlg);
+        let puk = [4u8; 32];
+        let body = encode_genesis(actor, ALG_X25519, &puk, &puk).unwrap();
+        assert!(body.windows(6).any(|w| w == b"x25519"));
+        let o = op(KIND_JOIN, actor, body, &[]);
+        let mut r = KeyspaceReplica::new();
+        let id = r.apply(&o).unwrap();
+        let snap = r.get(&id).unwrap();
+        assert!(
+            snap.roster
+                .iter()
+                .any(|e| e.admin && e.actor == Some(actor))
+        );
+        assert!(
+            snap.wraps
+                .iter()
+                .any(|w| w.recipient.as_slice() == puk.as_slice())
+        );
+    }
+
+    #[test]
+    fn x25519_member_needs_no_actor() {
+        let author = Author::from_seed(&[7u8; 32]);
+        let actor = author.actor();
+        let body = encode_genesis(actor, ALG_ED25519, &[1u8; 32], &[2u8; 32]).unwrap();
+        let genesis = op(KIND_JOIN, actor, body, &[]);
+        let mut r = KeyspaceReplica::new();
+        let id = r.apply(&genesis).unwrap();
+
+        let mut puk_map = Map::new();
+        puk_map.insert("alg", ALG_X25519);
+        puk_map.insert("key", CBOR::to_byte_string([5u8; 32]));
+        let mut entry = Map::new();
+        entry.insert("admin", false);
+        entry.insert("puks", vec![CBOR::from(puk_map)]);
+        let mut m = Map::new();
+        m.insert("keyspace", CBOR::to_byte_string(id));
+        m.insert("roster", vec![CBOR::from(entry)]);
+        let join = op(KIND_JOIN, actor, CBOR::from(m).to_cbor_data(), &[id]);
+        r.apply(&join).unwrap();
+        let snap = r.get(&id).unwrap();
+        assert!(snap.roster.iter().any(|e| !e.admin && e.actor.is_none()));
+    }
+
+    #[test]
+    fn unknown_puk_alg_refused() {
+        let author = Author::from_seed(&[7u8; 32]);
+        let actor = author.actor();
+        let err = encode_genesis(actor, "rsa", &[1u8; 32], &[2u8; 32]).unwrap_err();
+        assert_eq!(err, ApplyError::BadBody);
     }
 
     #[test]

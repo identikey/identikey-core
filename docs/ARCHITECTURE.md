@@ -1031,14 +1031,13 @@ protocol onto identikey-keys instead of re-specifying it here.
    document (`apply_document_update`), then `keyspace.epoch-begin` /
    `epoch-commit` to retarget wraps. Join/leave still do not Elect.
 
-   **Roster vs wrap.** Protocol §6 `RosterEntry.puks` admits `alg` `ed25519` or
-   `p256` only. A native X25519 encapsulation key has no lawful `PublicKey.alg`
-   on that roster until identikey-protocol `ikp-2l8` (`add-keyspace-x25519-puk-alg`).
-   identikey-core SHALL NOT mint `alg: "x25519"` here. Until `ikp-2l8` lands,
-   a C2 row of this store is a protocol §7 `Wrap.recipient` (raw 32-byte
-   u-coordinate, `x25519-xchacha20poly1305`) and **not** a constructible §6
-   `RosterEntry`. Runtime `keyspace.join` that needs a roster entry for such a
-   row waits on `ikp-2l8`.
+   **Roster vs wrap.** Protocol §6 `RosterEntry.puks` admits `alg` `ed25519`,
+   `x25519`, or `p256`. `ikp-2l8` landed 2026-10-13 (`8ac2c70`): `x25519` is
+   the 32-byte u-coordinate of a native encapsulation key, used as
+   `Wrap.recipient` directly, and it is a wrap-target only. identikey-keys
+   mints `alg: "x25519"` on a §6 `RosterEntry` for a C2 row of this store.
+   `admin: true` still requires an Ed25519 `actor`. A wrap-only join may
+   still name that public as a §7 `Wrap.recipient` without a roster line.
 
    **Actor.** Schnorr cannot author `keyspace.*` and cannot be `admin: true`.
    Passkeys and A4 `identikey_auth` `device_public_key` stay `credentials` rows;

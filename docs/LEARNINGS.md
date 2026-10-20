@@ -16,6 +16,10 @@ See morphist-tools `CONVENTIONS.md`.
   only. A C2 row of this store is a §7 `Wrap.recipient` and not a constructible
   §6 `RosterEntry` until identikey-protocol `ikp-2l8` adds `PublicKey.alg`
   `x25519`. Core SHALL NOT mint that alg. (`openspec/specs/guild-keyspaces/spec.md`)
+- 2026-10-19 — `ikp-2l8` landed (`8ac2c70`). identikey-keys mints
+  `PublicKey.alg` `x25519` on a §6 `RosterEntry` for the C2 encapsulation
+  half. The key is a wrap-target. `admin: true` still needs an Ed25519
+  `actor`. (`crates/identikey-keys/src/keyspace.rs`)
 - 2026-08-27 — Two concurrent `navigator.credentials.get` (conditional +
   button) finish the same ceremony; 1Password completes both and the
   second is unknown/expired. One in-flight get. (`crates/identikey-server/src/pages.rs`)
