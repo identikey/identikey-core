@@ -14,7 +14,7 @@ A C2 user can already get an identikey-auth v1 Response from `/managed-challenge
 
 - Extend the existing begin / finish / retrieve ceremony so one fresh A3 or A4 consent covers the Challenge and the bind.
 - One key-use claim signs both. Retrieve returns both or neither.
-- The caller names operation and resource. Consent shows those plus the channel bytes.
+- The caller names operation and resource. Begin returns those fields and the channel bytes. The caller renders them. There is no hosted consent page.
 - The hosted OP signs the channel bytes and does not check the Mjolnir connection. The edge does.
 - Capability: MODIFIED `managed-custody`.
 
@@ -34,7 +34,7 @@ A native client that already calls `POST /managed-challenge/begin` now also send
 
 ## Preparation — 2026-10-20
 
-Outcome: revised after `reviews/2026-10-20-advise.md` (send-back, opus-arch-review). The bind bytes are Mjolnir `696fb00` `bind_signing_bytes`, not a private string encoding. Authority: the 2026-10-20 grant on `mjolnir-22ff.3.2` covers this ceremony only. The banner is ACTIVE BUILD. Fresh advise still gates the code. The 2026-10-19 note that said the banner stays PENDING is withdrawn.
+Outcome: revised after `reviews/2026-10-20-advise-2.md` (send-back, opus-arch-review). The bind bytes stay the `696fb00` port. The edge Challenge `aud` is now canonical base58btc; 64-hex is withdrawn for that Challenge and kept only on the internal A4 consent Challenge. Authority: the 2026-10-20 grant on `mjolnir-22ff.3.2` covers this ceremony only. The banner is ACTIVE BUILD. Fresh advise still gates the code.
 
 ## Out of scope
 

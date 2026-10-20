@@ -13,10 +13,11 @@ The endpoint SHALL accept only identikey-auth v1 Challenge bytes
 whose round-trip `to_bytes` equals the input (extra map keys
 rejected). Algorithm SHALL be validated on the stored operational
 key, not as a Challenge field. Admission SHALL enforce `v=1`, nonce
-length, body cap, 64-hex `aud`, TTL/skew, current C2 Sign+Auth, and
+length, body cap, a canonical base58btc edge `aud`, TTL/skew, current C2 Sign+Auth, and
 a post-consent expiry recheck before decrypt. The ceremony SHALL be
 begin/consent/finish/retrieve with immutable account, challenge,
-request id, and a PKCE verifier commitment. A holder-public retrieval
+request id, PKCE verifier commitment, session public key, operation,
+resource, and channel. A holder-public retrieval
 proof SHALL fail closed. A3 SHALL bind by a server row that stores the
 library WebAuthn challenge with that attempt. A4 SHALL be a signature
 by an Elect key on the account's current XID document, not the managed
@@ -44,13 +45,15 @@ be a v1 AEAD envelope over an Ed25519 seed bound to account XID and
 operational public. Legacy, malformed, swapped-account, and
 wrong-key envelopes SHALL fail closed. This delivery is C2 only.
 
+The Challenge this ceremony answers SHALL name the edge in `aud` as base58btc of the 32-byte edge XID. Begin SHALL admit that audience only when it decodes to 32 bytes and re-encodes to the same string. A 64-hex audience SHALL be refused before the row is stored. The A4 consent Challenge SHALL keep `aud` as the account XID in 64 lowercase hex. That consent Challenge SHALL NOT be rewritten to base58.
+
 The same attempt SHALL also carry a session bind. Begin SHALL require a session public key, an operation, a resource, and a channel, and SHALL reject a request that omits any of them before an attempt row is stored. The session public key SHALL be an Ed25519 ClassicalPublicKey, a declared subset of the edge's Ed25519 or P-256 keys: map `{alg, key}` with `alg` text `ed25519` and `key` the 32 raw bytes. Begin SHALL refuse P-256. Operation and resource SHALL be CanonicalTuple arrays of non-empty printable ASCII components (`0x21` through `0x7e`). Begin SHALL NOT split a string on `:`. `["vms","stop"]` and `["vms:stop"]` SHALL be different tuples. Begin SHALL refuse an empty tuple, a component outside that charset, more than 8 components, or a component longer than 64 bytes, before the row is stored. The channel SHALL be exactly 32 bytes. Any other length SHALL be refused before the row is stored.
 
 The consent transcript SHALL keep the domain tag `identikey-managed-consent-v1\n` and the existing six fields, then append the ClassicalPublicKey map bytes, the operation as a uint32 big-endian component count followed by each component as a uint32 big-endian length and bytes, the resource the same way, and the channel as exactly 32 raw bytes with no length prefix. The pinned digest for the design's fixed inputs SHALL be `7efc1d284ac45ec66c928a750c701ed266ce28e3dab0e306588928c79dce8c03`. An attempt stored before these columns exist SHALL fail closed at finish. Finish SHALL NOT complete it by hashing empty bind fields.
 
 No hosted page renders this ceremony. Begin SHALL return the stored session key, operation, resource, and channel beside `consent_challenge`. An A3 caller renders those returned bytes. An A4 wallet SHALL recompute the digest from them and SHALL refuse a mismatch before it signs. A malicious caller can misrender those bytes. The hosted OP SHALL sign the stored channel bytes and SHALL NOT check them against a Mjolnir connection. The OP SHALL NOT apply Mjolnir authorization policy and SHALL NOT consume the edge nonce. The edge's channel check and its policy check are the backstop.
 
-The bind signing bytes SHALL be Mjolnir `696fb00` `bind_signing_bytes`: a canonical CBOR array of seven items, text `identikey-mjolnir/v1`, text `bind`, the stored Challenge as a byte string, the ClassicalPublicKey map, the operation CanonicalTuple, the resource CanonicalTuple, and the channel as a 32-byte byte string. The joint vector in the design SHALL be those bytes. The identikey-auth signing payload SHALL be a different array with its own domain. A unit assertion SHALL show that payload is not the bind bytes. One key-use claim SHALL sign both with the same operational key. Finish SHALL NOT take bind fields from the client. An A4 signature over a consent Challenge whose digest used a different tuple SHALL be rejected before decrypt. Retrieve, when completed and the PKCE verifier matches, SHALL return the Response and the bind together, or neither. The completed JSON SHALL be `state` `completed`, `response` as unpadded base64url of the identikey-auth Response, `bind` as unpadded base64url of the 64-byte Ed25519 signature, `session_public_key` as `{ "alg": "ed25519", "key": <unpadded base64url of 32 bytes> }`, `operation` and `resource` as the stored component arrays, and `channel` as unpadded base64url of the 32 bytes. The echoed fields SHALL come from the stored row. A missing or wrong verifier SHALL return neither signature. A failed bind signature SHALL NOT release the Response. The completion audit commit SHALL store both signatures, the operation, the resource, and `ClassicalPublicKey::fingerprint`.
+The bind signing bytes SHALL be a port of Mjolnir `696fb00` `bind_signing_bytes`, pinned by the joint vector. identikey-core SHALL NOT take a dependency on `mjolnir_biscuit` for this change. The text `identikey-mjolnir/v1` SHALL be the encoding version. The later shared home of that encoder SHALL be `identikey-auth`. The bytes are: a canonical CBOR array of seven items, text `identikey-mjolnir/v1`, text `bind`, the stored Challenge as a byte string, the ClassicalPublicKey map, the operation CanonicalTuple, the resource CanonicalTuple, and the channel as a 32-byte byte string. The joint vector in the design SHALL be those bytes. The identikey-auth signing payload SHALL be a different array with its own domain. A unit assertion SHALL show that payload is not the bind bytes. One key-use claim SHALL sign both with the same operational key. Finish SHALL NOT take bind fields from the client. An A4 signature over a consent Challenge whose digest used a different tuple SHALL be rejected before decrypt. Retrieve, when completed and the PKCE verifier matches, SHALL return the Response and the bind together, or neither. The completed JSON SHALL be `state` `completed`, `response` as unpadded base64url of the identikey-auth Response, `bind` as unpadded base64url of the 64 raw Ed25519 signature bytes (the client wraps them as `{ "alg": "ed25519", "sig" }` for the edge), `session_public_key` as `{ "alg": "ed25519", "key": <unpadded base64url of 32 bytes> }`, `operation` and `resource` as the stored component arrays, and `channel` as unpadded base64url of the 32 bytes. The echoed fields SHALL come from the stored row. A missing or wrong verifier SHALL return neither signature. A failed bind signature SHALL NOT release the Response. The completion audit commit SHALL store both signatures, the operation, the resource, and `ClassicalPublicKey::fingerprint`.
 
 #### Scenario: Fresh consent signs the exact Challenge
 
@@ -216,6 +219,21 @@ The bind signing bytes SHALL be Mjolnir `696fb00` `bind_signing_bytes`: a canoni
 - WHEN begin runs
 - THEN it is rejected
 - AND no attempt row is stored
+
+#### Scenario: Edge audience is canonical base58
+
+- GIVEN a canonical v1 Challenge whose `aud` is base58btc of a 32-byte edge XID and whose re-encode equals that text, plus the bind fields
+- WHEN begin runs
+- THEN admission accepts the audience
+- AND a 64-hex audience is refused before the row is stored
+- AND a base58 string that decodes to 32 bytes but does not re-encode to itself is refused before the row is stored
+
+#### Scenario: Consent audience stays account hex
+
+- GIVEN a stored attempt
+- WHEN the server builds the A4 consent Challenge
+- THEN its `aud` is the account XID as 64 lowercase hex
+- AND that value is not the edge Challenge `aud`
 
 #### Scenario: Auth payload is not the bind payload
 

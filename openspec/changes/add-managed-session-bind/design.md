@@ -18,7 +18,7 @@ Begin requires operation and resource as the caller states them. Consent shows b
 
 ## Decision 4 — Domain is the edge's bytes
 
-The OP builds `bind_signing_bytes` from Mjolnir `696fb00` (`native/mjolnir_biscuit/src/direct_challenge.rs`). It does not invent a second encoding.
+The OP ports `bind_signing_bytes` from Mjolnir `696fb00` (`native/mjolnir_biscuit/src/direct_challenge.rs`). identikey-core does not depend on `mjolnir_biscuit`. The joint vector below is the pin. The text `identikey-mjolnir/v1` is the version: an edge encoding change bumps that string and this port together. A later shared home is `identikey-auth`. This change does not move the encoder.
 
 Canonical CBOR array of seven:
 
@@ -69,7 +69,7 @@ Retrieve, when completed, is JSON:
 
 - `state`: `completed`
 - `response`: unpadded base64url of the identikey-auth Response
-- `bind`: unpadded base64url of the 64-byte Ed25519 signature
+- `bind`: unpadded base64url of the 64 raw Ed25519 signature bytes. Not a ClassicalSignature map. The client wraps those bytes as `{ "alg": "ed25519", "sig": <those bytes> }` before the edge sees them. The alg is fixed because begin refused P-256.
 - `session_public_key`: `{ "alg": "ed25519", "key": <unpadded base64url of 32 bytes> }`
 - `operation`: the component array
 - `resource`: the component array
@@ -77,6 +77,14 @@ Retrieve, when completed, is JSON:
 
 The echoed fields come from the stored row. A missing or wrong verifier returns neither signature. The completion audit commit stores both signatures, the operation, the resource, and `ClassicalPublicKey::fingerprint` from identikey-auth.
 
-## Decision 9 — What stays put
+## Decision 9 — Edge Challenge audience is canonical base58
+
+The Challenge this ceremony answers is the edge's. Its `aud` is the pinned edge XID at a text boundary: base58btc (Bitcoin alphabet) of the 32 raw bytes. Begin admits it only when decode yields 32 bytes and `to_base58` of those bytes equals the audience string. 64-lowercase-hex is withdrawn for this Challenge. It is diagnostics, and it is not what `EdgeKeys.edge_xid_text/1` emits.
+
+The A4 consent Challenge is not that object. Its `aud` stays `xid_hex` of the account. It never reaches the edge. Do not "fix" it to base58. That would re-pin the consent vector.
+
+`mjolnir-22ff.4` owes the matching issue rule: the edge puts that same canonical base58 text in `Challenge.aud`. This change does not build that issuer.
+
+## Decision 10 — What stays put
 
 C1 stays out. Schnorr blobs still fail closed. Retrieval stays the PKCE verifier. A holder public is not a retrieval proof. The OP does not consume the edge nonce.
