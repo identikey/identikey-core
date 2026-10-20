@@ -32,9 +32,9 @@ A native client that already calls `POST /managed-challenge/begin` now also send
 - **Failed** — a Challenge-only begin, a swapped operation, or a second client with the request id.
 - **Off** — C3/C4 sign the bind locally. C1 is not this ceremony. Browser `/authorize` is unchanged.
 
-## Preparation — 2026-10-19
+## Preparation — 2026-10-20
 
-Outcome: revised. The folded responder signs the Challenge only. This node adds the bind to that ceremony. Upstream: identikey-core `8d29812` documents the gap; Mjolnir edge-auth already verifies the bind domain (folded `549e946` / `696fb00`). Authority: none. Banner stays PENDING. Bare `/run` is not a grant to implement.
+Outcome: revised after `reviews/2026-10-20-advise.md` (send-back, opus-arch-review). The bind bytes are Mjolnir `696fb00` `bind_signing_bytes`, not a private string encoding. Authority: the 2026-10-20 grant on `mjolnir-22ff.3.2` covers this ceremony only. The banner is ACTIVE BUILD. Fresh advise still gates the code. The 2026-10-19 note that said the banner stays PENDING is withdrawn.
 
 ## Out of scope
 

@@ -44,15 +44,23 @@ be a v1 AEAD envelope over an Ed25519 seed bound to account XID and
 operational public. Legacy, malformed, swapped-account, and
 wrong-key envelopes SHALL fail closed. This delivery is C2 only.
 
-The same attempt SHALL also carry a session bind: session public key, caller-named operation, caller-named resource, and channel bytes. Begin SHALL reject a request that omits any of them. The consent transcript SHALL be the existing six fields, then the 32-byte session public key, then operation, resource, and channel each as a uint32 big-endian length and their bytes. Consent SHALL show the operation, the resource, and the channel. The hosted OP SHALL sign those channel bytes and SHALL NOT check them against a Mjolnir connection. The OP SHALL NOT apply Mjolnir authorization policy and SHALL NOT consume the edge nonce. One key-use claim SHALL sign the identikey-auth Response and the bind. The bind payload SHALL be the tuple ["identikey-mjolnir/v1","bind", challenge bytes, session public key, operation, resource, channel], signed by the same operational key. Finish SHALL reject a bind that differs from the stored fields before decrypt. Retrieve SHALL return the Response and the bind together, or neither. A failed bind signature SHALL NOT release the Response.
+The same attempt SHALL also carry a session bind. Begin SHALL require a session public key, an operation, a resource, and a channel, and SHALL reject a request that omits any of them before an attempt row is stored. The session public key SHALL be an Ed25519 ClassicalPublicKey, a declared subset of the edge's Ed25519 or P-256 keys: map `{alg, key}` with `alg` text `ed25519` and `key` the 32 raw bytes. Begin SHALL refuse P-256. Operation and resource SHALL be CanonicalTuple arrays of non-empty printable ASCII components (`0x21` through `0x7e`). Begin SHALL NOT split a string on `:`. `["vms","stop"]` and `["vms:stop"]` SHALL be different tuples. Begin SHALL refuse an empty tuple, a component outside that charset, more than 8 components, or a component longer than 64 bytes, before the row is stored. The channel SHALL be exactly 32 bytes. Any other length SHALL be refused before the row is stored.
+
+The consent transcript SHALL keep the domain tag `identikey-managed-consent-v1\n` and the existing six fields, then append the ClassicalPublicKey map bytes, the operation as a uint32 big-endian component count followed by each component as a uint32 big-endian length and bytes, the resource the same way, and the channel as exactly 32 raw bytes with no length prefix. The pinned digest for the design's fixed inputs SHALL be `7efc1d284ac45ec66c928a750c701ed266ce28e3dab0e306588928c79dce8c03`. An attempt stored before these columns exist SHALL fail closed at finish. Finish SHALL NOT complete it by hashing empty bind fields.
+
+No hosted page renders this ceremony. Begin SHALL return the stored session key, operation, resource, and channel beside `consent_challenge`. An A3 caller renders those returned bytes. An A4 wallet SHALL recompute the digest from them and SHALL refuse a mismatch before it signs. A malicious caller can misrender those bytes. The hosted OP SHALL sign the stored channel bytes and SHALL NOT check them against a Mjolnir connection. The OP SHALL NOT apply Mjolnir authorization policy and SHALL NOT consume the edge nonce. The edge's channel check and its policy check are the backstop.
+
+The bind signing bytes SHALL be Mjolnir `696fb00` `bind_signing_bytes`: a canonical CBOR array of seven items, text `identikey-mjolnir/v1`, text `bind`, the stored Challenge as a byte string, the ClassicalPublicKey map, the operation CanonicalTuple, the resource CanonicalTuple, and the channel as a 32-byte byte string. The joint vector in the design SHALL be those bytes. The identikey-auth signing payload SHALL be a different array with its own domain. A unit assertion SHALL show that payload is not the bind bytes. One key-use claim SHALL sign both with the same operational key. Finish SHALL NOT take bind fields from the client. An A4 signature over a consent Challenge whose digest used a different tuple SHALL be rejected before decrypt. Retrieve, when completed and the PKCE verifier matches, SHALL return the Response and the bind together, or neither. The completed JSON SHALL be `state` `completed`, `response` as unpadded base64url of the identikey-auth Response, `bind` as unpadded base64url of the 64-byte Ed25519 signature, `session_public_key` as `{ "alg": "ed25519", "key": <unpadded base64url of 32 bytes> }`, `operation` and `resource` as the stored component arrays, and `channel` as unpadded base64url of the 32 bytes. The echoed fields SHALL come from the stored row. A missing or wrong verifier SHALL return neither signature. A failed bind signature SHALL NOT release the Response. The completion audit commit SHALL store both signatures, the operation, the resource, and `ClassicalPublicKey::fingerprint`.
 
 #### Scenario: Fresh consent signs the exact Challenge
 
 - GIVEN a C2 row with an Ed25519 operational key and a fresh A3 proof
-  bound to Challenge `C` and request `R`
+  bound to Challenge `C`, request `R`, session key `S`, operation
+  `["vms","stop"]`, resource `["vm","A"]`, and a 32-byte channel `H`
 - WHEN the initiating client retrieves the result
 - THEN the body is an identikey-auth Response that verifies for `C`
 - AND the Response public key is the stored Sign+Auth key
+- AND the same body carries the bind over those stored fields
 
 #### Scenario: Session cookie alone cannot sign
 
@@ -73,7 +81,7 @@ The same attempt SHALL also carry a session bind: session public key, caller-nam
 
 - GIVEN a completed sign for request `R` bound to client verifier `V`
 - WHEN a different client presents `R` without `V`
-- THEN the Response is not released
+- THEN neither the Response nor the bind is released
 
 #### Scenario: Extra Challenge map keys are rejected
 
@@ -159,18 +167,27 @@ The same attempt SHALL also carry a session bind: session public key, caller-nam
 
 #### Scenario: Fixed consent vector
 
-- GIVEN the design's fixed transcript inputs, including the bind fields
+- GIVEN the design's fixed transcript inputs, including the ClassicalPublicKey map, operation `["vms","stop"]`, resource `["vm","A"]`, and 32 bytes of `0x22`
 - WHEN client and server hash them
-- THEN both get `88265dc6cca649d6aae7f1e73b92a402b143d9cbfe4fcbb059a543053d124edc`
+- THEN both get `7efc1d284ac45ec66c928a750c701ed266ce28e3dab0e306588928c79dce8c03`
 - AND the pre-bind digest `13ef62b41aa5240b246aec4d4bbb240fe5c94bb4a423c24898e2dee6a6844e35` is not that digest
 
 #### Scenario: Fresh consent returns the Response and the bind
 
-- GIVEN a C2 row and a fresh A3 proof bound to Challenge `C`, request `R`, session key `S`, operation `vms:stop`, resource `vm-1`, and channel bytes `H`
-- WHEN the initiating client retrieves the result
-- THEN the body contains an identikey-auth Response that verifies for `C`
-- AND a bind signature by the same operational key over `C`, `S`, `vms:stop`, `vm-1`, and `H`
-- AND omitting the verifier returns neither
+- GIVEN a C2 row and a fresh A3 proof bound to Challenge `C`, request `R`, session key 32 bytes of `0x11`, operation `["vms","stop"]`, resource `["vm","A"]`, and channel 32 bytes of `0x22`
+- WHEN the initiating client retrieves with the original verifier
+- THEN `state` is `completed`
+- AND `response` is the identikey-auth Response for `C`
+- AND `bind` is the 64-byte signature over `bind_signing_bytes` for those stored fields
+- AND `operation` is `["vms","stop"]` and `resource` is `["vm","A"]`
+- AND omitting the verifier returns neither signature
+
+#### Scenario: Begin returns the stored bind fields
+
+- GIVEN a begin body whose operation is `["vms","stop"]`, resource is `["vm","A"]`, channel is 32 bytes, and session key is Ed25519
+- WHEN begin runs
+- THEN the response carries those stored fields beside `consent_challenge`
+- AND an A4 wallet that recomputes a different digest refuses to sign
 
 #### Scenario: Challenge-only begin is refused
 
@@ -181,9 +198,30 @@ The same attempt SHALL also carry a session bind: session public key, caller-nam
 
 #### Scenario: Substituted bind is refused
 
-- GIVEN an attempt stored for operation `vms:stop`
-- WHEN finish is presented as if the operation were `vms:start`
+- GIVEN an attempt whose consent digest used operation `["vms","stop"]`
+- WHEN finish presents an A4 Elect signature over a consent Challenge whose digest used `["vms","start"]`
 - THEN it is rejected before decrypt
+
+#### Scenario: Pre-migration attempt fails closed
+
+- GIVEN an attempt stored before bind columns existed
+- WHEN finish runs
+- THEN it fails closed
+- AND it does not hash empty bind fields
+- AND it does not decrypt
+
+#### Scenario: Admission rejects a bind the edge cannot sign
+
+- GIVEN a begin body whose session key is P-256, or whose channel is not 32 bytes, or whose operation has 9 components
+- WHEN begin runs
+- THEN it is rejected
+- AND no attempt row is stored
+
+#### Scenario: Auth payload is not the bind payload
+
+- GIVEN the design's joint vector
+- WHEN the identikey-auth signing payload and `bind_signing_bytes` are built for that attempt
+- THEN the two byte strings differ
 
 #### Scenario: Channel is not checked here
 
@@ -196,7 +234,7 @@ The same attempt SHALL also carry a session bind: session public key, caller-nam
 
 - GIVEN an Elect key on the document and no passkey row
 - WHEN it signs the server-returned consent Challenge and finish completes
-- THEN retrieve with the original PKCE verifier returns the Response
+- THEN retrieve with the original PKCE verifier returns the Response and the bind
 
 #### Scenario: Substituted consent Challenge
 
