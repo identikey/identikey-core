@@ -241,9 +241,11 @@ Two ways to get OIDC tokens, one proof format:
   v1 Challenge with the Ed25519 seed in `managed_key_blob`, and only
   after a fresh A3 assertion or a user-held A4 Elect signature bound
   to that Challenge. The account cookie does not authorize it. C1 is
-  not this ceremony. It does not sign the Mjolnir session bind. That
-  signature, under consent that covers the bind fields, is
-  `mjolnir-22ff.3.2`. The Challenge Response is not that consent.
+  not this ceremony. The same consent also signs the Mjolnir session
+  bind (`mjolnir-22ff.3.2`, code `b691f47`, folded `091d6bd`). Begin
+  requires the session public key, operation, resource, and a 32-byte
+  channel. The edge Challenge `aud` is canonical base58btc. The
+  Challenge Response is not consent for the bind by itself.
 - **Self-custody (C3/C4):** the wallet signs the Response and the
   session bind locally. The RP presents the Response as
   `grant_type=urn:identikey:params:oauth:grant-type:challenge-response`.
