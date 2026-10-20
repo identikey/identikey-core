@@ -9,7 +9,7 @@ Do not implement until a fresh accepting reader records `READER:` on this contra
 
 ## Owed from preparation — 2026-10-19
 
-- [ ] Fresh advise after preparation
+- [x] Fresh advise after preparation
 
 ## Owed from advise — 2026-10-20 (opus-arch-review, send-back)
 
