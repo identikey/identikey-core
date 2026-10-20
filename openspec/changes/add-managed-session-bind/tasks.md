@@ -25,3 +25,13 @@ Contract amended 2026-10-20. These boxes are the amendment, not the code.
 - [x] N5: pin the retrieve wire shape for the bind
 - [x] N6: the substituted-operation test is A4 consent over a different tuple, rejected before decrypt
 - [x] N7: reconcile the "Banner stays PENDING" preparation note with the ACTIVE BUILD banner
+
+## Owed from advise 2 — 2026-10-20 (opus-arch-review, send-back)
+
+These boxes amend the contract. They are not code.
+
+- [ ] B1: pin the edge Challenge `aud` text form in delta + design (recommended: base58btc of the 32-byte edge XID, decode/encode round-trip); state whether 64-lowercase-hex stays admissible; scenario + test that an edge-shaped Challenge passes begin and a non-canonical `aud` is refused before the row; record the pin as owed on `mjolnir-22ff.4`; state that the internal A4 consent `aud` (`xid_hex`) is unchanged
+- [ ] N1: name the bind encoder as a port pinned to Mjolnir `696fb00`; `identikey-mjolnir/v1` is the version and any edge encoding change bumps it; name the later shared home
+- [ ] N2: retrieve `bind` either as `{alg, sig}` ClassicalSignature or state the client wraps it with `alg` `ed25519`
+- [ ] N3: add session key, operation, resource, and channel to the attempt row's immutable fields
+- [ ] N4: align the proposal's "Consent shows" line with Decision 6 (caller renders the bytes begin returns)
