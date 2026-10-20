@@ -115,8 +115,9 @@ over `bin/mjolnir rpc` with `/etc/mjolnir/env` sourced. Build VMs have
 stalled mid-`cargo` (`mjolnir-mne7`); `codegen-units = 16` and 8 GB
 (`:deploy_build_memory_mb`, runtime only) got a clean ~48 min build.
 Takeover audit (2026-09-29, before the fix): 13 accounts, 3 passkeys,
-none added after signup. `mj login --issuer https://auth.identikey.me`
-(the older CLI still defaults to Keycloak and its token gets 401).
+none added after signup. `mj login` defaults to
+`https://auth.identikey.me` as `mjolnir-cli`. A token from the old
+Keycloak issuer is 401.
 Public
 `https://auth.identikey.me` — DNS A `45.76.77.97` (grey-cloud), HTTP-01
 cert SAN `auth.identikey.me` until 2026-11-25, `/health` 200, discovery
@@ -232,28 +233,32 @@ path and stays opt-in.
 
 Two ways to get OIDC tokens, one proof format:
 
-- **Managed (C1/C2):** we hold Sign. A browser RP uses authorization-code
-  + PKCE. The user authenticates *to us* with A3 passkeys
-  (`add-passkey-ceremonies` / `5gh.1`). After that we may sign an
-  `identikey-auth` `Response` with `managed_key_blob`. Consent for that
-  use is the access credential, never our own Sign.
-- **Self-custody (C3/C4):** the wallet signs the `Response`. The RP
-  (or native client) presents it as
-  `grant_type=urn:identikey:params:oauth:grant-type:challenge-response`
-  (`add-urn-grant` / `ccf.5`, still PENDING).
+- **Managed (C2):** we hold Sign. A browser RP uses authorization-code
+  + PKCE. The user authenticates to us with A3 passkeys. A native
+  client that needs an edge identity proof uses
+  `POST /managed-challenge/begin`, then `/finish/a3` or `/finish/a4`,
+  then `/retrieve`. That ceremony signs one canonical identikey-auth
+  v1 Challenge with the Ed25519 seed in `managed_key_blob`, and only
+  after a fresh A3 assertion or a user-held A4 Elect signature bound
+  to that Challenge. The account cookie does not authorize it. C1 is
+  not this ceremony. It does not sign the Mjolnir session bind. That
+  signature, under consent that covers the bind fields, is
+  `mjolnir-22ff.3.2`. The Challenge Response is not that consent.
+- **Self-custody (C3/C4):** the wallet signs the Response and the
+  session bind locally. The RP presents the Response as
+  `grant_type=urn:identikey:params:oauth:grant-type:challenge-response`.
 
 Protocol: sibling `identikey-protocol`
 `docs/standards/identikey-auth-challenge-v1.md` (§8.1 dual signer) and
-`docs/standards/identikey-oidc-urn-grant-v1.md`. This repo does not
-yet depend on `identikey-auth`. `IDENTIKEY_DEV_LOGIN` stands in for
-managed `/authorize` at `/authorize/dev`. Production login is passkey
-assertion: `/authorize` redirects to `/authorize/passkey`. First
-account: `GET`/`POST /signup` (`c2_native` + `create_managed`) then
+`docs/standards/identikey-oidc-urn-grant-v1.md`. This repo depends on
+`identikey-auth` (workspace crate, protocol rev `fd073c0`).
+`IDENTIKEY_DEV_LOGIN` is the dev stand-in at `/authorize/dev`.
+Production login is passkey assertion: `/authorize` redirects to
+`/authorize/passkey`. First account: `GET`/`POST /signup`
+(`c2_native` + `create_managed`, Ed25519 operational key) then
 `POST /webauthn/register/finish`. Adding a passkey to an existing XID
-(`POST /webauthn/register/begin` then `finish`) requires that XID's
-`identikey_account` session cookie (403 otherwise, even for unknown
-XIDs); `POST /signup` and a successful `finish` issue it. A XID alone
-is public, so it never authorizes enrollment (takeover fixed
-2026-09-28). Backup ownership proofs are future work. Assertion of an
-unknown credential still inserts no account. The blob is not used
-to Sign yet. Elect-key export at signup is not this surface.
+requires that XID's `identikey_account` session cookie. A XID alone
+is public. Backup ownership proofs are future work. Assertion of an
+unknown credential still inserts no account. Elect-key export at
+signup is not this surface. Blobs sealed before `35aee29` are Schnorr
+and fail closed on the responder; remint via signup.
