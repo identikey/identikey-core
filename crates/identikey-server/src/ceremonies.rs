@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use base64::Engine;
 use identikey_keys::{
     ADD_DEVICE_ACTION, AccessLevel, ConsentAppend, ConsentResult, KeysStore, ProofKind,
     SshGitInsert, StoreError, Xid, XidError,
@@ -51,6 +52,19 @@ enum AssertKind {
     Discoverable(DiscoverableAuthentication),
 }
 
+/// A device-code approval is a fresh assertion bound to one user code.
+#[derive(Clone)]
+pub struct DeviceAssertionBind {
+    pub user_code: String,
+    pub challenge: Vec<u8>,
+}
+
+pub struct FinishedAssertion {
+    pub xid: Xid,
+    pub pending: Option<PendingAuthorization>,
+    pub device: Option<DeviceAssertionBind>,
+}
+
 enum InFlight {
     Register {
         xid: Xid,
@@ -61,6 +75,7 @@ enum InFlight {
         xid: Option<Xid>,
         kind: AssertKind,
         pending: Option<PendingAuthorization>,
+        device: Option<DeviceAssertionBind>,
         expires_at: Instant,
     },
 }
@@ -213,10 +228,39 @@ impl CeremonyHub {
                 xid,
                 kind,
                 pending,
+                device: None,
                 expires_at: Instant::now() + SESSION_TTL,
             },
         );
         Ok((session, client_public_key(&rcr)?))
+    }
+
+    /// Discoverable assertion whose challenge is stored on the device-code row.
+    pub async fn begin_device_assert(
+        &self,
+        user_code: &str,
+    ) -> Result<(String, serde_json::Value, Vec<u8>), CeremonyError> {
+        let (rcr, state) = self
+            .webauthn
+            .start_discoverable_authentication()
+            .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        let public_key = client_public_key(&rcr)?;
+        let challenge = webauthn_challenge(&public_key)?;
+        let session = Self::session_id();
+        self.lock()?.insert(
+            session.clone(),
+            InFlight::Assert {
+                xid: None,
+                kind: AssertKind::Discoverable(state),
+                pending: None,
+                device: Some(DeviceAssertionBind {
+                    user_code: user_code.to_owned(),
+                    challenge: challenge.clone(),
+                }),
+                expires_at: Instant::now() + SESSION_TTL,
+            },
+        );
+        Ok((session, public_key, challenge))
     }
 
     pub async fn finish_assert(
@@ -224,12 +268,13 @@ impl CeremonyHub {
         store: &KeysStore,
         session: &str,
         credential: PublicKeyCredential,
-    ) -> Result<(Xid, Option<PendingAuthorization>), CeremonyError> {
+    ) -> Result<FinishedAssertion, CeremonyError> {
         let inflight = self.lock()?.remove(session);
         let Some(InFlight::Assert {
             xid: bound,
             kind,
             pending,
+            device,
             expires_at,
         }) = inflight
         else {
@@ -272,7 +317,11 @@ impl CeremonyHub {
         store
             .update_passkey_sign_counter(&cred_id, i64::from(result.counter()))
             .await?;
-        Ok((stored.xid, pending))
+        Ok(FinishedAssertion {
+            xid: stored.xid,
+            pending,
+            device,
+        })
     }
 
     /// Start an A3 assertion whose verifier state is persisted by the managed
@@ -346,10 +395,11 @@ impl CeremonyHub {
         let cred_id = credential.get_credential_id().to_vec();
         let proof_bytes =
             serde_json::to_vec(&credential).map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
-        let (xid, pending) = self.finish_assert(store, session, credential).await?;
-        if pending.is_some() {
+        let finished = self.finish_assert(store, session, credential).await?;
+        if finished.pending.is_some() || finished.device.is_some() {
             return Err(CeremonyError::ElectCannotAddDevice);
         }
+        let xid = finished.xid;
         let passkey_id = store.passkey_id(&cred_id).await?;
         let id = store
             .insert_ssh_git(SshGitInsert {
@@ -371,6 +421,17 @@ impl CeremonyHub {
             .await?;
         Ok((xid, id))
     }
+}
+
+fn webauthn_challenge(public_key: &serde_json::Value) -> Result<Vec<u8>, CeremonyError> {
+    let raw = public_key
+        .get("challenge")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| CeremonyError::Webauthn("missing assertion challenge".into()))?;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(raw)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(raw))
+        .map_err(|_| CeremonyError::Webauthn("assertion challenge is not base64url".into()))
 }
 
 fn client_public_key(challenge: &impl Serialize) -> Result<serde_json::Value, CeremonyError> {
@@ -490,6 +551,9 @@ pub struct AssertBegin {
 pub struct AssertFinish {
     pub session: String,
     pub credential: PublicKeyCredential,
+    /// Device approval requires an explicit confirm. Login ignores this.
+    #[serde(default)]
+    pub confirmed: bool,
 }
 
 #[derive(Debug, Deserialize)]

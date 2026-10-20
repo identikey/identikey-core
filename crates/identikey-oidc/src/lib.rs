@@ -27,6 +27,7 @@
 //! Pairwise salt is loaded at boot (`PairwiseSalt`). Every token `sub` goes
 //! through [`subject`]. See `docs/oidc-implementation-checklist.md`.
 
+pub mod device;
 pub mod discovery;
 pub mod error;
 pub mod export;
@@ -40,9 +41,13 @@ pub use error::{AuthorizeError, OidcError};
 pub use export::PairwiseExport;
 pub use provider::parse_http_basic;
 pub use provider::{
-    AuthorizeQuery, CHALLENGE_RESPONSE_GRANT, Introspection, PendingAuthorization, Provider,
-    TokenRequest, TokenResponse, UserInfo, s256_challenge,
+    AuthorizeQuery, CHALLENGE_RESPONSE_GRANT, DeviceAuthorizationResponse, Introspection,
+    PendingAuthorization, Provider, RegisteredClient, TokenRequest, TokenResponse, UserInfo,
+    s256_challenge,
 };
 pub use salt::{PairwiseSalt, SaltError};
 pub use signing::{SigningError, SigningKey};
-pub use subject::{Client, SubjectError, SubjectType, TokenEndpointAuthMethod, subject};
+pub use subject::{
+    Client, GRANT_AUTHORIZATION_CODE, GRANT_CHALLENGE_RESPONSE, GRANT_DEVICE_CODE,
+    GRANT_REFRESH_TOKEN, KNOWN_GRANTS, SubjectError, SubjectType, TokenEndpointAuthMethod, subject,
+};

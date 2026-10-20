@@ -5,7 +5,7 @@ This is the refuse-list. If a grant is not in **Implement**, it is refused.
 
 Sources: RFC 6749/6750, 7636, 8414, 7009, 7662, 9068, OIDC Core + Discovery,
 RFC 9700 (Jan 2025, https://www.rfc-editor.org/rfc/rfc9700.html). Device
-code (8628) is listed only to refuse it.
+code (RFC 8628) is implemented for clients that list that grant.
 
 ## Implement
 
@@ -14,6 +14,7 @@ code (8628) is listed only to refuse it.
 | Authorization code | RFC 6749 §4.1 | `response_type=code` only |
 | PKCE `S256` | RFC 7636, RFC 9700 §2.1.1 | Required for every client. `plain` refused |
 | Refresh token | RFC 6749 §6, RFC 9700 §2.2.2 | Public clients: rotate on use (`add-refresh-lifecycle`) |
+| Device authorization | RFC 8628 | Opt-in per client. Passkey assertion bound to that pending row, plus an explicit confirm. User code is not enough |
 | Bearer usage | RFC 6750 | Header only. No query-parameter access tokens |
 | Discovery | RFC 8414 + OIDC Discovery 1.0 | `/.well-known/openid-configuration` |
 | JWKS | OIDC Discovery `jwks_uri` | Signing key only. EdDSA / Ed25519 |
@@ -25,7 +26,8 @@ code (8628) is listed only to refuse it.
 Discovery MUST advertise:
 
 - `response_types_supported`: `["code"]`
-- `grant_types_supported`: `["authorization_code", "refresh_token", "urn:identikey:params:oauth:grant-type:challenge-response"]`
+- `grant_types_supported`: `["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code", "urn:identikey:params:oauth:grant-type:challenge-response"]`
+- `device_authorization_endpoint`
 - `code_challenge_methods_supported`: `["S256"]`
 - `subject_types_supported`: `["pairwise", "public"]` (ADR-009)
 - `id_token_signing_alg_values_supported`: `["EdDSA"]`
@@ -47,9 +49,8 @@ Quoted from RFC 9700 unless noted.
 | `http` redirect URIs | **MUST NOT**, except native loopback (§2.6) |
 | CORS on `/authorize` | **MUST NOT** (§2.6) |
 | Open redirectors | **MUST NOT** (§2.1) |
-| Device code (RFC 8628) | Not this slice (hooking an app does not need it) |
 | Hybrid (`code id_token`, `code token`) | Not this slice |
-| URN grant | Implemented: identikey-auth `Response` only, never a WebAuthn assertion (ADR-005) |
+| URN grant | Implemented: identikey-auth `Response` only, never a WebAuthn assertion (ADR-005). Opt-in per client, same allow-list as the device grant. Before a wallet client ships, the Response audience must also be the redeeming `client_id`. Today the audience is the issuer. The nonce stops replay. It does not stop cross-client redemption |
 
 ## Pairwise KDF (ADR-009 left this open)
 

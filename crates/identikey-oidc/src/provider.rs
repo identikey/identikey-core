@@ -14,11 +14,15 @@ use identikey_keys::Xid;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::device::{self, DeviceSessions, Poll};
 use crate::discovery::DiscoveryDocument;
 use crate::error::{AuthorizeError, OidcError};
 use crate::salt::PairwiseSalt;
 use crate::signing::SigningKey;
-use crate::subject::{Client, TokenEndpointAuthMethod, hash_client_secret, subject};
+use crate::subject::{
+    Client, GRANT_AUTHORIZATION_CODE, GRANT_DEVICE_CODE, GRANT_REFRESH_TOKEN,
+    TokenEndpointAuthMethod, hash_client_secret, subject,
+};
 
 const CODE_TTL: Duration = Duration::from_secs(600);
 const ACCESS_TTL: Duration = Duration::from_secs(3600);
@@ -27,8 +31,7 @@ const CHALLENGE_TTL_SECS: u64 = 120;
 const CHALLENGE_SKEW_SECS: u64 = 30;
 
 /// RFC 6749 grant_type for an identikey-auth Response.
-pub const CHALLENGE_RESPONSE_GRANT: &str =
-    "urn:identikey:params:oauth:grant-type:challenge-response";
+pub const CHALLENGE_RESPONSE_GRANT: &str = crate::subject::GRANT_CHALLENGE_RESPONSE;
 
 /// Validated `/authorize` request. Completing login (`issue_code`) is
 /// `add-dev-authorize`; this change only validates and can mint a code
@@ -68,6 +71,8 @@ pub struct TokenRequest {
     pub refresh_token: Option<String>,
     /// Unpadded base64url of identikey-auth Response bytes (URN grant).
     pub response: Option<String>,
+    /// RFC 8628 device code. Held by the poller. It is the redemption secret.
+    pub device_code: Option<String>,
 }
 
 impl std::fmt::Debug for TokenRequest {
@@ -92,6 +97,10 @@ impl std::fmt::Debug for TokenRequest {
                 &self.refresh_token.as_ref().map(|_| "[redacted]"),
             )
             .field("response", &self.response.as_ref().map(|_| "[redacted]"))
+            .field(
+                "device_code",
+                &self.device_code.as_ref().map(|_| "[redacted]"),
+            )
             .finish()
     }
 }
@@ -104,6 +113,25 @@ pub struct TokenResponse {
     pub id_token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
+}
+
+/// RFC 8628 device-authorization response. Raw codes are returned once.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceAuthorizationResponse {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub verification_uri_complete: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+/// Public registration fields the confirm page may show.
+#[derive(Debug, Clone)]
+pub struct RegisteredClient {
+    pub id: String,
+    pub display_name: String,
+    pub subject_type: crate::subject::SubjectType,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -156,6 +184,7 @@ pub struct Provider {
     /// SHA-256 of the refresh token → grant. The raw token is never stored.
     refresh: Mutex<HashMap<[u8; 32], RefreshGrant>>,
     refresh_pool: Option<sqlx::PgPool>,
+    devices: Mutex<DeviceSessions>,
     challenges: ChallengeIssuer,
     nonces: Mutex<InMemoryNonceStore>,
     /// identikey-auth public key (alg + bytes) → XID. Never a user private key.
@@ -186,6 +215,7 @@ impl Provider {
             access: Mutex::new(HashMap::new()),
             refresh: Mutex::new(HashMap::new()),
             refresh_pool: None,
+            devices: Mutex::new(DeviceSessions::new()),
             nonces: Mutex::new(InMemoryNonceStore::new()),
             subjects: Mutex::new(HashMap::new()),
         }
@@ -254,6 +284,12 @@ impl Provider {
         let client = self
             .client(client_id)
             .ok_or_else(|| AuthorizeError::deny("invalid_client", "unknown client_id"))?;
+        if !client.allows_grant(GRANT_AUTHORIZATION_CODE) {
+            return Err(AuthorizeError::deny(
+                "unauthorized_client",
+                "client is not allowed the authorization_code grant",
+            ));
+        }
 
         let redirect = query.redirect_uri.as_deref().unwrap_or("");
         if redirect.is_empty() || !redirect_allowed(&client, redirect) {
@@ -366,8 +402,99 @@ impl Provider {
             )),
             Some("refresh_token") => self.exchange_refresh(req).await,
             Some(CHALLENGE_RESPONSE_GRANT) => self.exchange_urn(req).await,
-            _ => Err(OidcError::invalid_request("grant_type is required")),
+            Some(GRANT_DEVICE_CODE) => self.exchange_device(req).await,
+            Some("") | None => Err(OidcError::invalid_request("grant_type is required")),
+            Some(other) => Err(OidcError::unsupported_grant_type(format!(
+                "grant_type {other} is refused"
+            ))),
         }
+    }
+
+    /// Start an RFC 8628 device authorization. The raw codes leave this process once.
+    pub fn start_device(
+        &self,
+        req: &TokenRequest,
+        scope: Option<&str>,
+    ) -> Result<DeviceAuthorizationResponse, OidcError> {
+        if let Some(scope) = scope.map(str::trim).filter(|value| !value.is_empty()) {
+            if scope.split_whitespace().any(|part| part != "openid") {
+                return Err(OidcError::new(
+                    "invalid_scope",
+                    "only scope=openid is supported",
+                ));
+            }
+        }
+        let client_id = request_client_id(req)?;
+        let client = self.authenticate(req, client_id)?;
+        ensure_grant(&client, GRANT_DEVICE_CODE)?;
+        let now = unix_now()?;
+        let (device_code, user_code) = {
+            let mut devices = lock(&self.devices)?;
+            let mut issued = None;
+            for _ in 0..8 {
+                let device_code = device::new_device_code()?;
+                let user_code = device::new_user_code()?;
+                if devices.contains_user(&user_code) || devices.contains_device(&device_code) {
+                    continue;
+                }
+                devices.insert(&client.id, &device_code, &user_code, now);
+                issued = Some((device_code, user_code));
+                break;
+            }
+            issued.ok_or_else(|| OidcError::server_error("could not allocate a device code"))?
+        };
+        let shown = hyphenate_user_code(&user_code);
+        let verification_uri = format!("{}/device", self.issuer);
+        Ok(DeviceAuthorizationResponse {
+            device_code,
+            user_code: shown.clone(),
+            verification_uri: verification_uri.clone(),
+            verification_uri_complete: format!("{verification_uri}?user_code={shown}"),
+            expires_in: device::DEVICE_TTL_SECS,
+            interval: device::DEVICE_INTERVAL_SECS,
+        })
+    }
+
+    pub fn device_prompt(
+        &self,
+        user_code: &str,
+        source: &str,
+    ) -> Result<device::DevicePrompt, OidcError> {
+        let mut devices = lock(&self.devices)?;
+        devices.prompt(user_code, source, unix_now()?, Instant::now())
+    }
+
+    pub fn bind_device_assertion(
+        &self,
+        user_code: &str,
+        challenge: &[u8],
+    ) -> Result<(), OidcError> {
+        let mut devices = lock(&self.devices)?;
+        devices.bind(user_code, challenge, unix_now()?)
+    }
+
+    pub fn approve_device(
+        &self,
+        user_code: &str,
+        xid: Xid,
+        challenge: &[u8],
+    ) -> Result<(), OidcError> {
+        let mut devices = lock(&self.devices)?;
+        devices.approve(user_code, xid, challenge, unix_now()?)
+    }
+
+    pub fn deny_device(&self, user_code: &str) -> Result<(), OidcError> {
+        let mut devices = lock(&self.devices)?;
+        devices.deny(user_code, unix_now()?)
+    }
+
+    #[must_use]
+    pub fn registered_client(&self, id: &str) -> Option<RegisteredClient> {
+        self.client(id).map(|client| RegisteredClient {
+            id: client.id,
+            display_name: client.display_name,
+            subject_type: client.subject_type,
+        })
     }
 
     /// Authenticate the client named by the token request (body and/or Basic).
@@ -460,9 +587,36 @@ impl Provider {
         Ok(())
     }
 
+    async fn exchange_device(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
+        let client_id = request_client_id(req)?;
+        let client = self.authenticate(req, client_id)?;
+        ensure_grant(&client, GRANT_DEVICE_CODE)?;
+        let device_code = req
+            .device_code
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| OidcError::invalid_request("device_code is required"))?;
+        let polled = {
+            let mut devices = lock(&self.devices)?;
+            devices.poll(device_code, &client.id, unix_now()?, Instant::now())?
+        };
+        match polled {
+            Poll::Pending => Err(OidcError::new(
+                "authorization_pending",
+                "authorization pending",
+            )),
+            Poll::SlowDown => Err(OidcError::new("slow_down", "polling too frequently")),
+            Poll::Ready { client_id, xid } => self.mint_tokens(&client_id, xid, None, None).await,
+        }
+    }
+
     async fn exchange_urn(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
         let client_id = request_client_id(req)?;
         let client = self.authenticate(req, client_id)?;
+        ensure_grant(&client, CHALLENGE_RESPONSE_GRANT)?;
+        // The Response audience is this issuer. A wallet client, not this
+        // slice, must also bind that Response to the redeeming client_id.
+        // The nonce stops replay. It does not stop cross-client redemption.
         let encoded = req
             .response
             .as_deref()
@@ -504,6 +658,7 @@ impl Provider {
     async fn exchange_code(&self, req: &TokenRequest) -> Result<TokenResponse, OidcError> {
         let client_id = request_client_id(req)?;
         let client = self.authenticate(req, client_id)?;
+        ensure_grant(&client, GRANT_AUTHORIZATION_CODE)?;
         let code = req
             .code
             .as_deref()
@@ -595,7 +750,8 @@ impl Provider {
                 ));
             }
         }
-        self.authenticate(req, &grant.client_id)?;
+        let client = self.authenticate(req, &grant.client_id)?;
+        ensure_grant(&client, GRANT_REFRESH_TOKEN)?;
         self.mint_tokens(&grant.client_id, grant.xid, None, Some(hashed))
             .await
     }
@@ -821,6 +977,24 @@ fn optional_request_client_id(req: &TokenRequest) -> Result<Option<&str>, OidcEr
         (Some(basic), _) => Ok(Some(basic)),
         (None, Some(body)) => Ok(Some(body)),
         (None, None) => Ok(None),
+    }
+}
+
+fn ensure_grant(client: &Client, grant: &str) -> Result<(), OidcError> {
+    if client.allows_grant(grant) {
+        Ok(())
+    } else {
+        Err(OidcError::unauthorized_client(format!(
+            "client is not allowed grant {grant}"
+        )))
+    }
+}
+
+fn hyphenate_user_code(raw: &str) -> String {
+    if raw.len() == 8 && raw.is_ascii() {
+        format!("{}-{}", &raw[..4], &raw[4..])
+    } else {
+        raw.to_owned()
     }
 }
 
@@ -1072,6 +1246,7 @@ fn refresh_store_error(err: sqlx::Error) -> OidcError {
 #[allow(
     clippy::unwrap_used,
     clippy::panic,
+    clippy::indexing_slicing,
     reason = "panicking on failure is the assertion in a test"
 )]
 mod tests {
@@ -1250,6 +1425,7 @@ mod tests {
             code_verifier: Some(VERIFIER.into()),
             refresh_token: None,
             response: None,
+            device_code: None,
         };
         let first = p.token(&req).await.unwrap();
         assert!(!first.access_token.is_empty());
@@ -1276,6 +1452,7 @@ mod tests {
                 code_verifier: None,
                 refresh_token: None,
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap_err();
@@ -1294,6 +1471,7 @@ mod tests {
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap_err();
@@ -1333,6 +1511,7 @@ mod tests {
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap();
@@ -1351,6 +1530,7 @@ mod tests {
                 code_verifier: None,
                 refresh_token: Some(t1.clone()),
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap();
@@ -1370,6 +1550,7 @@ mod tests {
                 code_verifier: None,
                 refresh_token: Some(t1),
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap_err();
@@ -1393,6 +1574,7 @@ mod tests {
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap();
@@ -1412,6 +1594,7 @@ mod tests {
                 code_verifier: None,
                 refresh_token: Some(refresh),
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap_err();
@@ -1500,6 +1683,7 @@ mod tests {
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap_err();
@@ -1517,6 +1701,7 @@ mod tests {
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap();
@@ -1540,6 +1725,7 @@ mod tests {
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap();
@@ -1563,6 +1749,7 @@ mod tests {
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap_err();
@@ -1586,6 +1773,7 @@ mod tests {
                 code_verifier: None,
                 refresh_token: None,
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap_err();
@@ -1609,6 +1797,7 @@ mod tests {
                 code_verifier: Some(VERIFIER.into()),
                 refresh_token: None,
                 response: None,
+                device_code: None,
             })
             .await
             .unwrap();
@@ -1623,8 +1812,17 @@ mod tests {
         assert_eq!(secret, "sec:ret");
     }
 
+    fn allow_urn(p: &Provider) {
+        p.register(
+            Client::new("smoke", "127.0.0.1")
+                .with_redirect("http://127.0.0.1:9999/cb")
+                .with_grant(CHALLENGE_RESPONSE_GRANT),
+        );
+    }
+
     fn urn_signed(p: &Provider) -> (identikey_auth::SoftwareSigner, String) {
         use identikey_auth::{Challenge, Signer};
+        allow_urn(p);
         let signer = identikey_auth::SoftwareSigner::generate_ed25519();
         p.register_subject(&signer.classical_public_key(), xid());
         let chal = Challenge::from_bytes(&p.issue_challenge().unwrap()).unwrap();
@@ -1659,6 +1857,7 @@ mod tests {
     #[tokio::test]
     async fn urn_grant_refuses_webauthn_assertion() {
         let p = provider();
+        allow_urn(&p);
         let fake = URL_SAFE_NO_PAD.encode(
             br#"{"id":"cred","response":{"authenticatorData":"AA","clientDataJSON":"AA","signature":"AA"}}"#,
         );
@@ -1675,5 +1874,205 @@ mod tests {
         let replay = p.token(&urn_req(encoded)).await.unwrap_err();
         assert_eq!(replay.error, "invalid_grant");
         assert!(replay.description.contains("replay"));
+    }
+
+    fn device_request(client_id: &str, device_code: Option<String>) -> TokenRequest {
+        TokenRequest {
+            grant_type: Some(GRANT_DEVICE_CODE.into()),
+            client_id: Some(client_id.into()),
+            device_code,
+            ..TokenRequest::default()
+        }
+    }
+
+    fn register_device_client(p: &Provider, id: &str) {
+        p.register(
+            Client::new(id, "cli.example")
+                .with_subject_type(crate::subject::SubjectType::Public)
+                .with_display_name("Mjolnir CLI")
+                .with_grants([GRANT_DEVICE_CODE, GRANT_REFRESH_TOKEN]),
+        );
+    }
+
+    #[test]
+    fn default_client_cannot_start_a_device_authorization() {
+        let p = provider();
+        let err = p
+            .start_device(
+                &TokenRequest {
+                    client_id: Some("smoke".into()),
+                    ..TokenRequest::default()
+                },
+                Some("openid"),
+            )
+            .unwrap_err();
+        assert_eq!(err.error, "unauthorized_client");
+    }
+
+    #[test]
+    fn device_only_client_is_refused_at_authorize_before_redirect_match() {
+        let p = provider();
+        register_device_client(&p, "headless");
+        let err = p
+            .validate_authorize(&AuthorizeQuery {
+                response_type: Some("code".into()),
+                client_id: Some("headless".into()),
+                redirect_uri: Some("https://evil.example/cb".into()),
+                code_challenge: Some("abc".into()),
+                code_challenge_method: Some("S256".into()),
+                state: None,
+                nonce: None,
+                scope: Some("openid".into()),
+            })
+            .unwrap_err();
+        match err {
+            AuthorizeError::Deny { error, .. } => assert_eq!(error, "unauthorized_client"),
+            other => panic!("expected a deny, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn device_grant_mints_once_and_matches_the_code_flow_subject() {
+        let p = provider();
+        p.register(
+            Client::new("both", "127.0.0.1")
+                .with_redirect("http://127.0.0.1:9999/cb")
+                .with_grant(GRANT_DEVICE_CODE),
+        );
+        let started = p
+            .start_device(&device_request("both", None), Some("openid"))
+            .unwrap();
+        assert_eq!(started.expires_in, 900);
+        assert_eq!(started.interval, 5);
+        assert!(started.verification_uri.ends_with("/device"));
+        assert!(started.verification_uri_complete.contains("user_code="));
+        assert!(started.user_code.contains('-'));
+        let watched = p.start_device(&device_request("both", None), None).unwrap();
+        let pending = p
+            .token(&device_request("both", Some(watched.device_code)))
+            .await
+            .unwrap_err();
+        assert_eq!(pending.error, "authorization_pending");
+
+        p.bind_device_assertion(&started.user_code, b"challenge")
+            .unwrap();
+        let mismatch = p
+            .approve_device(&started.user_code, xid(), b"other")
+            .unwrap_err();
+        assert_eq!(mismatch.error, "invalid_request");
+        p.approve_device(&started.user_code, xid(), b"challenge")
+            .unwrap();
+        let issued = p
+            .token(&device_request("both", Some(started.device_code.clone())))
+            .await
+            .unwrap();
+        assert_eq!(issued.expires_in, 3600);
+        let again = p
+            .token(&device_request("both", Some(started.device_code)))
+            .await
+            .unwrap_err();
+        assert_eq!(again.error, "invalid_grant");
+
+        let expected = subject(
+            &PairwiseSalt::from_hex(&"ab".repeat(32)).unwrap(),
+            xid(),
+            &Client::new("both", "127.0.0.1").with_redirect("http://127.0.0.1:9999/cb"),
+        )
+        .unwrap();
+        assert_eq!(p.userinfo(&issued.access_token).unwrap().sub, expected);
+        let payload = issued.id_token.split('.').nth(1).unwrap();
+        let bytes = URL_SAFE_NO_PAD.decode(payload).unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(claims["sub"], expected);
+        let audience = &claims["aud"];
+        assert!(audience == "both" || audience[0] == "both");
+        assert_eq!(claims["iss"], "http://127.0.0.1:8080");
+        let numeric = |value: &serde_json::Value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().map(|number| number as u64))
+                .or_else(|| value.as_f64().map(|number| number as u64))
+                .unwrap()
+        };
+        assert_eq!(numeric(&claims["exp"]) - numeric(&claims["iat"]), 3600);
+    }
+
+    #[tokio::test]
+    async fn another_client_cannot_redeem_a_device_code() {
+        let p = provider();
+        register_device_client(&p, "cli");
+        register_device_client(&p, "other");
+        let started = p.start_device(&device_request("cli", None), None).unwrap();
+        let err = p
+            .token(&device_request("other", Some(started.device_code)))
+            .await
+            .unwrap_err();
+        assert_eq!(err.error, "invalid_grant");
+        let unknown = p
+            .start_device(
+                &TokenRequest {
+                    client_id: Some("missing".into()),
+                    ..TokenRequest::default()
+                },
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(unknown.error, "invalid_client");
+    }
+
+    #[tokio::test]
+    async fn concurrent_device_polls_issue_one_token() {
+        let p = std::sync::Arc::new(provider());
+        register_device_client(&p, "cli");
+        let started = p.start_device(&device_request("cli", None), None).unwrap();
+        p.bind_device_assertion(&started.user_code, b"challenge")
+            .unwrap();
+        p.approve_device(&started.user_code, xid(), b"challenge")
+            .unwrap();
+        let req = device_request("cli", Some(started.device_code));
+        let first = {
+            let p = p.clone();
+            let req = req.clone();
+            tokio::spawn(async move { p.token(&req).await })
+        };
+        let second = tokio::spawn(async move { p.token(&req).await });
+        let (left, right) = tokio::join!(first, second);
+        let results = [left.unwrap(), right.unwrap()];
+        let ok = results.iter().filter(|result| result.is_ok()).count();
+        assert_eq!(ok, 1);
+        assert!(results.iter().any(|result| {
+            result
+                .as_ref()
+                .err()
+                .is_some_and(|err| err.error == "invalid_grant")
+        }));
+    }
+
+    #[tokio::test]
+    async fn password_grant_stays_refused() {
+        let err = provider()
+            .token(&TokenRequest {
+                grant_type: Some("password".into()),
+                client_id: Some("smoke".into()),
+                ..TokenRequest::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.error, "unsupported_grant_type");
+    }
+
+    #[tokio::test]
+    async fn urn_grant_without_allowance_is_unauthorized() {
+        let p = provider();
+        let (_signer, encoded) = {
+            use identikey_auth::{Challenge, Signer};
+            let signer = identikey_auth::SoftwareSigner::generate_ed25519();
+            p.register_subject(&signer.classical_public_key(), xid());
+            let chal = Challenge::from_bytes(&p.issue_challenge().unwrap()).unwrap();
+            let resp = signer.respond(&chal).unwrap();
+            (signer, URL_SAFE_NO_PAD.encode(resp.to_bytes()))
+        };
+        let err = p.token(&urn_req(encoded)).await.unwrap_err();
+        assert_eq!(err.error, "unauthorized_client");
     }
 }

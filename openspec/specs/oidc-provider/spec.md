@@ -68,7 +68,12 @@ containing `code` only, `code_challenge_methods_supported` containing
 `S256`, and `subject_types_supported` containing `pairwise` and
 `public`. It SHALL advertise `token_endpoint_auth_methods_supported`
 containing `none`, `client_secret_basic`, and `client_secret_post`.
-It SHALL NOT advertise implicit or password grants.
+It SHALL NOT advertise implicit or password grants. It SHALL
+advertise `device_authorization_endpoint` and include
+`urn:ietf:params:oauth:grant-type:device_code` in
+`grant_types_supported`. Advertising the grant does not give it to a
+client. A client receives `authorization_code` and `refresh_token`
+unless its registration lists a different set.
 
 #### Scenario: Discovery names code and S256
 
@@ -83,6 +88,41 @@ It SHALL NOT advertise implicit or password grants.
 - WHEN discovery is fetched
 - THEN `token_endpoint_auth_methods_supported` includes
   `client_secret_basic` and `client_secret_post`
+
+#### Scenario: Discovery names the device grant
+
+- GIVEN a booted server
+- WHEN discovery is fetched
+- THEN `grant_types_supported` includes
+  `urn:ietf:params:oauth:grant-type:device_code` and
+  `device_authorization_endpoint` is `{issuer}/device_authorization`
+
+### Requirement: Device authorization is an explicit grant
+
+`POST /device_authorization` SHALL mint an RFC 8628 device code only
+for a client whose registration lists
+`urn:ietf:params:oauth:grant-type:device_code`. The verification page
+SHALL require a fresh passkey assertion whose challenge was stored on
+that pending row, and an explicit confirmation. An account cookie
+SHALL NOT approve the row. `verification_uri_complete` MAY prefill the
+user code and MUST NOT skip confirmation. Polling
+`urn:ietf:params:oauth:grant-type:device_code` SHALL mint the same
+token response as the authorization-code grant, once. A client without
+`authorization_code` SHALL receive `unauthorized_client` from
+`/authorize` before redirect matching.
+
+#### Scenario: A default client cannot start the device grant
+
+- GIVEN a client registered without the device grant
+- WHEN it calls `POST /device_authorization`
+- THEN the response is `unauthorized_client` and no device code is issued
+
+#### Scenario: Confirm is required
+
+- GIVEN a pending device code whose user code was prefilled
+- WHEN the verification page is shown
+- THEN it names the client and requires a confirmation control that is
+  not already selected
 
 ### Requirement: Authorization code with PKCE
 

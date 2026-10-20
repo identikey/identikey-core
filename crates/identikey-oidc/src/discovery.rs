@@ -11,6 +11,7 @@ pub struct DiscoveryDocument {
     pub jwks_uri: String,
     pub revocation_endpoint: String,
     pub introspection_endpoint: String,
+    pub device_authorization_endpoint: String,
     pub response_types_supported: Vec<&'static str>,
     pub grant_types_supported: Vec<&'static str>,
     pub code_challenge_methods_supported: Vec<&'static str>,
@@ -32,10 +33,12 @@ impl DiscoveryDocument {
             jwks_uri: format!("{base}/.well-known/jwks.json"),
             revocation_endpoint: format!("{base}/revoke"),
             introspection_endpoint: format!("{base}/introspect"),
+            device_authorization_endpoint: format!("{base}/device_authorization"),
             response_types_supported: vec!["code"],
             grant_types_supported: vec![
                 "authorization_code",
                 "refresh_token",
+                crate::subject::GRANT_DEVICE_CODE,
                 crate::provider::CHALLENGE_RESPONSE_GRANT,
             ],
             code_challenge_methods_supported: vec!["S256"],
@@ -80,6 +83,14 @@ mod tests {
         assert!(
             doc.grant_types_supported
                 .contains(&crate::provider::CHALLENGE_RESPONSE_GRANT)
+        );
+        assert!(
+            doc.grant_types_supported
+                .contains(&crate::subject::GRANT_DEVICE_CODE)
+        );
+        assert_eq!(
+            doc.device_authorization_endpoint,
+            "https://auth.example/device_authorization"
         );
     }
 }

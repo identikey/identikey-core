@@ -38,12 +38,12 @@ use identikey_keys::{
     CustodyRung, KeysStore, ManagedKeyring, OperationalEd25519, Xid, c2_native,
     operational_ed25519_public,
 };
-use identikey_oidc::{
-    AuthorizeError, AuthorizeQuery, OidcError, PairwiseSalt, Provider, SigningKey, TokenRequest,
-    parse_http_basic,
-};
 #[cfg(test)]
-use identikey_oidc::{SubjectType, TokenEndpointAuthMethod};
+use identikey_oidc::TokenEndpointAuthMethod;
+use identikey_oidc::{
+    AuthorizeError, AuthorizeQuery, OidcError, PairwiseSalt, Provider, SigningKey, SubjectType,
+    TokenRequest, parse_http_basic,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
@@ -138,6 +138,11 @@ fn router_with_keyring(
             post(managed_challenge::retrieve),
         )
         .route("/challenge", get(challenge).post(challenge))
+        .route("/device_authorization", post(device_authorization))
+        .route("/device", get(device_page))
+        .route("/device/deny", post(device_deny))
+        .route("/device/assert/begin", post(device_assert_begin))
+        .route("/device/assert/finish", post(device_assert_finish))
         .route("/token", post(token))
         .route("/userinfo", get(userinfo).post(userinfo))
         .route("/introspect", post(introspect))
@@ -347,6 +352,24 @@ struct TokenForm {
     code_verifier: Option<String>,
     refresh_token: Option<String>,
     response: Option<String>,
+    device_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeviceAuthorizationForm {
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeviceQuery {
+    user_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeviceCodeBody {
+    user_code: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -543,11 +566,18 @@ async fn assert_finish(
         .finish_assert(&state.store, &body.session, body.credential)
         .await
     {
-        Ok((xid, pending)) => {
-            if let Some(pending) = pending {
-                return issue_authorize_code(&state, pending, xid);
+        Ok(finished) => {
+            if finished.device.is_some() {
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "confirm this login on the device page",
+                );
             }
-            Json(serde_json::json!({ "xid": xid.to_string() })).into_response()
+            if let Some(pending) = finished.pending {
+                return issue_authorize_code(&state, pending, finished.xid);
+            }
+            Json(serde_json::json!({ "xid": finished.xid.to_string() })).into_response()
         }
         Err(err) => ceremony_http(err),
     }
@@ -665,7 +695,10 @@ fn params_xid_from_query(_params: &AuthorizeParams) -> Option<Xid> {
 fn html_page(body: String) -> Response {
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
         body,
     )
         .into_response()
@@ -979,6 +1012,7 @@ async fn token(
         code_verifier: form.code_verifier,
         refresh_token: form.refresh_token,
         response: form.response,
+        device_code: form.device_code,
     };
     match state.provider.token(&req).await {
         Ok(issued) => Json(issued).into_response(),
@@ -1023,6 +1057,157 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     raw.strip_prefix("Bearer ")
         .or_else(|| raw.strip_prefix("bearer "))
+}
+
+fn attempt_source(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("direct")
+        .to_owned()
+}
+
+async fn device_authorization(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<DeviceAuthorizationForm>,
+) -> Response {
+    let basic = match headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(raw) => match parse_http_basic(raw) {
+            Ok(parsed) => parsed,
+            Err(err) => return token_error(err, true),
+        },
+        None => None,
+    };
+    let used_basic = basic.is_some();
+    let (basic_client_id, basic_client_secret) = match basic {
+        Some((id, secret)) => (Some(id), Some(secret)),
+        None => (None, None),
+    };
+    let req = TokenRequest {
+        client_id: form.client_id,
+        client_secret: form.client_secret,
+        basic_client_id,
+        basic_client_secret,
+        ..TokenRequest::default()
+    };
+    match state.provider.start_device(&req, form.scope.as_deref()) {
+        Ok(body) => (
+            StatusCode::OK,
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(body),
+        )
+            .into_response(),
+        Err(err) => token_error(err, used_basic),
+    }
+}
+
+/// The account cookie is not read. A signed-in browser does not approve a device code.
+async fn device_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<DeviceQuery>,
+) -> Response {
+    let Some(user_code) = query.user_code.filter(|code| !code.trim().is_empty()) else {
+        return html_page(pages::device_confirm(None, false));
+    };
+    let prompt = match state
+        .provider
+        .device_prompt(&user_code, &attempt_source(&headers))
+    {
+        Ok(prompt) => prompt,
+        Err(_) => return html_page(pages::device_confirm(None, true)),
+    };
+    let Some(client) = state.provider.registered_client(&prompt.client_id) else {
+        return html_page(pages::device_confirm(None, true));
+    };
+    html_page(pages::device_confirm(
+        Some(&pages::DeviceConfirm {
+            user_code,
+            display_name: client.display_name,
+            created_unix: prompt.created_unix,
+            public_subject: client.subject_type == SubjectType::Public,
+        }),
+        false,
+    ))
+}
+
+async fn device_assert_begin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<DeviceCodeBody>,
+) -> Response {
+    if let Err(err) = state
+        .provider
+        .device_prompt(&body.user_code, &attempt_source(&headers))
+    {
+        return token_error(err, false);
+    }
+    match state.ceremonies.begin_device_assert(&body.user_code).await {
+        Ok((session, public_key, challenge)) => {
+            if let Err(err) = state
+                .provider
+                .bind_device_assertion(&body.user_code, &challenge)
+            {
+                return token_error(err, false);
+            }
+            Json(ceremonies::CeremonyOptions {
+                session,
+                public_key,
+            })
+            .into_response()
+        }
+        Err(err) => ceremony_http(err),
+    }
+}
+
+async fn device_assert_finish(
+    State(state): State<AppState>,
+    Json(body): Json<ceremonies::AssertFinish>,
+) -> Response {
+    match state
+        .ceremonies
+        .finish_assert(&state.store, &body.session, body.credential)
+        .await
+    {
+        Ok(finished) => {
+            let Some(device) = finished.device else {
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "this ceremony is not a device approval",
+                );
+            };
+            if !body.confirmed {
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "confirmation is required",
+                );
+            }
+            match state
+                .provider
+                .approve_device(&device.user_code, finished.xid, &device.challenge)
+            {
+                Ok(()) => Json(serde_json::json!({ "approved": true })).into_response(),
+                Err(err) => token_error(err, false),
+            }
+        }
+        Err(err) => ceremony_http(err),
+    }
+}
+
+async fn device_deny(State(state): State<AppState>, Json(body): Json<DeviceCodeBody>) -> Response {
+    match state.provider.deny_device(&body.user_code) {
+        Ok(()) => Json(serde_json::json!({ "denied": true })).into_response(),
+        Err(err) => token_error(err, false),
+    }
 }
 
 fn token_error(err: OidcError, used_basic: bool) -> Response {
@@ -2038,8 +2223,11 @@ mod tests {
         let store = KeysStore::from_pool(pool);
         let salt = PairwiseSalt::from_hex(&"ab".repeat(32)).unwrap();
         let provider = Provider::generate("http://127.0.0.1:8080", salt).unwrap();
-        provider
-            .register(Client::new("smoke", "127.0.0.1").with_redirect("http://127.0.0.1:9999/cb"));
+        provider.register(
+            Client::new("smoke", "127.0.0.1")
+                .with_redirect("http://127.0.0.1:9999/cb")
+                .with_grant(CHALLENGE_RESPONSE_GRANT),
+        );
         let signer = SoftwareSigner::generate_ed25519();
         let xid = Xid::from_bytes([0x11; 32]);
         provider.register_subject(&signer.classical_public_key(), xid);
@@ -2714,13 +2902,14 @@ mod tests {
             mediation: None,
         };
         let assertion = authenticator.do_authentication(origin, rcr).unwrap();
-        let (got_xid, pending) = hub
+        let finished = hub
             .finish_assert(&store, &session, assertion)
             .await
             .unwrap();
-        assert_eq!(got_xid, xid);
-        let pending = pending.unwrap();
-        let code = provider.issue_code(&pending, got_xid).unwrap();
+        assert_eq!(finished.xid, xid);
+        assert!(finished.device.is_none());
+        let pending = finished.pending.unwrap();
+        let code = provider.issue_code(&pending, finished.xid).unwrap();
         assert!(!code.is_empty());
     }
 
@@ -2858,6 +3047,173 @@ mod tests {
                 .iter()
                 .all(|d| d.kind != "ssh_git")
         );
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn device_grant_is_opt_in_and_the_page_does_not_use_the_cookie(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use identikey_keys::Xid;
+        use identikey_oidc::{GRANT_DEVICE_CODE, GRANT_REFRESH_TOKEN};
+        use tower::ServiceExt;
+
+        let provider = test_provider();
+        provider.register(
+            Client::new("cli", "cli.example")
+                .with_subject_type(SubjectType::Public)
+                .with_display_name("Mjolnir CLI")
+                .with_grants([GRANT_DEVICE_CODE, GRANT_REFRESH_TOKEN]),
+        );
+        let app = router(
+            KeysStore::from_pool(pool),
+            provider.clone(),
+            false,
+            test_webauthn(),
+            Arc::new(account::AccountSessions::default()),
+        );
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/device_authorization")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("client_id=smoke&scope=openid"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+        let denied_body = body::to_bytes(denied.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let denied_json: serde_json::Value = serde_json::from_slice(&denied_body).unwrap();
+        assert_eq!(denied_json["error"], "unauthorized_client");
+
+        let started = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/device_authorization")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("client_id=cli&scope=openid"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(started.status(), StatusCode::OK);
+        let started_body = body::to_bytes(started.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let started_json: serde_json::Value = serde_json::from_slice(&started_body).unwrap();
+        let user_code = started_json["user_code"].as_str().unwrap().to_owned();
+        let device_code = started_json["device_code"].as_str().unwrap().to_owned();
+        assert!(
+            started_json["verification_uri_complete"]
+                .as_str()
+                .unwrap()
+                .contains(&user_code)
+        );
+
+        let page = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/device?user_code={user_code}"))
+                    .header(header::COOKIE, "identikey_account=not-a-session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.status(), StatusCode::OK);
+        let html = String::from_utf8(
+            body::to_bytes(page.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains("id=\"confirm\""));
+        assert!(html.contains("disabled"));
+        assert!(html.contains("Mjolnir CLI"));
+        assert!(html.contains("base58btc XID"));
+
+        let pending = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/token")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "grant_type={GRANT_DEVICE_CODE}&client_id=cli&device_code={device_code}"
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pending.status(), StatusCode::BAD_REQUEST);
+        let pending_body = body::to_bytes(pending.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let pending_json: serde_json::Value = serde_json::from_slice(&pending_body).unwrap();
+        assert_eq!(pending_json["error"], "authorization_pending");
+
+        let authorize = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/authorize?response_type=code&client_id=cli&redirect_uri=https://evil.example/cb&code_challenge=abc&code_challenge_method=S256")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authorize.status(), StatusCode::BAD_REQUEST);
+        let authorize_body = body::to_bytes(authorize.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let authorize_json: serde_json::Value = serde_json::from_slice(&authorize_body).unwrap();
+        assert_eq!(authorize_json["error"], "unauthorized_client");
+
+        let redeem = provider
+            .start_device(
+                &TokenRequest {
+                    client_id: Some("cli".into()),
+                    ..TokenRequest::default()
+                },
+                None,
+            )
+            .unwrap();
+        provider
+            .bind_device_assertion(&redeem.user_code, b"challenge")
+            .unwrap();
+        provider
+            .approve_device(&redeem.user_code, Xid::from_bytes([9; 32]), b"challenge")
+            .unwrap();
+        let minted = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/token")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "grant_type={GRANT_DEVICE_CODE}&client_id=cli&device_code={}",
+                        redeem.device_code
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(minted.status(), StatusCode::OK);
+        let minted_body = body::to_bytes(minted.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let minted_json: serde_json::Value = serde_json::from_slice(&minted_body).unwrap();
+        assert_eq!(minted_json["expires_in"], 3600);
+        assert!(minted_json["id_token"].as_str().unwrap().contains('.'));
     }
 
     const VERIFIER: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";

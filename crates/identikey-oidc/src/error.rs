@@ -33,6 +33,11 @@ impl OidcError {
     }
 
     #[must_use]
+    pub fn unauthorized_client(description: impl Into<String>) -> Self {
+        Self::new("unauthorized_client", description)
+    }
+
+    #[must_use]
     pub fn unsupported_grant_type(description: impl Into<String>) -> Self {
         Self::new("unsupported_grant_type", description)
     }

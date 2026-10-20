@@ -10,6 +10,22 @@ use crate::salt::PairwiseSalt;
 
 const INFO_PREFIX: &[u8] = b"identikey-oidc-sub-v1\0";
 
+/// Grants a client receives when its registration does not list any.
+pub const GRANT_AUTHORIZATION_CODE: &str = "authorization_code";
+pub const GRANT_REFRESH_TOKEN: &str = "refresh_token";
+/// RFC 8628. Opt-in. A client without this grant cannot start or redeem a device code.
+pub const GRANT_DEVICE_CODE: &str = "urn:ietf:params:oauth:grant-type:device_code";
+/// identikey-auth Response grant. Opt-in. Same string as [`crate::CHALLENGE_RESPONSE_GRANT`].
+pub const GRANT_CHALLENGE_RESPONSE: &str =
+    "urn:identikey:params:oauth:grant-type:challenge-response";
+
+pub const KNOWN_GRANTS: &[&str] = &[
+    GRANT_AUTHORIZATION_CODE,
+    GRANT_REFRESH_TOKEN,
+    GRANT_DEVICE_CODE,
+    GRANT_CHALLENGE_RESPONSE,
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SubjectType {
     #[default]
@@ -73,9 +89,11 @@ impl TokenEndpointAuthMethod {
 #[derive(Clone)]
 pub struct Client {
     pub id: String,
+    pub display_name: String,
     pub subject_type: SubjectType,
     pub sector_identifier: String,
     pub redirect_uris: Vec<String>,
+    pub grant_types: Vec<String>,
     pub token_endpoint_auth_method: TokenEndpointAuthMethod,
     secret_hash: Option<[u8; 32]>,
 }
@@ -84,9 +102,11 @@ impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Client")
             .field("id", &self.id)
+            .field("display_name", &self.display_name)
             .field("subject_type", &self.subject_type)
             .field("sector_identifier", &self.sector_identifier)
             .field("redirect_uris", &self.redirect_uris)
+            .field("grant_types", &self.grant_types)
             .field(
                 "token_endpoint_auth_method",
                 &self.token_endpoint_auth_method,
@@ -102,11 +122,14 @@ impl fmt::Debug for Client {
 impl Client {
     #[must_use]
     pub fn new(id: impl Into<String>, sector_identifier: impl Into<String>) -> Self {
+        let id = id.into();
         Self {
-            id: id.into(),
+            display_name: id.clone(),
+            id,
             subject_type: SubjectType::Pairwise,
             sector_identifier: sector_identifier.into(),
             redirect_uris: Vec::new(),
+            grant_types: vec![GRANT_AUTHORIZATION_CODE.into(), GRANT_REFRESH_TOKEN.into()],
             token_endpoint_auth_method: TokenEndpointAuthMethod::None,
             secret_hash: None,
         }
@@ -122,6 +145,34 @@ impl Client {
     pub fn with_subject_type(mut self, subject_type: SubjectType) -> Self {
         self.subject_type = subject_type;
         self
+    }
+
+    #[must_use]
+    pub fn with_display_name(mut self, name: impl Into<String>) -> Self {
+        self.display_name = name.into();
+        self
+    }
+
+    /// Replace the default grant set. Use this for a device-only client.
+    #[must_use]
+    pub fn with_grants(mut self, grants: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.grant_types = grants.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Add one grant to the default set.
+    #[must_use]
+    pub fn with_grant(mut self, grant: impl Into<String>) -> Self {
+        let grant = grant.into();
+        if !self.grant_types.iter().any(|existing| existing == &grant) {
+            self.grant_types.push(grant);
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn allows_grant(&self, grant: &str) -> bool {
+        self.grant_types.iter().any(|existing| existing == grant)
     }
 
     /// Hash `secret` (SHA-256) and remember only the digest.
@@ -190,6 +241,10 @@ mod tests {
             TokenEndpointAuthMethod::None
         );
         assert!(client.secret_hash().is_none());
+        assert!(client.allows_grant(GRANT_AUTHORIZATION_CODE));
+        assert!(client.allows_grant(GRANT_REFRESH_TOKEN));
+        assert!(!client.allows_grant(GRANT_DEVICE_CODE));
+        assert_eq!(client.display_name, "smoke");
     }
 
     #[test]

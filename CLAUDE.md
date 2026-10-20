@@ -169,7 +169,15 @@ base58btc of those 32 bytes). Mjolnir owner checks are string equality against t
 public `sub` (base58btc XID). Live `IDENTIKEY_CLIENTS` already has
 `mjolnir-cli` (`http://127.0.0.1/callback`) and `mjolnir-term`
 (`https://api.vm.worldtree.network/auth/callback`) as `auth=none`
-`subject_type=public`. `taskmaster` / `taskmaster-laptop` stay
+`subject_type=public`. `mjolnir-cli` must list
+`authorization_code`, `refresh_token`, and
+`urn:ietf:params:oauth:grant-type:device_code`. Loopback `mj login`
+uses the code grant. `mj login --device`, an SSH session, and a
+Linux session with no display use the device grant. A client that
+omits `grants` gets only code and refresh, so headless login is
+`unauthorized_client` until that list is on the host secrets JSON.
+`mjolnir-term` stays the code grant. Do not give the device grant to
+taskmaster, Conduit, or `wtnf-web`. `taskmaster` / `taskmaster-laptop` stay
 pairwise. Conduit laptop RP is confidential `id=localhost`
 (`http://127.0.0.1:8008/_matrix/client/v3/login/identikey/callback`,
 plus `http://localhost:8008/...`), `auth=client_secret_basic`, pairwise
@@ -178,8 +186,8 @@ sector `127.0.0.1`. Secret is not in this file; Conduit reads
 host secrets JSON; until then the guest wrapper
 `/app/target/release/identikey-server` exports `/root/identikey-clients.json`. The 2026-09-24 binary (`35aee29`) reads `subject_type` from
 that JSON (`client_from_spec`). Tokens minted before that cutover stay
-pairwise until `mj logout` and `mj login` again. No extra grant and no
-Mjolnir user row — the owner check is just `sub`.
+pairwise until `mj logout` and `mj login` again. The owner check is
+`sub`. There is no Mjolnir user row.
 
 Domains (checked 2026-09-18, bead `identikey-core-wzm` **P2**): both
 NameCheap. `identikey.me` created 2023-07-20, registry expiry
@@ -216,6 +224,11 @@ Taskmaster guest already has `IDENTIKEY_ISSUER=https://auth.identikey.me`,
 (RP derives redirect as `${ORIGIN}/auth/callback`). PKCE S256.
 `client_secret_basic`. Reuse the existing client secret; do not mint a
 second one and strand the RP.
+
+Hosted login mints one token shape. A browser on this machine uses
+authorization code + PKCE. A headless client uses the device grant
+when that registration lists it. The wallet URN grant is a third
+path and stays opt-in.
 
 Two ways to get OIDC tokens, one proof format:
 

@@ -1,4 +1,4 @@
-use identikey_oidc::{Client, SubjectType, TokenEndpointAuthMethod};
+use identikey_oidc::{Client, KNOWN_GRANTS, SubjectType, TokenEndpointAuthMethod};
 use serde::Deserialize;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -18,6 +18,10 @@ struct ClientJson {
     subject_type: Option<String>,
     #[serde(default)]
     sector: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    grants: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy)]
@@ -49,17 +53,21 @@ struct ClientSpec {
     auth: Option<String>,
     subject_type: Option<String>,
     sector: Option<String>,
+    name: Option<String>,
+    grants: Option<Vec<String>>,
 }
 
 impl ClientSpec {
     fn into_client(self) -> Result<Client, BoxError> {
-        client_from_spec(
+        client_from_parts(
             self.id,
             self.redirects,
             self.secret,
             self.auth,
             self.subject_type,
             self.sector,
+            self.name,
+            self.grants,
         )
     }
 
@@ -76,6 +84,7 @@ impl ClientSpec {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn client_from_spec(
     id: String,
     redirects: Vec<String>,
@@ -84,7 +93,52 @@ pub(crate) fn client_from_spec(
     subject_type: Option<String>,
     sector: Option<String>,
 ) -> Result<Client, BoxError> {
-    if id.is_empty() || redirects.is_empty() || redirects.iter().any(String::is_empty) {
+    client_from_parts(
+        id,
+        redirects,
+        secret,
+        auth,
+        subject_type,
+        sector,
+        None,
+        None,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "registration fields stay positional so the JSON loader and the tests name the same inputs"
+)]
+fn client_from_parts(
+    id: String,
+    redirects: Vec<String>,
+    secret: Option<String>,
+    auth: Option<String>,
+    subject_type: Option<String>,
+    sector: Option<String>,
+    name: Option<String>,
+    grants: Option<Vec<String>>,
+) -> Result<Client, BoxError> {
+    let grants = match grants {
+        Some(grants) => {
+            for grant in &grants {
+                if !KNOWN_GRANTS.contains(&grant.as_str()) {
+                    return Err(format!("unknown OIDC grant_type {grant}").into());
+                }
+            }
+            Some(grants)
+        }
+        None => None,
+    };
+    let needs_redirect = grants.as_ref().is_none_or(|grants| {
+        grants
+            .iter()
+            .any(|grant| grant == identikey_oidc::GRANT_AUTHORIZATION_CODE)
+    });
+    if id.is_empty()
+        || redirects.iter().any(String::is_empty)
+        || (needs_redirect && redirects.is_empty())
+    {
         return Err("OIDC client id and redirect are required".into());
     }
     let method = match (auth.as_deref(), secret.as_deref()) {
@@ -105,7 +159,13 @@ pub(crate) fn client_from_spec(
         (SubjectType::Public, _) => id.clone(),
     };
 
-    let mut client = Client::new(id, sector).with_subject_type(subject_type);
+    let mut client = Client::new(id.as_str(), sector).with_subject_type(subject_type);
+    if let Some(grants) = grants {
+        client = client.with_grants(grants);
+    }
+    if let Some(name) = name.filter(|name| !name.is_empty()) {
+        client = client.with_display_name(name);
+    }
     for redirect in redirects {
         client = client.with_redirect(redirect);
     }
@@ -162,6 +222,8 @@ fn primary_spec(
         auth,
         subject_type,
         sector,
+        name: None,
+        grants: None,
     })
 }
 
@@ -191,6 +253,8 @@ fn specs_from_json(raw: Option<&str>) -> Result<Vec<ClientSpec>, BoxError> {
             auth: spec.auth,
             subject_type: spec.subject_type,
             sector: spec.sector,
+            name: spec.name,
+            grants: spec.grants,
         })
         .collect())
 }
@@ -224,8 +288,16 @@ fn report(registrations: &[Registration]) -> Result<(String, bool), BoxError> {
     let mut all_match = true;
     for registration in registrations {
         let pairwise = registration.client.subject_type == SubjectType::Pairwise;
-        let matches =
-            !pairwise || registration.pin.as_deref() == Some(registration.legacy.as_str());
+        let matches = if !pairwise {
+            true
+        } else if registration.client.redirect_uris.is_empty() {
+            registration
+                .pin
+                .as_deref()
+                .is_some_and(|pin| !pin.is_empty())
+        } else {
+            registration.pin.as_deref() == Some(registration.legacy.as_str())
+        };
         all_match &= matches;
         let id = serde_json::to_string(&registration.client.id)?;
         let pin = serde_json::to_string(&registration.pin)?;
@@ -452,5 +524,43 @@ mod tests {
         assert!(output.contains("legacy=\"taskmaster.dev\" match=false"));
         assert!(output.contains("id=\"public\" source=json subject_type=public pin=null"));
         assert!(!output.contains("never-print-me"));
+    }
+
+    #[test]
+    fn device_only_registration_omits_redirect_and_keeps_an_explicit_pin() {
+        let registrations = registrations_from_json(Some(
+            r#"[{"id":"cli","name":"Mjolnir CLI","subject_type":"public","grants":["urn:ietf:params:oauth:grant-type:device_code","refresh_token"]}]"#,
+        ))
+        .unwrap();
+        assert!(registrations[0].client.redirect_uris.is_empty());
+        assert_eq!(registrations[0].client.display_name, "Mjolnir CLI");
+        assert!(
+            registrations[0]
+                .client
+                .allows_grant(identikey_oidc::GRANT_DEVICE_CODE)
+        );
+        assert!(
+            !registrations[0]
+                .client
+                .allows_grant(identikey_oidc::GRANT_AUTHORIZATION_CODE)
+        );
+        let (output, all_match) = report(&registrations).unwrap();
+        assert!(all_match, "{output}");
+
+        let pairwise = registrations_from_json(Some(
+            r#"[{"id":"pair-cli","subject_type":"pairwise","sector":"tools.example","grants":["urn:ietf:params:oauth:grant-type:device_code","refresh_token"]}]"#,
+        ))
+        .unwrap();
+        let (output, all_match) = report(&pairwise).unwrap();
+        assert!(all_match, "{output}");
+        assert_eq!(pairwise[0].legacy, "default");
+
+        let error = registrations_from_json(Some(
+            r#"[{"id":"bad","redirect":"https://example.invalid/cb","sector":"example.invalid","grants":["implicit"]}]"#,
+        ))
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("unknown OIDC grant_type"));
     }
 }
