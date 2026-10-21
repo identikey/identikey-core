@@ -114,7 +114,8 @@ pub fn authorize_elect(
 
 /// C2-native construction: the user's key is inception and holds `Elect` +
 /// `Transfer`; IdentiKey's key is a separate operational key with `Sign` +
-/// `Auth`. We never had the user's private key.
+/// `Auth`. This function does not retain the user's Elect private. A caller
+/// that also seals the X25519 scalar does that outside this document.
 pub fn c2_native(
     user_public: &impl PublicKeysProvider,
     identikey_public: &impl PublicKeysProvider,

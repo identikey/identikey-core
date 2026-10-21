@@ -1046,12 +1046,18 @@ protocol onto identikey-keys instead of re-specifying it here.
    a C2 row cannot be `admin: true`. Day-one house genesis admin is that
    user-held Ed25519, **not** IdentiKey Sign+Auth.
 
-   **Live instance.** `POST /signup` drops the user's `PrivateKeyBase` after
-   `create_managed`; only IdentiKey's operational private is in
-   `managed_key_blob`. Until Elect-key export or a wallet holds that user
-   private, no C2 row can unwrap. That inert wrap is intentional. Runtime must
-   not treat "at C2 it usually is the PUK" as "the member can decrypt today"
-   and must not "fix" it by wrapping to `managed_key_blob`.
+   **Live instance.** `POST /signup` seals the user X25519 scalar from
+   `PrivateKeyBase::x25519_private_key()` in `encapsulation_key_blob`
+   (`IKEK` v1, under the same managed wrap key as `IKMK`, not inside
+   `managed_key_blob`) and then drops the `PrivateKeyBase`. The Elect
+   private is not retained. `managed_key_blob` still holds only the
+   operational Ed25519 seed. Rows written before this seal keep a null
+   `encapsulation_key_blob` and still cannot unwrap. With the wrap key and
+   a valid `encapsulation_unwrap` consent, IdentiKey can open a PTK wrapped
+   to a held C2 member, including a house keyspace. That is custodial: the
+   operator holds the wrap key, so the consent check is policy in this
+   service. `encapsulation_export` is how the owner leaves with the scalar.
+   Do not wrap to `managed_key_blob` or to the operational companion X25519.
 
 5. **Device revoke, PUK rotation, and PTK rewrap are three separate steps**, not one. Revoking
    a `credentials` row does not by itself edit the PTK wrap-list. The cascade is: device

@@ -16,6 +16,7 @@
 mod account;
 mod ceremonies;
 mod clients;
+mod encapsulation;
 mod managed_challenge;
 mod pages;
 mod passkey_metadata;
@@ -35,7 +36,7 @@ use bc_components::{PrivateKeyBase, XIDProvider};
 use clients::client_from_spec;
 use clients::{extra_clients, optional_client};
 use identikey_keys::{
-    CustodyRung, KeysStore, ManagedKeyring, OperationalEd25519, Xid, c2_native,
+    CustodyRung, KeysStore, ManagedKeyring, OperationalEd25519, Xid, c2_native, c2_wrap_recipient,
     operational_ed25519_public,
 };
 use identikey_oidc::{
@@ -50,6 +51,7 @@ use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::services::{ServeDir, ServeFile};
 use webauthn::{WebAuthnConfig, parse_webauthn_config};
+use zeroize::Zeroize;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -118,6 +120,8 @@ fn router_with_keyring(
         )
         .route("/signup", get(signup_page).post(signup))
         .route("/account", get(account_page))
+        .route("/account/encapsulation/begin", post(encapsulation::begin))
+        .route("/account/encapsulation/export", post(encapsulation::export))
         .route("/webauthn/register/begin", post(register_begin))
         .route("/webauthn/register/finish", post(register_finish))
         .route("/webauthn/assert/begin", post(assert_begin))
@@ -174,6 +178,16 @@ fn router_with_keyring(
 /// CORS for public-client PKCE (CMS / other SPAs). Origins come from
 /// registered redirect URIs; unknown origins get no ACAO header.
 async fn spa_cors(State(provider): State<Arc<Provider>>, req: Request, next: Next) -> Response {
+    if encapsulation::is_encapsulation_path(req.uri().path()) {
+        if req.method() == Method::OPTIONS {
+            let mut response = StatusCode::NO_CONTENT.into_response();
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            return response;
+        }
+        return next.run(req).await;
+    }
     let origin = req
         .headers()
         .get(header::ORIGIN)
@@ -722,6 +736,47 @@ async fn signup(State(state): State<AppState>) -> Response {
         }
     };
     let xid = Xid::from(doc.xid());
+    let mut scalar = *user.x25519_private_key().data();
+    drop(user);
+    let recipient = match c2_wrap_recipient(&doc) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            scalar.zeroize();
+            return oauth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                &err.to_string(),
+            );
+        }
+    };
+    let recipient: [u8; 32] = match recipient.try_into() {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            scalar.zeroize();
+            return oauth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "wrap recipient is not 32 bytes",
+            );
+        }
+    };
+    let encapsulation_blob = match state
+        .managed_keys
+        .seal_encapsulation(xid, &recipient, &scalar)
+    {
+        Ok(blob) => {
+            scalar.zeroize();
+            blob
+        }
+        Err(err) => {
+            scalar.zeroize();
+            return oauth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                &err.to_string(),
+            );
+        }
+    };
     let public = match operational_ed25519_public(&doc) {
         Ok(public) => public,
         Err(err) => {
@@ -744,7 +799,7 @@ async fn signup(State(state): State<AppState>) -> Response {
     };
     let xid = match state
         .store
-        .create_managed(CustodyRung::C2, &doc, &blob)
+        .create_managed_with_encapsulation(CustodyRung::C2, &doc, &blob, Some(&encapsulation_blob))
         .await
     {
         Ok(xid) => xid,
@@ -1463,6 +1518,254 @@ mod tests {
             test_webauthn(),
             Arc::new(account::AccountSessions::default()),
         )
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn signup_seals_the_user_x25519(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = test_router(KeysStore::from_pool(pool.clone()));
+        let created = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/signup")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_slice(
+            &body::to_bytes(created.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let xid = Xid::parse(json["xid"].as_str().unwrap()).unwrap();
+        let present: bool = sqlx::query_scalar(
+            "SELECT encapsulation_key_blob IS NOT NULL FROM custody_records WHERE xid = $1",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(present);
+        let managed: Vec<u8> =
+            sqlx::query_scalar("SELECT managed_key_blob FROM custody_records WHERE xid = $1")
+                .bind(xid.as_bytes().as_slice())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(&managed[..4], b"IKMK");
+        let sealed: Vec<u8> =
+            sqlx::query_scalar("SELECT encapsulation_key_blob FROM custody_records WHERE xid = $1")
+                .bind(xid.as_bytes().as_slice())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(&sealed[..4], b"IKEK");
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn encapsulation_routes_reject_spa_cors_and_a_cookie(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = test_router(KeysStore::from_pool(pool));
+        for uri in [
+            "/account/encapsulation/begin",
+            "/account/encapsulation/export",
+        ] {
+            let preflight = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("OPTIONS")
+                        .uri(uri)
+                        .header(header::ORIGIN, "http://127.0.0.1:9999")
+                        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert!(
+                preflight
+                    .headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .is_none(),
+                "{uri} preflight leaked ACAO"
+            );
+        }
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/signup")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let cookie = created
+            .headers()
+            .get(header::SET_COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .unwrap()
+            .to_owned();
+        let begun = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/account/encapsulation/begin")
+                    .header(header::ORIGIN, "http://127.0.0.1:9999")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"purpose":"export"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(begun.status(), StatusCode::OK);
+        assert!(
+            begun
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("no-store")
+        );
+        assert!(
+            begun
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none()
+        );
+        let begin_json: serde_json::Value =
+            serde_json::from_slice(&body::to_bytes(begun.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let attempt = begin_json["attempt"].as_str().unwrap();
+        let exported = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/account/encapsulation/export")
+                    .header(header::ORIGIN, "http://127.0.0.1:9999")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"attempt":"{attempt}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(exported.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            exported
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none()
+        );
+        assert_eq!(
+            exported.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn http_export_returns_the_scalar_without_html(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::Request;
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use bc_components::Signer;
+        use dcbor::prelude::CBOR;
+        use identikey_keys::{BeginEncapsulationRequest, encapsulation_transcript};
+        use tower::ServiceExt;
+
+        let user = PrivateKeyBase::new();
+        let operational = OperationalEd25519::generate();
+        let doc = c2_native(&user, operational.public_keys()).unwrap();
+        let xid = Xid::from(doc.xid());
+        let scalar = *user.x25519_private_key().data();
+        let recipient: [u8; 32] = c2_wrap_recipient(&doc).unwrap().try_into().unwrap();
+        let keys = ManagedKeyring::single("test", [0x6d; 32]);
+        let blob = keys.seal_encapsulation(xid, &recipient, &scalar).unwrap();
+        let public = operational_ed25519_public(&doc).unwrap();
+        let managed = keys.seal(xid, &public, operational.seed()).unwrap();
+        let store = KeysStore::from_pool(pool.clone());
+        store
+            .create_managed_with_encapsulation(CustodyRung::C2, &doc, &managed, Some(&blob))
+            .await
+            .unwrap();
+        let begun = store
+            .begin_encapsulation(BeginEncapsulationRequest {
+                xid,
+                purpose: "export",
+                challenge: &[0x33; 32],
+                wrap: None,
+                webauthn_state: None,
+                now: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            })
+            .await
+            .unwrap();
+        let transcript = encapsulation_transcript(
+            "export",
+            xid.as_bytes(),
+            begun.id.as_bytes(),
+            &begun.challenge,
+            begun.iat,
+            begun.exp,
+            None,
+        );
+        let signature = user.sign(&transcript).unwrap();
+        let encoded = URL_SAFE_NO_PAD.encode(CBOR::from(signature).to_cbor_data());
+        let app = test_router(KeysStore::from_pool(pool));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/account/encapsulation/export")
+                    .header(header::ORIGIN, "http://127.0.0.1:9999")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"attempt":"{}","signature":"{encoded}"}}"#,
+                        begun.id
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none()
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/plain; charset=utf-8"
+        );
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), URL_SAFE_NO_PAD.encode(scalar).as_bytes());
+        assert!(!body.windows(5).any(|window| window == b"<html"));
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]

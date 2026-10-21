@@ -74,6 +74,7 @@
 
 pub mod ceremony;
 pub mod consent;
+pub mod encapsulation;
 pub mod keyspace;
 pub mod managed_challenge;
 pub mod privilege;
@@ -88,6 +89,10 @@ pub use ceremony::{
 };
 pub use consent::{
     CONSENT_HASH_V1, ConsentHashInput, ConsentResult, ProofKind, hash_consent_entry, hash_proof,
+};
+pub use encapsulation::{
+    BeginEncapsulation, BeginEncapsulationRequest, EncapsulationError, HeldProof,
+    encapsulation_transcript, wrap_data_key,
 };
 pub use keyspace::{ApplyError, CachedRosterEntry, CachedWrap, KeyspaceReplica, ReplicaSnapshot};
 pub use managed_challenge::{

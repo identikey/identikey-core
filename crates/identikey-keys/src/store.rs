@@ -47,6 +47,8 @@ pub enum StoreError {
     SshGitEmptyPublicKey,
     #[error("stored XID is not 32 bytes")]
     BadXid,
+    #[error("encapsulation export must be logged before climb")]
+    EncapsulationExportRequired,
 }
 
 /// Consent-log action for adding a hosted-being git-signing device.
@@ -208,6 +210,63 @@ impl KeysStore {
         Ok(xid)
     }
 
+    /// Same as [`Self::create_managed`], plus the optional user X25519 seal.
+    /// The seal is C2-only. `None` leaves older rows inert.
+    pub async fn create_managed_with_encapsulation(
+        &self,
+        rung: CustodyRung,
+        document: &XIDDocument,
+        managed_key_blob: &[u8],
+        encapsulation_key_blob: Option<&[u8]>,
+    ) -> Result<Xid, StoreError> {
+        if encapsulation_key_blob.is_some() && rung != CustodyRung::C2 {
+            return Err(StoreError::DocumentRungMismatch);
+        }
+        if !rung.holds_managed_key() {
+            return Err(StoreError::NotManagedRung(rung));
+        }
+        match rung {
+            CustodyRung::C2 if !is_c2(document) => {
+                return Err(StoreError::DocumentRungMismatch);
+            }
+            CustodyRung::C1 if is_c2(document) => {
+                return Err(StoreError::DocumentRungMismatch);
+            }
+            _ => {}
+        }
+        let xid = Xid::from(document.xid());
+        let xid_bytes = xid.as_bytes().as_slice();
+        let bytes = encode_document(document)?;
+        let rung_s = rung.as_str();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("INSERT INTO accounts (xid) VALUES ($1)")
+            .bind(xid_bytes)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO custody_records
+                (xid, rung, xid_document, managed_key_blob, encapsulation_key_blob)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(xid_bytes)
+        .bind(rung_s)
+        .bind(&bytes)
+        .bind(managed_key_blob)
+        .bind(encapsulation_key_blob)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO custody_events (xid, from_rung, to_rung, ceremony)
+             VALUES ($1, NULL, $2, 'signup')",
+        )
+        .bind(xid_bytes)
+        .bind(rung_s)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(xid)
+    }
+
     pub async fn get_account(&self, xid: Xid) -> Result<Option<StoredAccount>, StoreError> {
         let row = sqlx::query!(
             "SELECT xid FROM accounts WHERE xid = $1",
@@ -357,14 +416,34 @@ impl KeysStore {
             &new_bytes,
         )?;
 
-        let consent_id = append_consent_tx(&mut tx, consent).await?;
-        sqlx::query!(
-            "UPDATE custody_records
-             SET xid_document = $2, managed_key_blob = NULL, rung = 'c3', updated_at = now()
-             WHERE xid = $1",
-            xid_bytes,
-            &new_bytes
+        let has_seal = sqlx::query_scalar::<_, bool>(
+            "SELECT encapsulation_key_blob IS NOT NULL FROM custody_records WHERE xid = $1",
         )
+        .bind(xid_bytes)
+        .fetch_one(&mut *tx)
+        .await?;
+        if has_seal {
+            let exports: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM consent_log
+                 WHERE xid = $1 AND action = 'encapsulation_export' AND result = 'signed'",
+            )
+            .bind(xid_bytes)
+            .fetch_one(&mut *tx)
+            .await?;
+            if exports == 0 {
+                return Err(StoreError::EncapsulationExportRequired);
+            }
+        }
+
+        let consent_id = append_consent_tx(&mut tx, consent).await?;
+        sqlx::query(
+            "UPDATE custody_records
+             SET xid_document = $2, managed_key_blob = NULL, encapsulation_key_blob = NULL,
+                 rung = 'c3', updated_at = now()
+             WHERE xid = $1",
+        )
+        .bind(xid_bytes)
+        .bind(&new_bytes)
         .execute(&mut *tx)
         .await?;
         sqlx::query!(
@@ -788,13 +867,25 @@ async fn apply_document_update_tx(
         check_resolution(new_document)?;
     }
     authorize_elect(&previous, signer)?;
-    sqlx::query!(
-        "UPDATE custody_records SET xid_document = $2, updated_at = now() WHERE xid = $1",
-        xid_bytes,
-        new_bytes
-    )
-    .execute(&mut **tx)
-    .await?;
+    if crate::encapsulation::wrap_recipient_changed(&previous, new_document) {
+        sqlx::query(
+            "UPDATE custody_records
+             SET xid_document = $2, encapsulation_key_blob = NULL, updated_at = now()
+             WHERE xid = $1",
+        )
+        .bind(xid_bytes)
+        .bind(new_bytes)
+        .execute(&mut **tx)
+        .await?;
+    } else {
+        sqlx::query!(
+            "UPDATE custody_records SET xid_document = $2, updated_at = now() WHERE xid = $1",
+            xid_bytes,
+            new_bytes
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
     Ok(())
 }
 
@@ -969,7 +1060,7 @@ fn encode_document(document: &XIDDocument) -> Result<Vec<u8>, StoreError> {
     Ok(cbor.to_cbor_data())
 }
 
-fn decode_document(bytes: &[u8]) -> Result<XIDDocument, StoreError> {
+pub(crate) fn decode_document(bytes: &[u8]) -> Result<XIDDocument, StoreError> {
     let cbor = CBOR::try_from_data(bytes).map_err(|e| StoreError::Document(e.to_string()))?;
     XIDDocument::try_from(cbor).map_err(|e| StoreError::Document(e.to_string()))
 }

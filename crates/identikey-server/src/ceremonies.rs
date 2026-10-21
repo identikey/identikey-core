@@ -93,6 +93,11 @@ impl CeremonyHub {
         })
     }
 
+    #[must_use]
+    pub fn verifier(&self) -> &Webauthn {
+        &self.webauthn
+    }
+
     #[allow(
         clippy::unwrap_used,
         reason = "http://localhost is a valid webauthn-rs RP origin"
@@ -423,7 +428,7 @@ impl CeremonyHub {
     }
 }
 
-fn webauthn_challenge(public_key: &serde_json::Value) -> Result<Vec<u8>, CeremonyError> {
+pub(crate) fn webauthn_challenge(public_key: &serde_json::Value) -> Result<Vec<u8>, CeremonyError> {
     let raw = public_key
         .get("challenge")
         .and_then(|value| value.as_str())

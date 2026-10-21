@@ -22,6 +22,7 @@ identikey-auth.workspace = true
 
 axum.workspace = true
 bc-components.workspace = true
+dcbor.workspace = true
 tokio.workspace = true
 tower.workspace = true
 tower-http.workspace = true
@@ -37,6 +38,7 @@ url.workspace = true
 webauthn-rs.workspace = true
 uuid.workspace = true
 base64 = "0.22"
+zeroize = "1"
 
 [dev-dependencies]
 bc-xid.workspace = true

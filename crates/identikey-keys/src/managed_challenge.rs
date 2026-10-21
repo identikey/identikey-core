@@ -248,6 +248,9 @@ impl OperationalEd25519 {
         // XID keys carry a signing and an encapsulation public. This random
         // operational encapsulation private is deliberately discarded: the
         // user's distinct Elect/X25519 key remains the C2 wrap target.
+        // Companion of this operational Ed25519, not the user's wrap scalar.
+        // The C2 wrap target stays the user's distinct Elect X25519, sealed
+        // separately when signup asks for that. This private is discarded.
         let encapsulation = EncapsulationPublicKey::X25519(X25519PrivateKey::new().public_key());
         Self {
             seed,
@@ -371,6 +374,83 @@ impl ManagedKeyring {
         }
         Ok(signer)
     }
+
+    /// Seal the 32-byte user X25519 scalar. Magic `IKEK` and a distinct AAD
+    /// so an `IKMK` blob cannot be opened as this envelope, or the reverse.
+    pub fn seal_encapsulation(
+        &self,
+        xid: Xid,
+        recipient: &[u8; 32],
+        scalar: &[u8; 32],
+    ) -> Result<Vec<u8>, ManagedChallengeError> {
+        let key = self
+            .keys
+            .get(&self.active_kid)
+            .ok_or(ManagedChallengeError::MissingWrappingKey)?;
+        let kid = self.active_kid.as_bytes();
+        let kid_len = u8::try_from(kid.len()).map_err(|_| ManagedChallengeError::BadEnvelope)?;
+        if kid.is_empty() {
+            return Err(ManagedChallengeError::BadEnvelope);
+        }
+        let mut nonce = [0_u8; NONCE_LEN];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        let aad = encapsulation_aad(xid, recipient);
+        let cipher = XChaCha20Poly1305::new(key.into());
+        let ciphertext = cipher
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: scalar,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| ManagedChallengeError::BadEnvelope)?;
+        let mut out = Vec::with_capacity(6 + kid.len() + nonce.len() + ciphertext.len());
+        out.extend_from_slice(b"IKEK");
+        out.push(ENVELOPE_VERSION);
+        out.push(kid_len);
+        out.extend_from_slice(kid);
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&ciphertext);
+        Ok(out)
+    }
+
+    /// Open an `IKEK` envelope. The derived public must equal `recipient`,
+    /// which the caller sets to the document's current wrap recipient.
+    pub fn open_encapsulation(
+        &self,
+        envelope: &[u8],
+        xid: Xid,
+        recipient: &[u8; 32],
+    ) -> Result<[u8; 32], ManagedChallengeError> {
+        let parsed = parse_encapsulation_envelope(envelope)?;
+        let key = self
+            .keys
+            .get(parsed.kid)
+            .ok_or(ManagedChallengeError::MissingWrappingKey)?;
+        let cipher = XChaCha20Poly1305::new(key.into());
+        let aad = encapsulation_aad(xid, recipient);
+        let mut plaintext = cipher
+            .decrypt(
+                XNonce::from_slice(parsed.nonce),
+                Payload {
+                    msg: parsed.ciphertext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| ManagedChallengeError::BadEnvelope)?;
+        let mut scalar: [u8; 32] = plaintext
+            .as_slice()
+            .try_into()
+            .map_err(|_| ManagedChallengeError::BadEnvelope)?;
+        plaintext.zeroize();
+        let derived = X25519PrivateKey::from_data(scalar).public_key();
+        if derived.as_bytes() != recipient {
+            scalar.zeroize();
+            return Err(ManagedChallengeError::BadEnvelope);
+        }
+        Ok(scalar)
+    }
 }
 
 pub struct ManagedKeyEnvelope<'a> {
@@ -423,6 +503,58 @@ fn envelope_aad(xid: Xid, public: &[u8; 32]) -> Vec<u8> {
     aad.extend_from_slice(xid.as_bytes());
     aad.extend_from_slice(public);
     aad
+}
+
+fn encapsulation_aad(xid: Xid, recipient: &[u8; 32]) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(31 + 32 + 32);
+    aad.extend_from_slice(b"identikey-encapsulation-key-v1\n");
+    aad.extend_from_slice(xid.as_bytes());
+    aad.extend_from_slice(recipient);
+    aad
+}
+
+struct EncapsulationEnvelope<'a> {
+    kid: &'a str,
+    nonce: &'a [u8],
+    ciphertext: &'a [u8],
+}
+
+fn parse_encapsulation_envelope(
+    bytes: &[u8],
+) -> Result<EncapsulationEnvelope<'_>, ManagedChallengeError> {
+    if bytes.len() < 6 + NONCE_LEN + 32 + 16
+        || bytes.get(..4) != Some(b"IKEK".as_slice())
+        || bytes.get(4) != Some(&ENVELOPE_VERSION)
+    {
+        return Err(ManagedChallengeError::BadEnvelope);
+    }
+    let kid_len = usize::from(*bytes.get(5).ok_or(ManagedChallengeError::BadEnvelope)?);
+    if kid_len == 0 {
+        return Err(ManagedChallengeError::BadEnvelope);
+    }
+    let kid_start = 6;
+    let nonce_start = kid_start + kid_len;
+    let ciphertext_start = nonce_start + NONCE_LEN;
+    let kid = std::str::from_utf8(
+        bytes
+            .get(kid_start..nonce_start)
+            .ok_or(ManagedChallengeError::BadEnvelope)?,
+    )
+    .map_err(|_| ManagedChallengeError::BadEnvelope)?;
+    let nonce = bytes
+        .get(nonce_start..ciphertext_start)
+        .ok_or(ManagedChallengeError::BadEnvelope)?;
+    let ciphertext = bytes
+        .get(ciphertext_start..)
+        .ok_or(ManagedChallengeError::BadEnvelope)?;
+    if ciphertext.len() != 32 + 16 {
+        return Err(ManagedChallengeError::BadEnvelope);
+    }
+    Ok(EncapsulationEnvelope {
+        kid,
+        nonce,
+        ciphertext,
+    })
 }
 
 pub struct ChallengeAdmission {
