@@ -10,7 +10,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bc_components::Signature;
 use dcbor::prelude::*;
-use identikey_keys::{BeginEncapsulationRequest, EncapsulationError, HeldProof};
+use identikey_keys::{BeginEncapsulationRequest, EncapsulationError, HeldProof, Xid};
 use serde::Deserialize;
 use uuid::Uuid;
 use webauthn_rs::prelude::PublicKeyCredential;
@@ -24,11 +24,23 @@ pub struct BeginBody {
     purpose: String,
     #[serde(default)]
     wrap: Option<String>,
+    #[serde(default)]
+    friend: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct ExportBody {
     attempt: Uuid,
+    #[serde(default)]
+    signature: Option<String>,
+    #[serde(default)]
+    credential: Option<PublicKeyCredential>,
+}
+
+#[derive(Deserialize)]
+pub struct RewrapBody {
+    attempt: Uuid,
+    wrap: String,
     #[serde(default)]
     signature: Option<String>,
     #[serde(default)]
@@ -47,11 +59,11 @@ pub async fn begin(
             "sign in to name the account",
         ));
     };
-    if body.purpose != "export" && body.purpose != "unwrap" {
+    if body.purpose != "export" && body.purpose != "unwrap" && body.purpose != "rewrap" {
         return no_store(oauth_error(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "purpose must be export or unwrap",
+            "purpose must be export, unwrap, or rewrap",
         ));
     }
     let wrap = match decode_optional(&body.wrap) {
@@ -64,11 +76,11 @@ pub async fn begin(
             ));
         }
     };
-    if body.purpose == "unwrap" && wrap.is_none() {
+    if (body.purpose == "unwrap" || body.purpose == "rewrap") && wrap.is_none() {
         return no_store(oauth_error(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "unwrap requires the wrap bytes",
+            "unwrap and rewrap require the wrap bytes",
         ));
     }
     if body.purpose == "export" && wrap.is_some() {
@@ -76,6 +88,33 @@ pub async fn begin(
             StatusCode::BAD_REQUEST,
             "invalid_request",
             "export does not take a wrap",
+        ));
+    }
+    let friend = match body.friend.as_deref() {
+        Some(text) => match text.parse::<Xid>() {
+            Ok(xid) => Some(xid),
+            Err(_) => {
+                return no_store(oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "friend is not a base58btc xid",
+                ));
+            }
+        },
+        None => None,
+    };
+    if body.purpose == "rewrap" && friend.is_none() {
+        return no_store(oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "rewrap requires the friend's xid",
+        ));
+    }
+    if body.purpose != "rewrap" && friend.is_some() {
+        return no_store(oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "only rewrap names a friend",
         ));
     }
     let (challenge, webauthn_state, public_key) = match state
@@ -103,6 +142,7 @@ pub async fn begin(
             wrap: wrap.as_deref(),
             webauthn_state: webauthn_state.as_deref(),
             now,
+            friend,
         })
         .await
     {
@@ -114,6 +154,7 @@ pub async fn begin(
                     "attempt": begun.id,
                     "challenge": URL_SAFE_NO_PAD.encode(&begun.challenge),
                     "publicKey": public_key,
+                    "friend_has_seal": begun.friend_has_seal,
                 })
                 .to_string(),
             )
@@ -182,8 +223,84 @@ pub async fn export(State(state): State<AppState>, Json(body): Json<ExportBody>)
     }
 }
 
+pub async fn rewrap(State(state): State<AppState>, Json(body): Json<RewrapBody>) -> Response {
+    let wrap = match URL_SAFE_NO_PAD.decode(body.wrap.as_bytes()) {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        Ok(_) => {
+            return no_store(oauth_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "rewrap requires the wrap bytes",
+            ));
+        }
+        Err(_) => {
+            return no_store(oauth_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "wrap is not base64url",
+            ));
+        }
+    };
+    let now = unix_now();
+    let result = if let Some(credential) = body.credential.as_ref() {
+        state
+            .store
+            .rewrap_encapsulation(
+                &state.managed_keys,
+                body.attempt,
+                HeldProof::A3 {
+                    webauthn: state.ceremonies.verifier(),
+                    credential,
+                },
+                &wrap,
+                now,
+            )
+            .await
+    } else if let Some(signature) = body.signature.as_deref() {
+        let signature = match decode_signature(signature) {
+            Ok(signature) => signature,
+            Err(reason) => {
+                return no_store(oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    reason,
+                ));
+            }
+        };
+        state
+            .store
+            .rewrap_encapsulation(
+                &state.managed_keys,
+                body.attempt,
+                HeldProof::A4(&signature),
+                &wrap,
+                now,
+            )
+            .await
+    } else {
+        return no_store(oauth_error(
+            StatusCode::UNAUTHORIZED,
+            "access_denied",
+            "rewrap requires a passkey assertion or an elect signature",
+        ));
+    };
+    match result {
+        Ok(wrapped) => no_store(
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                URL_SAFE_NO_PAD.encode(wrapped),
+            )
+                .into_response(),
+        ),
+        Err(err) => no_store(encapsulation_error(err)),
+    }
+}
+
 pub(crate) fn is_encapsulation_path(path: &str) -> bool {
-    path == "/account/encapsulation/begin" || path == "/account/encapsulation/export"
+    path == "/account/encapsulation/begin"
+        || path == "/account/encapsulation/export"
+        || path == "/account/encapsulation/rewrap"
 }
 
 fn decode_optional(value: &Option<String>) -> Result<Option<Vec<u8>>, ()> {

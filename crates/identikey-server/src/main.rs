@@ -122,6 +122,7 @@ fn router_with_keyring(
         .route("/account", get(account_page))
         .route("/account/encapsulation/begin", post(encapsulation::begin))
         .route("/account/encapsulation/export", post(encapsulation::export))
+        .route("/account/encapsulation/rewrap", post(encapsulation::rewrap))
         .route("/webauthn/register/begin", post(register_begin))
         .route("/webauthn/register/finish", post(register_finish))
         .route("/webauthn/assert/begin", post(assert_begin))
@@ -1481,6 +1482,7 @@ async fn main() -> Result<(), BoxError> {
 #[allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
+    clippy::panic,
     reason = "panicking on failure is the assertion in a test"
 )]
 mod tests {
@@ -1579,6 +1581,7 @@ mod tests {
         for uri in [
             "/account/encapsulation/begin",
             "/account/encapsulation/export",
+            "/account/encapsulation/rewrap",
         ] {
             let preflight = app
                 .clone()
@@ -1653,6 +1656,29 @@ mod tests {
             serde_json::from_slice(&body::to_bytes(begun.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         let attempt = begin_json["attempt"].as_str().unwrap();
+        let cookie_rewrap = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/account/encapsulation/rewrap")
+                    .header(header::ORIGIN, "http://127.0.0.1:9999")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"attempt":"{attempt}","wrap":"AAAA"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cookie_rewrap.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            cookie_rewrap
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none()
+        );
         let exported = app
             .oneshot(
                 Request::builder()
@@ -1716,6 +1742,7 @@ mod tests {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs(),
+                friend: None,
             })
             .await
             .unwrap();
@@ -1726,6 +1753,7 @@ mod tests {
             &begun.challenge,
             begun.iat,
             begun.exp,
+            None,
             None,
         );
         let signature = user.sign(&transcript).unwrap();
@@ -1766,6 +1794,153 @@ mod tests {
             .unwrap();
         assert_eq!(body.as_ref(), URL_SAFE_NO_PAD.encode(scalar).as_bytes());
         assert!(!body.windows(5).any(|window| window == b"<html"));
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn http_rewrap_returns_the_wrap_without_html(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::Request;
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use bc_components::Signer;
+        use dcbor::prelude::*;
+        use identikey_keys::{BeginEncapsulationRequest, encapsulation_transcript, wrap_data_key};
+        use tower::ServiceExt;
+
+        let owner = PrivateKeyBase::new();
+        let owner_operational = OperationalEd25519::generate();
+        let owner_doc = c2_native(&owner, owner_operational.public_keys()).unwrap();
+        let owner_xid = Xid::from(owner_doc.xid());
+        let owner_scalar = *owner.x25519_private_key().data();
+        let owner_recipient: [u8; 32] = c2_wrap_recipient(&owner_doc).unwrap().try_into().unwrap();
+        let friend = PrivateKeyBase::new();
+        let friend_operational = OperationalEd25519::generate();
+        let friend_doc = c2_native(&friend, friend_operational.public_keys()).unwrap();
+        let friend_xid = Xid::from(friend_doc.xid());
+        let friend_recipient: [u8; 32] =
+            c2_wrap_recipient(&friend_doc).unwrap().try_into().unwrap();
+        let keys = ManagedKeyring::single("test", [0x6d; 32]);
+        let store = KeysStore::from_pool(pool.clone());
+        for (user, doc, xid, recipient, operational) in [
+            (
+                &owner,
+                &owner_doc,
+                owner_xid,
+                owner_recipient,
+                &owner_operational,
+            ),
+            (
+                &friend,
+                &friend_doc,
+                friend_xid,
+                friend_recipient,
+                &friend_operational,
+            ),
+        ] {
+            let scalar = *user.x25519_private_key().data();
+            let blob = keys.seal_encapsulation(xid, &recipient, &scalar).unwrap();
+            let public = operational_ed25519_public(doc).unwrap();
+            let managed = keys.seal(xid, &public, operational.seed()).unwrap();
+            store
+                .create_managed_with_encapsulation(CustodyRung::C2, doc, &managed, Some(&blob))
+                .await
+                .unwrap();
+        }
+        let ptk = [0xab; 32];
+        let wrapped = wrap_data_key(&owner_recipient, &ptk).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let begun = store
+            .begin_encapsulation(BeginEncapsulationRequest {
+                xid: owner_xid,
+                purpose: "rewrap",
+                challenge: &[0x33; 32],
+                wrap: Some(&wrapped),
+                webauthn_state: None,
+                now,
+                friend: Some(friend_xid),
+            })
+            .await
+            .unwrap();
+        assert_eq!(begun.friend_has_seal, Some(true));
+        let wrap_digest: [u8; 32] = Sha256::digest(&wrapped).into();
+        let transcript = encapsulation_transcript(
+            "rewrap",
+            owner_xid.as_bytes(),
+            begun.id.as_bytes(),
+            &begun.challenge,
+            begun.iat,
+            begun.exp,
+            Some(&wrap_digest),
+            Some(&friend_recipient),
+        );
+        let signature = owner.sign(&transcript).unwrap();
+        let encoded = URL_SAFE_NO_PAD.encode(CBOR::from(signature).to_cbor_data());
+        let wrap_b64 = URL_SAFE_NO_PAD.encode(&wrapped);
+        let app = test_router(KeysStore::from_pool(pool));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/account/encapsulation/rewrap")
+                    .header(header::ORIGIN, "http://127.0.0.1:9999")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"attempt":"{}","wrap":"{wrap_b64}","signature":"{encoded}"}}"#,
+                        begun.id
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none()
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/plain; charset=utf-8"
+        );
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(!body.windows(5).any(|window| window == b"<html"));
+        let decoded = URL_SAFE_NO_PAD.decode(body.as_ref()).unwrap();
+        assert_ne!(decoded.as_slice(), ptk.as_slice());
+        assert_ne!(decoded.as_slice(), owner_scalar.as_slice());
+        let cbor = CBOR::try_from_data(&decoded).unwrap();
+        let CBORCase::Map(map) = cbor.into_case() else {
+            panic!("rewrap body is not a dCBOR map");
+        };
+        let alg: String = map.extract("alg").unwrap();
+        assert_eq!(alg, "x25519-xchacha20poly1305");
+        let recipient: ByteString = map.extract("recipient").unwrap();
+        assert_eq!(recipient.as_ref(), friend_recipient.as_slice());
+        let again = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/account/encapsulation/rewrap")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"attempt":"{}","wrap":"{wrap_b64}","signature":"{encoded}"}}"#,
+                        begun.id
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(again.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]

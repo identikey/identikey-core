@@ -29,6 +29,7 @@ const CONSENT_TTL: u64 = 5 * 60;
 const WRAP_LABEL: &[u8] = b"identikey-keyspace-v1-wrap";
 const EXPORT_ACTION: &str = "encapsulation_export";
 const UNWRAP_ACTION: &str = "encapsulation_unwrap";
+const REWRAP_ACTION: &str = "encapsulation_rewrap";
 
 /// Eight small-order Montgomery u-coordinates, little-endian on the wire.
 /// The last entry is the non-canonical high-bit encoding of zero, which
@@ -73,8 +74,10 @@ const SMALL_ORDER: [[u8; 32]; 8] = [
 
 #[derive(Debug, thiserror::Error)]
 pub enum EncapsulationError {
-    #[error("encapsulation purpose is not export or unwrap")]
+    #[error("encapsulation purpose is not export, unwrap, or rewrap")]
     BadPurpose,
+    #[error("friend is not a distinct account with the consented X25519")]
+    Friend,
     #[error("encapsulation attempt was not found")]
     NotFound,
     #[error("encapsulation consent is expired or already used")]
@@ -108,11 +111,15 @@ pub enum HeldProof<'a> {
     },
 }
 
+#[derive(Debug)]
 pub struct BeginEncapsulation {
     pub id: Uuid,
     pub challenge: Vec<u8>,
     pub iat: u64,
     pub exp: u64,
+    /// Set for `rewrap`: the friend has a sealed X25519. A null seal means
+    /// the friend cannot open the wrap through IdentiKey.
+    pub friend_has_seal: Option<bool>,
 }
 
 pub struct BeginEncapsulationRequest<'a> {
@@ -122,10 +129,16 @@ pub struct BeginEncapsulationRequest<'a> {
     pub wrap: Option<&'a [u8]>,
     pub webauthn_state: Option<&'a [u8]>,
     pub now: u64,
+    /// Required for `rewrap`. The server loads that document's X25519.
+    pub friend: Option<Xid>,
 }
 
 /// Transcript bytes pinned by the held-encapsulation contract.
 #[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each transcript field is positional and covered by a pinned digest"
+)]
 pub fn encapsulation_transcript(
     purpose: &str,
     xid: &[u8; 32],
@@ -134,9 +147,10 @@ pub fn encapsulation_transcript(
     iat: u64,
     exp: u64,
     wrap_digest: Option<&[u8; 32]>,
+    recipient: Option<&[u8; 32]>,
 ) -> Vec<u8> {
     let mut out =
-        Vec::with_capacity(CONSENT_DOMAIN.len() + 1 + purpose.len() + 96 + challenge.len());
+        Vec::with_capacity(CONSENT_DOMAIN.len() + 1 + purpose.len() + 128 + challenge.len());
     out.extend_from_slice(CONSENT_DOMAIN);
     let purpose_bytes = purpose.as_bytes();
     let plen = u8::try_from(purpose_bytes.len()).unwrap_or(u8::MAX);
@@ -149,9 +163,14 @@ pub fn encapsulation_transcript(
     out.extend(challenge.iter().take(usize::from(clen)).copied());
     out.extend_from_slice(&iat.to_be_bytes());
     out.extend_from_slice(&exp.to_be_bytes());
-    if purpose == "unwrap" {
+    if purpose == "unwrap" || purpose == "rewrap" {
         if let Some(digest) = wrap_digest {
             out.extend_from_slice(digest);
+        }
+    }
+    if purpose == "rewrap" {
+        if let Some(recipient) = recipient {
+            out.extend_from_slice(recipient);
         }
     }
     out
@@ -194,17 +213,27 @@ impl KeysStore {
         &self,
         request: BeginEncapsulationRequest<'_>,
     ) -> Result<BeginEncapsulation, EncapsulationError> {
-        if request.purpose != "export" && request.purpose != "unwrap" {
-            return Err(EncapsulationError::BadPurpose);
-        }
         if request.challenge.is_empty() {
             return Err(EncapsulationError::InvalidProof);
         }
-        let wrap_digest = match (request.purpose, request.wrap) {
-            ("unwrap", Some(wrap)) => Some(sha256(wrap)),
-            ("export", None) => None,
-            _ => return Err(EncapsulationError::BadPurpose),
-        };
+        let (wrap_digest, friend_xid, friend_recipient, friend_has_seal) =
+            match (request.purpose, request.wrap, request.friend) {
+                ("unwrap", Some(wrap), None) => (Some(sha256(wrap)), None, None, None),
+                ("export", None, None) => (None, None, None, None),
+                ("rewrap", Some(wrap), Some(friend)) => {
+                    if friend == request.xid {
+                        return Err(EncapsulationError::Friend);
+                    }
+                    let (recipient, has_seal) = self.published_recipient(friend).await?;
+                    (
+                        Some(sha256(wrap)),
+                        Some(*friend.as_bytes()),
+                        Some(recipient),
+                        Some(has_seal),
+                    )
+                }
+                _ => return Err(EncapsulationError::BadPurpose),
+            };
         let iat = i64::try_from(request.now).map_err(|_| EncapsulationError::InvalidProof)?;
         let exp_u = request
             .now
@@ -214,8 +243,9 @@ impl KeysStore {
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO encapsulation_attempts
-                (id, xid, purpose, webauthn_challenge, webauthn_state, wrap_digest, iat, exp)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                (id, xid, purpose, webauthn_challenge, webauthn_state, wrap_digest,
+                 friend_xid, recipient, iat, exp)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(id)
         .bind(request.xid.as_bytes().as_slice())
@@ -223,6 +253,8 @@ impl KeysStore {
         .bind(request.challenge)
         .bind(request.webauthn_state)
         .bind(wrap_digest.as_ref().map(|d| d.as_slice()))
+        .bind(friend_xid.as_ref().map(|d| d.as_slice()))
+        .bind(friend_recipient.as_ref().map(|d| d.as_slice()))
         .bind(iat)
         .bind(exp)
         .execute(self.pool())
@@ -232,6 +264,7 @@ impl KeysStore {
             challenge: request.challenge.to_vec(),
             iat: request.now,
             exp: exp_u,
+            friend_has_seal,
         })
     }
 
@@ -244,12 +277,16 @@ impl KeysStore {
         proof: HeldProof<'_>,
         now: u64,
     ) -> Result<[u8; 32], EncapsulationError> {
-        self.finish_encapsulation(keyring, attempt_id, proof, None, now)
-            .await
+        match self
+            .finish_encapsulation(keyring, attempt_id, proof, None, now)
+            .await?
+        {
+            FinishOut::Secret(bytes) => Ok(bytes),
+            FinishOut::Wrap(_) => Err(EncapsulationError::InvalidProof),
+        }
     }
 
-    /// Unwrap one data key inside this process. No HTTP caller in this change.
-    /// The first production caller is `add-recrypt-proxy-vm`.
+    /// Unwrap one data key inside this process. There is no HTTP caller.
     pub async fn unwrap_encapsulation(
         &self,
         keyring: &ManagedKeyring,
@@ -258,8 +295,32 @@ impl KeysStore {
         wrap: &[u8],
         now: u64,
     ) -> Result<[u8; 32], EncapsulationError> {
-        self.finish_encapsulation(keyring, attempt_id, proof, Some(wrap), now)
-            .await
+        match self
+            .finish_encapsulation(keyring, attempt_id, proof, Some(wrap), now)
+            .await?
+        {
+            FinishOut::Secret(bytes) => Ok(bytes),
+            FinishOut::Wrap(_) => Err(EncapsulationError::InvalidProof),
+        }
+    }
+
+    /// Open one wrap and return a new §7 wrap for the friend named at begin.
+    /// The data key does not leave this function.
+    pub async fn rewrap_encapsulation(
+        &self,
+        keyring: &ManagedKeyring,
+        attempt_id: Uuid,
+        proof: HeldProof<'_>,
+        wrap: &[u8],
+        now: u64,
+    ) -> Result<Vec<u8>, EncapsulationError> {
+        match self
+            .finish_encapsulation(keyring, attempt_id, proof, Some(wrap), now)
+            .await?
+        {
+            FinishOut::Wrap(bytes) => Ok(bytes),
+            FinishOut::Secret(_) => Err(EncapsulationError::InvalidProof),
+        }
     }
 
     pub async fn has_encapsulation_key(&self, xid: Xid) -> Result<Option<bool>, StoreError> {
@@ -272,6 +333,23 @@ impl KeysStore {
         Ok(present)
     }
 
+    async fn published_recipient(&self, xid: Xid) -> Result<([u8; 32], bool), EncapsulationError> {
+        let row = sqlx::query(
+            "SELECT xid_document, (encapsulation_key_blob IS NOT NULL) AS has_seal
+             FROM custody_records WHERE xid = $1",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .fetch_optional(self.pool())
+        .await?
+        .ok_or(EncapsulationError::NotFound)?;
+        let document = decode_document(&row.try_get::<Vec<u8>, _>("xid_document")?)?;
+        let recipient = recipient_array(&document)?;
+        if is_small_order(&recipient) {
+            return Err(EncapsulationError::Wrap);
+        }
+        Ok((recipient, row.try_get("has_seal")?))
+    }
+
     async fn finish_encapsulation(
         &self,
         keyring: &ManagedKeyring,
@@ -279,10 +357,11 @@ impl KeysStore {
         proof: HeldProof<'_>,
         wrap: Option<&[u8]>,
         now: u64,
-    ) -> Result<[u8; 32], EncapsulationError> {
+    ) -> Result<FinishOut, EncapsulationError> {
         let mut tx = self.pool().begin().await?;
         let row = sqlx::query(
-            "SELECT xid, purpose, webauthn_challenge, webauthn_state, wrap_digest, iat, exp, used_at
+            "SELECT xid, purpose, webauthn_challenge, webauthn_state, wrap_digest,
+                    friend_xid, recipient, iat, exp, used_at
              FROM encapsulation_attempts WHERE id = $1 FOR UPDATE",
         )
         .bind(attempt_id)
@@ -296,11 +375,11 @@ impl KeysStore {
             return Err(EncapsulationError::Expired);
         }
         let purpose: String = row.try_get("purpose")?;
-        let expected = match wrap {
-            Some(_) => "unwrap",
-            None => "export",
-        };
-        if purpose != expected {
+        let purpose_ok = matches!(
+            (purpose.as_str(), wrap.is_some()),
+            ("export", false) | ("unwrap", true) | ("rewrap", true)
+        );
+        if !purpose_ok {
             return Err(EncapsulationError::InvalidProof);
         }
         let exp = u64::try_from(row.try_get::<i64, _>("exp")?)
@@ -316,12 +395,28 @@ impl KeysStore {
         let stored_digest: Option<Vec<u8>> = row.try_get("wrap_digest")?;
         let webauthn_state: Option<Vec<u8>> = row.try_get("webauthn_state")?;
 
-        let digest_arr = match (&purpose[..], stored_digest.as_deref()) {
-            ("unwrap", Some(bytes)) => {
+        let digest_arr = match (purpose.as_str(), stored_digest.as_deref()) {
+            ("unwrap" | "rewrap", Some(bytes)) => {
                 Some(<[u8; 32]>::try_from(bytes).map_err(|_| EncapsulationError::InvalidProof)?)
             }
             ("export", None) => None,
             _ => return Err(EncapsulationError::InvalidProof),
+        };
+        let stored_friend = match purpose.as_str() {
+            "rewrap" => {
+                let friend_bytes: Vec<u8> = row
+                    .try_get::<Option<Vec<u8>>, _>("friend_xid")?
+                    .ok_or(EncapsulationError::InvalidProof)?;
+                let friend = Xid::try_from_slice(&friend_bytes)
+                    .map_err(|_| EncapsulationError::InvalidProof)?;
+                let recipient_bytes: Vec<u8> = row
+                    .try_get::<Option<Vec<u8>>, _>("recipient")?
+                    .ok_or(EncapsulationError::InvalidProof)?;
+                let recipient = <[u8; 32]>::try_from(recipient_bytes.as_slice())
+                    .map_err(|_| EncapsulationError::InvalidProof)?;
+                Some((friend, recipient))
+            }
+            _ => None,
         };
         if let Some(wrap) = wrap {
             let got = sha256(wrap);
@@ -357,6 +452,7 @@ impl KeysStore {
                         iat,
                         exp,
                         digest_arr.as_ref(),
+                        stored_friend.as_ref().map(|(_, recipient)| recipient),
                     ),
                 )?;
                 let bytes = cbor_signature(signature);
@@ -414,6 +510,19 @@ impl KeysStore {
             }
         };
 
+        if let Some((friend, consented)) = stored_friend.as_ref() {
+            let friend_row = sqlx::query("SELECT xid_document FROM custody_records WHERE xid = $1")
+                .bind(friend.as_bytes().as_slice())
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or(EncapsulationError::Friend)?;
+            let friend_doc = decode_document(&friend_row.try_get::<Vec<u8>, _>("xid_document")?)?;
+            let current = recipient_array(&friend_doc).map_err(|_| EncapsulationError::Friend)?;
+            if current != *consented || is_small_order(&current) {
+                return Err(EncapsulationError::Friend);
+            }
+        }
+
         let marked = sqlx::query(
             "UPDATE encapsulation_attempts SET used_at = now() WHERE id = $1 AND used_at IS NULL",
         )
@@ -431,11 +540,38 @@ impl KeysStore {
             .open_encapsulation(&blob, xid, &recipient)
             .map_err(|_| EncapsulationError::Seal)?;
 
-        let returned = if let Some(wrap) = wrap {
+        let returned = if purpose == "rewrap" {
+            let Some((_, consented)) = stored_friend.as_ref() else {
+                scalar.zeroize();
+                return Err(EncapsulationError::InvalidProof);
+            };
+            let Some(wrap) = wrap else {
+                scalar.zeroize();
+                return Err(EncapsulationError::InvalidProof);
+            };
+            let mut ptk = match unwrap_with_scalar(&scalar, wrap, &recipient) {
+                Ok(ptk) => ptk,
+                Err(err) => {
+                    scalar.zeroize();
+                    return Err(err);
+                }
+            };
+            let wrapped = match wrap_data_key(consented, &ptk) {
+                Ok(wrapped) => wrapped,
+                Err(err) => {
+                    ptk.zeroize();
+                    scalar.zeroize();
+                    return Err(err);
+                }
+            };
+            ptk.zeroize();
+            scalar.zeroize();
+            FinishOut::Wrap(wrapped)
+        } else if let Some(wrap) = wrap {
             match unwrap_with_scalar(&scalar, wrap, &recipient) {
                 Ok(ptk) => {
                     scalar.zeroize();
-                    ptk
+                    FinishOut::Secret(ptk)
                 }
                 Err(err) => {
                     scalar.zeroize();
@@ -443,26 +579,33 @@ impl KeysStore {
                 }
             }
         } else {
-            scalar
+            FinishOut::Secret(scalar)
         };
 
         let digest_hex = digest_arr.map(hex_digest);
-        let log_purpose = if purpose == "unwrap" {
-            digest_hex.as_deref()
+        let (action, audience, log_purpose) = if purpose == "rewrap" {
+            let friend = stored_friend.as_ref().map(|(friend, _)| friend.to_string());
+            (REWRAP_ACTION, friend, digest_hex.clone())
+        } else if purpose == "unwrap" {
+            (
+                UNWRAP_ACTION,
+                Some("encapsulation".to_string()),
+                digest_hex.clone(),
+            )
         } else {
-            Some("export")
+            (
+                EXPORT_ACTION,
+                Some("encapsulation".to_string()),
+                Some("export".to_string()),
+            )
         };
         let consent_id = append_consent_tx(
             &mut tx,
             ConsentAppend {
                 xid,
-                action: if purpose == "unwrap" {
-                    UNWRAP_ACTION
-                } else {
-                    EXPORT_ACTION
-                },
-                audience: Some("encapsulation"),
-                purpose: log_purpose,
+                action,
+                audience: audience.as_deref(),
+                purpose: log_purpose.as_deref(),
                 access_level: access,
                 credential_id,
                 proof_kind,
@@ -471,11 +614,7 @@ impl KeysStore {
             },
         )
         .await?;
-        let ceremony = if purpose == "unwrap" {
-            UNWRAP_ACTION
-        } else {
-            EXPORT_ACTION
-        };
+        let ceremony = action;
         sqlx::query(
             "INSERT INTO custody_events (xid, from_rung, to_rung, ceremony, consent_id)
              VALUES ($1, 'c2', 'c2', $2, $3)",
@@ -490,6 +629,15 @@ impl KeysStore {
     }
 }
 
+enum FinishOut {
+    Secret([u8; 32]),
+    Wrap(Vec<u8>),
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each transcript field is positional and covered by a pinned digest"
+)]
 fn transcript_for(
     purpose: &str,
     xid: Xid,
@@ -498,6 +646,7 @@ fn transcript_for(
     iat: u64,
     exp: u64,
     wrap_digest: Option<&[u8; 32]>,
+    recipient: Option<&[u8; 32]>,
 ) -> Vec<u8> {
     encapsulation_transcript(
         purpose,
@@ -507,6 +656,7 @@ fn transcript_for(
         iat,
         exp,
         wrap_digest,
+        recipient,
     )
 }
 
@@ -744,6 +894,7 @@ mod tests {
             1_700_000_000,
             1_700_000_300,
             None,
+            None,
         );
         let export_hex = hex_digest(digest(&export));
         assert_eq!(
@@ -758,10 +909,25 @@ mod tests {
             1_700_000_000,
             1_700_000_300,
             Some(&[0x44; 32]),
+            None,
         );
         assert_eq!(
             hex_digest(digest(&unwrap)),
             "b18286bad604fc6da5425928d1f0892201b137bdcc9633e90b00bb93af0a558f"
+        );
+        let rewrap = encapsulation_transcript(
+            "rewrap",
+            &[0x11; 32],
+            &[0x22; 16],
+            &[0x33; 32],
+            1_700_000_000,
+            1_700_000_300,
+            Some(&[0x44; 32]),
+            Some(&[0x55; 32]),
+        );
+        assert_eq!(
+            hex_digest(digest(&rewrap)),
+            "c5266850c16f4ed35cbddb4a37a4bbac6faf6a421690dc7c110c3c876302caa7"
         );
     }
 
@@ -882,6 +1048,7 @@ mod tests {
             wrap,
             webauthn_state: None,
             now: NOW,
+            friend: None,
         }
     }
 
@@ -908,6 +1075,7 @@ mod tests {
             &begun.challenge,
             begun.iat,
             begun.exp,
+            None,
             None,
         );
         let signature = sealed.user.sign(&transcript).unwrap();
@@ -959,6 +1127,7 @@ mod tests {
             begun.iat,
             begun.exp,
             Some(&digest(&wrapped)),
+            None,
         );
         let signature = sealed.user.sign(&transcript).unwrap();
         let err = reader
@@ -1024,6 +1193,7 @@ mod tests {
             begun.iat,
             begun.exp,
             Some(&digest(&wrapped)),
+            None,
         );
         let signature = user.sign(&transcript).unwrap();
         let err = store
@@ -1063,6 +1233,7 @@ mod tests {
             begun.iat,
             begun.exp,
             Some(&digest(&forged)),
+            None,
         );
         let signature = sealed.user.sign(&transcript).unwrap();
         let err = store
@@ -1111,6 +1282,7 @@ mod tests {
             &begun.challenge,
             begun.iat,
             begun.exp,
+            None,
             None,
         );
         let export_sig = sealed.user.sign(&transcript).unwrap();
@@ -1193,6 +1365,329 @@ mod tests {
             store.has_encapsulation_key(sealed.xid).await.unwrap(),
             Some(true)
         );
+    }
+
+    #[sqlx::test]
+    async fn rewrap_returns_a_wrap_the_friend_can_open(pool: PgPool) {
+        let (_owner_store, keys, owner) = sealed(&pool).await;
+        let (_friend_store, _friend_keys, friend) = sealed(&pool).await;
+        let reader = KeysStore::from_pool(pool);
+        let ptk = [0xab; 32];
+        let owner_recipient: [u8; 32] = c2_wrap_recipient(&owner.doc).unwrap().try_into().unwrap();
+        let friend_recipient: [u8; 32] =
+            c2_wrap_recipient(&friend.doc).unwrap().try_into().unwrap();
+        let wrapped = wrap_data_key(&owner_recipient, &ptk).unwrap();
+        let mut request = begin(owner.xid, "rewrap", &[0x33; 32], Some(&wrapped));
+        request.friend = Some(friend.xid);
+        let begun = reader.begin_encapsulation(request).await.unwrap();
+        assert_eq!(begun.friend_has_seal, Some(true));
+        let transcript = encapsulation_transcript(
+            "rewrap",
+            owner.xid.as_bytes(),
+            begun.id.as_bytes(),
+            &begun.challenge,
+            begun.iat,
+            begun.exp,
+            Some(&digest(&wrapped)),
+            Some(&friend_recipient),
+        );
+        let signature = owner.user.sign(&transcript).unwrap();
+        let out = reader
+            .rewrap_encapsulation(&keys, begun.id, HeldProof::A4(&signature), &wrapped, NOW)
+            .await
+            .unwrap();
+        assert_ne!(out.as_slice(), ptk.as_slice());
+        assert_eq!(
+            unwrap_with_scalar(&friend.scalar, &out, &friend_recipient).unwrap(),
+            ptk
+        );
+        assert_eq!(
+            reader.has_encapsulation_key(owner.xid).await.unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            consent_actions(&reader, owner.xid).await,
+            vec!["encapsulation_rewrap".to_string()]
+        );
+        let audit = sqlx::query("SELECT audience, purpose FROM consent_log WHERE xid = $1")
+            .bind(owner.xid.as_bytes().as_slice())
+            .fetch_one(reader.pool())
+            .await
+            .unwrap();
+        let audience: String = audit.try_get("audience").unwrap();
+        let purpose: String = audit.try_get("purpose").unwrap();
+        assert_eq!(audience, friend.xid.to_string());
+        assert_eq!(purpose, hex_digest(digest(&wrapped)));
+        let events: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM custody_events WHERE xid = $1 AND ceremony = 'encapsulation_rewrap'",
+        )
+        .bind(owner.xid.as_bytes().as_slice())
+        .fetch_one(reader.pool())
+        .await
+        .unwrap();
+        assert_eq!(events, 1);
+        let again = reader
+            .rewrap_encapsulation(&keys, begun.id, HeldProof::A4(&signature), &wrapped, NOW)
+            .await
+            .unwrap_err();
+        assert!(matches!(again, EncapsulationError::Expired));
+        assert_eq!(
+            reader.has_encapsulation_key(owner.xid).await.unwrap(),
+            Some(true)
+        );
+    }
+
+    #[sqlx::test]
+    async fn rewrap_refuses_a_different_wrap_and_a_rotated_friend(pool: PgPool) {
+        let (store, keys, owner) = sealed(&pool).await;
+        let (_friend_store, _friend_keys, friend) = sealed(&pool).await;
+        let owner_recipient: [u8; 32] = c2_wrap_recipient(&owner.doc).unwrap().try_into().unwrap();
+        let wrapped = wrap_data_key(&owner_recipient, &[0x11; 32]).unwrap();
+        let other = wrap_data_key(&owner_recipient, &[0x22; 32]).unwrap();
+        let mut request = begin(owner.xid, "rewrap", &[0x33; 32], Some(&wrapped));
+        request.friend = Some(friend.xid);
+        let begun = store.begin_encapsulation(request).await.unwrap();
+        let friend_recipient: [u8; 32] =
+            c2_wrap_recipient(&friend.doc).unwrap().try_into().unwrap();
+        let transcript = encapsulation_transcript(
+            "rewrap",
+            owner.xid.as_bytes(),
+            begun.id.as_bytes(),
+            &begun.challenge,
+            begun.iat,
+            begun.exp,
+            Some(&digest(&wrapped)),
+            Some(&friend_recipient),
+        );
+        let signature = owner.user.sign(&transcript).unwrap();
+        let wrong = store
+            .rewrap_encapsulation(&keys, begun.id, HeldProof::A4(&signature), &other, NOW)
+            .await
+            .unwrap_err();
+        assert!(matches!(wrong, EncapsulationError::WrongWrap));
+        assert!(consent_actions(&store, owner.xid).await.is_empty());
+
+        let mut again = begin(owner.xid, "rewrap", &[0x34; 32], Some(&wrapped));
+        again.friend = Some(friend.xid);
+        let begun = store.begin_encapsulation(again).await.unwrap();
+        let replacement = PrivateKeyBase::new();
+        let mut updated = friend.doc.clone();
+        updated.remove_key(&friend.user).unwrap();
+        let mut key = Key::new(replacement.public_keys());
+        for privilege in USER_C2_PRIVILEGES {
+            key.add_permission(privilege);
+        }
+        updated.add_key(key).unwrap();
+        store
+            .apply_document_update(&friend.user, &updated)
+            .await
+            .unwrap();
+        let transcript = encapsulation_transcript(
+            "rewrap",
+            owner.xid.as_bytes(),
+            begun.id.as_bytes(),
+            &begun.challenge,
+            begun.iat,
+            begun.exp,
+            Some(&digest(&wrapped)),
+            Some(&friend_recipient),
+        );
+        let signature = owner.user.sign(&transcript).unwrap();
+        let rotated = store
+            .rewrap_encapsulation(&keys, begun.id, HeldProof::A4(&signature), &wrapped, NOW)
+            .await
+            .unwrap_err();
+        assert!(matches!(rotated, EncapsulationError::Friend));
+        let used: Option<time::OffsetDateTime> =
+            sqlx::query_scalar("SELECT used_at FROM encapsulation_attempts WHERE id = $1")
+                .bind(begun.id)
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert!(used.is_none());
+        assert_eq!(
+            store.has_encapsulation_key(owner.xid).await.unwrap(),
+            Some(true)
+        );
+    }
+
+    #[sqlx::test]
+    async fn rewrap_begin_rejects_self_and_a_missing_friend(pool: PgPool) {
+        let (store, _keys, owner) = sealed(&pool).await;
+        let owner_recipient: [u8; 32] = c2_wrap_recipient(&owner.doc).unwrap().try_into().unwrap();
+        let wrapped = wrap_data_key(&owner_recipient, &[0x11; 32]).unwrap();
+        let mut self_request = begin(owner.xid, "rewrap", &[0x33; 32], Some(&wrapped));
+        self_request.friend = Some(owner.xid);
+        let err = store.begin_encapsulation(self_request).await.unwrap_err();
+        assert!(matches!(err, EncapsulationError::Friend));
+        let mut missing = begin(owner.xid, "rewrap", &[0x33; 32], Some(&wrapped));
+        missing.friend = Some(Xid::try_from_slice(&[0x5a; 32]).unwrap());
+        let err = store.begin_encapsulation(missing).await.unwrap_err();
+        assert!(matches!(err, EncapsulationError::NotFound));
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM encapsulation_attempts WHERE xid = $1")
+                .bind(owner.xid.as_bytes().as_slice())
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[sqlx::test]
+    async fn rewrap_begin_rejects_a_friend_with_no_recipient(pool: PgPool) {
+        let (store, _keys, owner) = sealed(&pool).await;
+        let friend_doc = crate::privilege::c1(&PrivateKeyBase::new());
+        let friend_xid = store
+            .create_managed(CustodyRung::C1, &friend_doc, &[0x51, 0x47])
+            .await
+            .unwrap();
+        let owner_recipient: [u8; 32] = c2_wrap_recipient(&owner.doc).unwrap().try_into().unwrap();
+        let wrapped = wrap_data_key(&owner_recipient, &[0x11; 32]).unwrap();
+        let mut request = begin(owner.xid, "rewrap", &[0x33; 32], Some(&wrapped));
+        request.friend = Some(friend_xid);
+        let err = store.begin_encapsulation(request).await.unwrap_err();
+        assert!(matches!(err, EncapsulationError::NotC2));
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM encapsulation_attempts WHERE xid = $1")
+                .bind(owner.xid.as_bytes().as_slice())
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[sqlx::test]
+    async fn rewrap_begin_rejects_a_small_order_friend(pool: PgPool) {
+        let (store, _keys, owner) = sealed(&pool).await;
+        let (_friend_store, _friend_keys, friend) = sealed(&pool).await;
+        let friend_recipient: [u8; 32] =
+            c2_wrap_recipient(&friend.doc).unwrap().try_into().unwrap();
+        let mut bytes: Vec<u8> =
+            sqlx::query_scalar("SELECT xid_document FROM custody_records WHERE xid = $1")
+                .bind(friend.xid.as_bytes().as_slice())
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        let start = bytes
+            .windows(friend_recipient.len())
+            .position(|window| window == friend_recipient)
+            .unwrap();
+        assert!(
+            !bytes[start + friend_recipient.len()..]
+                .windows(friend_recipient.len())
+                .any(|window| window == friend_recipient)
+        );
+        bytes[start..start + friend_recipient.len()].copy_from_slice(&[0u8; 32]);
+        sqlx::query("UPDATE custody_records SET xid_document = $1 WHERE xid = $2")
+            .bind(&bytes)
+            .bind(friend.xid.as_bytes().as_slice())
+            .execute(store.pool())
+            .await
+            .unwrap();
+        let owner_recipient: [u8; 32] = c2_wrap_recipient(&owner.doc).unwrap().try_into().unwrap();
+        let wrapped = wrap_data_key(&owner_recipient, &[0x11; 32]).unwrap();
+        let mut request = begin(owner.xid, "rewrap", &[0x33; 32], Some(&wrapped));
+        request.friend = Some(friend.xid);
+        let err = store.begin_encapsulation(request).await.unwrap_err();
+        assert!(matches!(err, EncapsulationError::Wrap));
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM encapsulation_attempts WHERE xid = $1")
+                .bind(owner.xid.as_bytes().as_slice())
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[sqlx::test]
+    async fn null_seal_cannot_rewrap(pool: PgPool) {
+        let (store, keys, friend) = sealed(&pool).await;
+        let owner = PrivateKeyBase::new();
+        let owner_doc = c2_native(&owner, &PrivateKeyBase::new()).unwrap();
+        let owner_xid = store
+            .create_managed(CustodyRung::C2, &owner_doc, &[0x51, 0x47])
+            .await
+            .unwrap();
+        let owner_recipient: [u8; 32] = c2_wrap_recipient(&owner_doc).unwrap().try_into().unwrap();
+        let wrapped = wrap_data_key(&owner_recipient, &[0xab; 32]).unwrap();
+        let mut request = begin(owner_xid, "rewrap", &[0x33; 32], Some(&wrapped));
+        request.friend = Some(friend.xid);
+        let begun = store.begin_encapsulation(request).await.unwrap();
+        let friend_recipient: [u8; 32] =
+            c2_wrap_recipient(&friend.doc).unwrap().try_into().unwrap();
+        let transcript = encapsulation_transcript(
+            "rewrap",
+            owner_xid.as_bytes(),
+            begun.id.as_bytes(),
+            &begun.challenge,
+            begun.iat,
+            begun.exp,
+            Some(&digest(&wrapped)),
+            Some(&friend_recipient),
+        );
+        let signature = owner.sign(&transcript).unwrap();
+        let err = store
+            .rewrap_encapsulation(&keys, begun.id, HeldProof::A4(&signature), &wrapped, NOW)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EncapsulationError::Seal));
+        assert!(consent_actions(&store, owner_xid).await.is_empty());
+        let used: Option<time::OffsetDateTime> =
+            sqlx::query_scalar("SELECT used_at FROM encapsulation_attempts WHERE id = $1")
+                .bind(begun.id)
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert!(used.is_none());
+    }
+
+    #[sqlx::test]
+    async fn rewrap_to_a_friend_whose_seal_is_null(pool: PgPool) {
+        let (store, keys, owner) = sealed(&pool).await;
+        let friend_user = PrivateKeyBase::new();
+        let friend_doc = c2_native(&friend_user, &PrivateKeyBase::new()).unwrap();
+        let friend_xid = store
+            .create_managed(CustodyRung::C2, &friend_doc, &[0x51, 0x47])
+            .await
+            .unwrap();
+        let friend_recipient: [u8; 32] =
+            c2_wrap_recipient(&friend_doc).unwrap().try_into().unwrap();
+        let friend_scalar = *friend_user.x25519_private_key().data();
+        let ptk = [0xab; 32];
+        let owner_recipient: [u8; 32] = c2_wrap_recipient(&owner.doc).unwrap().try_into().unwrap();
+        let wrapped = wrap_data_key(&owner_recipient, &ptk).unwrap();
+        let mut request = begin(owner.xid, "rewrap", &[0x33; 32], Some(&wrapped));
+        request.friend = Some(friend_xid);
+        let begun = store.begin_encapsulation(request).await.unwrap();
+        assert_eq!(begun.friend_has_seal, Some(false));
+        let transcript = encapsulation_transcript(
+            "rewrap",
+            owner.xid.as_bytes(),
+            begun.id.as_bytes(),
+            &begun.challenge,
+            begun.iat,
+            begun.exp,
+            Some(&digest(&wrapped)),
+            Some(&friend_recipient),
+        );
+        let signature = owner.user.sign(&transcript).unwrap();
+        let out = store
+            .rewrap_encapsulation(&keys, begun.id, HeldProof::A4(&signature), &wrapped, NOW)
+            .await
+            .unwrap();
+        assert_ne!(out.as_slice(), ptk.as_slice());
+        assert_eq!(
+            unwrap_with_scalar(&friend_scalar, &out, &friend_recipient).unwrap(),
+            ptk
+        );
+    }
+
+    #[test]
+    fn small_order_points_are_refused_as_friend_recipients() {
+        for point in SMALL_ORDER {
+            assert!(is_small_order(&point));
+            assert!(wrap_data_key(&point, &[0x11; 32]).is_err());
+        }
     }
 
     fn climb_consent(xid: Xid) -> ConsentAppend<'static> {

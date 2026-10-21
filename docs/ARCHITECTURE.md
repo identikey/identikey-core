@@ -1028,7 +1028,8 @@ protocol onto identikey-keys instead of re-specifying it here.
    wrap-target. C1 rows have no user key and **cannot be members**. A row whose
    user X25519 private is neither sealed nor held by the user has a named wrap
    recipient but cannot unwrap. A held seal is not that case: unwrap runs under
-   `encapsulation_unwrap` consent, and that X25519 is still not an `Op.actor`,
+   `encapsulation_unwrap` consent, and rewrap under `encapsulation_rewrap`
+   consent. That X25519 is still not an `Op.actor`,
    an admin, or a signer. PUK rotation of that encapsulation key is an Elect
    rewrite of the XID document (`apply_document_update`) that sets the
    encapsulation seal to NULL and installs no replacement, then
@@ -1065,6 +1066,18 @@ protocol onto identikey-keys instead of re-specifying it here.
    Climb refuses while the seal is present and no `encapsulation_export`
    consent-log entry exists. After a logged export, climb nulls the seal
    and does not return the scalar.
+
+   **Friend rewrap.** `POST /account/encapsulation/rewrap` is the production
+   open. One `rewrap` consent opens a data key already wrapped to the owner
+   and returns a new §7 wrap to a friend's published X25519. The body is
+   that wrap. The data key and the scalar stay off the wire. This is not
+   proxy recryption. A returned wrap cannot be revoked; stopping that friend
+   means a new data key. A friend whose seal is null cannot open the wrap
+   through IdentiKey. Begin reports `friend_has_seal` for that case and
+   still returns the wrap, because the friend's published key is a valid
+   recipient. Rewrap does not write a keyspace op. A house PTK wrap is still
+   a §7 wrap, so this consent can put that data key in a non-roster friend's
+   hands. That is the same leak a member already has once they can read the PTK.
 
 5. **Device revoke, PUK rotation, and PTK rewrap are three separate steps**, not one. Revoking
    a `credentials` row does not by itself edit the PTK wrap-list. The cascade is: device
