@@ -70,7 +70,9 @@ unwrap SHALL fail (inert on purpose; not a reason to wrap to
 unwrap that PTK under the managed-custody consent for
 `encapsulation_unwrap`. That open is custodial: IdentiKey, holding the
 managed wrap key and a valid consent, can read a data key wrapped to
-that member, including a house keyspace PTK. The held X25519 SHALL NOT
+that member, including a house keyspace PTK. `encapsulation_rewrap` is
+a second open and can put that same PTK in a non-roster friend's hands,
+and a returned wrap cannot be revoked. The held X25519 SHALL NOT
 be an `Op.actor`, an admin, or a signer. A protocol §6 `RosterEntry`
 for that row SHALL name `PublicKey.alg` `x25519` and the 32-byte
 u-coordinate (identikey-protocol `ikp-2l8`). That key is a wrap-target.

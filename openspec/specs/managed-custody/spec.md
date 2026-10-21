@@ -4,7 +4,8 @@ Living truth for the user store and managed custody in `identikey-keys`.
 Folded from `add-keys-store`, `add-c2-c3-exit`,
 `add-resolver-relocation` (2026-08-16), `add-device-records`
 (2026-08-17), `add-managed-challenge-responder` (2026-09-24),
-and `add-held-encapsulation-key` (2026-10-21).
+`add-held-encapsulation-key` (2026-10-21), and
+`add-friend-rewrapping` (2026-10-21).
 
 ### Requirement: Durable managed-custody store
 
@@ -537,9 +538,10 @@ malformed, swapped-account, or swapped-recipient seal SHALL fail closed
 and SHALL NOT report a data key.
 
 Unwrap SHALL implement identikey-keyspace-v1 `x25519-xchacha20poly1305`
-for a 32-byte data key, inside the library only. This change has no live
-unwrap caller. Tests call it. The first production caller is the later
-change `add-recrypt-proxy-vm`, when the owner mints a recryption key.
+for a 32-byte data key, inside the library only. Unwrap has no HTTP
+caller. Tests call it. The production open of that data key is the
+friend rewrap in the requirement Friend rewrap of a held data key.
+That rewrap returns a new wrap and SHALL NOT return the data key.
 The library function SHALL take the A3 assertion or A4 signature. In one
 transaction it SHALL verify that proof against the stored begin row,
 recheck expiry, purpose `unwrap`, and unused, recheck the credential row
@@ -562,23 +564,30 @@ count as A4.
 
 `POST /account/encapsulation/begin` SHALL require an account session only
 to name the XID. That session SHALL NOT open the seal. Begin SHALL accept
-purpose `export` or `unwrap` and SHALL reject any other purpose before
-inserting a row. For `unwrap`, begin SHALL also require the wrap bytes and
-SHALL store SHA-256 of those exact bytes. Begin SHALL store a fresh
-WebAuthn challenge and a 5-minute expiry. The transcript SHALL be, in
-order: the bytes `identikey-encapsulation-consent-v1\n`; a u8 length and
-the ASCII purpose (`export` or `unwrap`); the 32-byte XID; the attempt id
-as 16 raw UUID bytes; a u16 big-endian length and the WebAuthn challenge
-bytes; `iat` as u64 big-endian; `exp` as u64 big-endian; and, only for
-`unwrap`, the 32-byte wrap digest. Export SHALL omit that digest. That
-domain tag SHALL NOT be `identikey-managed-consent-v1\n`. The SHA-256 of
-the fixed export transcript (purpose `export`, XID thirty-two `0x11`
+purpose `export`, `unwrap`, or `rewrap` and SHALL reject any other purpose
+before inserting a row. For `unwrap` and `rewrap`, begin SHALL also require
+the wrap bytes and SHALL store SHA-256 of those exact bytes. For `rewrap`,
+begin SHALL also store the friend XID and the 32-byte recipient taken from
+that friend's current document, as the Friend rewrap requirement states.
+Begin SHALL store a fresh WebAuthn challenge and a 5-minute expiry. The
+transcript SHALL be, in order: the bytes
+`identikey-encapsulation-consent-v1\n`; a u8 length and the ASCII purpose
+(`export`, `unwrap`, or `rewrap`); the 32-byte XID; the attempt id as 16
+raw UUID bytes; a u16 big-endian length and the WebAuthn challenge bytes;
+`iat` as u64 big-endian; `exp` as u64 big-endian; and, for `unwrap` and
+`rewrap`, the 32-byte wrap digest. Export SHALL omit that digest. For
+`rewrap` only, the transcript SHALL then append the 32-byte recipient.
+That domain tag SHALL NOT be `identikey-managed-consent-v1\n`. The SHA-256
+of the fixed export transcript (purpose `export`, XID thirty-two `0x11`
 bytes, attempt id sixteen `0x22` bytes, challenge thirty-two `0x33` bytes,
 `iat` 1700000000, `exp` 1700000300) SHALL be
 `7d93d9c193c5a60338be4d9b646c1429bfc62718da3e67c2954673627a6d2061`. The
 SHA-256 of that same transcript with purpose `unwrap` and wrap digest
 thirty-two `0x44` bytes SHALL be
-`b18286bad604fc6da5425928d1f0892201b137bdcc9633e90b00bb93af0a558f`.
+`b18286bad604fc6da5425928d1f0892201b137bdcc9633e90b00bb93af0a558f`. The
+SHA-256 of that same transcript with purpose `rewrap`, that wrap digest,
+and recipient thirty-two `0x55` bytes SHALL be
+`c5266850c16f4ed35cbddb4a37a4bbac6faf6a421690dc7c110c3c876302caa7`.
 
 Export finish is `POST /account/encapsulation/export`. In one transaction
 it SHALL verify the A3 assertion or A4 signature against the stored row,
@@ -589,11 +598,11 @@ It SHALL return the 32-byte scalar as unpadded base64url, SHALL leave the
 server copy stored until a climb that follows a logged export, and SHALL
 NOT render HTML. A second finish SHALL fail before decrypt. A proof whose
 transcript uses the managed-challenge domain or a different purpose SHALL
-fail before decrypt. Begin and export SHALL send `Cache-Control: no-store`.
-A registered SPA origin SHALL NOT receive `Access-Control-Allow-Origin` on
-either route. There SHALL be no hosted unwrap route. There is no hosted
-export page in this change. A same-origin test calls export. A later
-change adds the account-page button.
+fail before decrypt. Begin, export, and rewrap SHALL send
+`Cache-Control: no-store`. A registered SPA origin SHALL NOT receive
+`Access-Control-Allow-Origin` on begin, export, or rewrap. There SHALL be
+no hosted unwrap route. There is no hosted export page in this change. A
+same-origin test calls export. A later change adds the account-page button.
 
 A successful export or unwrap SHALL, in the same transaction as the key
 use, write a consent-log entry carrying the A3 or A4 proof with `action`
@@ -674,8 +683,9 @@ An `encapsulation_unwrap` entry SHALL also record the wrap digest.
 #### Scenario: A registered SPA origin cannot read export
 
 - GIVEN a registered SPA origin
-- WHEN it requests `POST /account/encapsulation/begin` or
-  `POST /account/encapsulation/export`
+- WHEN it requests `POST /account/encapsulation/begin`,
+  `POST /account/encapsulation/export`, or
+  `POST /account/encapsulation/rewrap`
 - THEN the response has no `Access-Control-Allow-Origin`
 
 #### Scenario: A small-order ephemeral is not a successful unwrap
@@ -684,3 +694,93 @@ An `encapsulation_unwrap` entry SHALL also record the wrap digest.
   u-coordinate, or whose DH output is all zeros
 - WHEN unwrap is called with valid `unwrap` consent
 - THEN it fails closed and no data key is returned
+
+### Requirement: Friend rewrap of a held data key
+
+The system SHALL rewrap one 32-byte data key from the owner's sealed
+X25519 to one friend's published X25519. The friend SHALL be named by
+XID. Begin SHALL read `c2_wrap_recipient` from that friend's stored
+document and SHALL NOT accept a recipient supplied by the client. Begin
+SHALL reject, before insert, a friend XID equal to the owner, a friend
+with no stored document, a friend with no `c2_wrap_recipient`, and a
+small-order recipient.
+
+`POST /account/encapsulation/rewrap` SHALL, in one transaction, verify
+the A3 assertion or A4 signature against the stored row, recheck expiry,
+purpose `rewrap`, and unused, recheck the credential row and the owner's
+custody row under the same `FOR UPDATE` locks that `revoke_device` and
+climb take, reload the friend's document, and mark the row used only
+when the rewrap proceeds. If the friend's current `c2_wrap_recipient`
+is missing or differs from the recipient stored at begin, finish SHALL
+fail before the seal is decrypted and SHALL leave the row unused. A wrap
+whose SHA-256 differs from the stored digest SHALL fail before decrypt.
+The call SHALL NOT receive the user `PrivateKeyBase`. The seal SHALL
+remain. The data key SHALL be zeroized before the function returns. The
+HTTP body SHALL be the new `x25519-xchacha20poly1305` wrap as unpadded
+base64url, `text/plain`, and SHALL NOT be the data key or the X25519
+scalar. The body SHALL NOT be HTML.
+
+Rewrap SHALL NOT write a keyspace op, a roster entry, or an epoch. A
+wrap of a house PTK is still a §7 wrap: rewrap consent on those bytes
+shares that data key with the named friend.
+
+A successful rewrap SHALL, in the same transaction, write a consent-log
+entry with action `encapsulation_rewrap` and result `signed`, audience
+the friend's base58btc XID, purpose the lowercase hex of the source wrap
+digest, and a custody event. A second finish SHALL fail before decrypt.
+A cookie with no A3 assertion and no A4 signature SHALL be refused
+before decrypt. A null, malformed, or swapped seal SHALL fail closed and
+SHALL NOT return a wrap.
+
+#### Scenario: A restarted process returns a friend wrap
+
+- GIVEN a new C2 owner whose `PrivateKeyBase` has been dropped, a friend
+  document with a published X25519, a data key wrapped to the owner, and
+  a `rewrap` begin bound to that wrap and that friend
+- WHEN `POST /account/encapsulation/rewrap` is given the A3 assertion or
+  A4 signature for that row
+- THEN the body is a wrap of that same data key to the friend's X25519
+- AND the call was not given the owner's `PrivateKeyBase`
+- AND the body is not the data key and not the scalar
+- AND the owner's seal is still present
+- AND a consent-log entry `encapsulation_rewrap` and a custody event exist
+
+#### Scenario: Consent for one wrap does not rewrap another
+
+- GIVEN a `rewrap` begin whose stored digest is wrap W
+- WHEN finish is asked to rewrap wrap W′
+- THEN it fails before the seal is decrypted
+
+#### Scenario: A rotated friend key fails before open
+
+- GIVEN a `rewrap` begin that stored the friend's then-current recipient
+- WHEN that friend's document now publishes a different X25519
+- THEN finish fails before the seal is decrypted
+- AND the attempt is still unused
+
+#### Scenario: A small-order friend is rejected at begin
+
+- GIVEN a friend whose published X25519 is a small-order Montgomery
+  u-coordinate
+- WHEN begin is asked to rewrap to that friend
+- THEN no attempt row is inserted
+
+#### Scenario: An account cookie cannot rewrap
+
+- GIVEN a valid account session and no fresh `rewrap` consent
+- WHEN `POST /account/encapsulation/rewrap` is called with only that session
+- THEN it is refused
+- AND the seal is not decrypted
+
+#### Scenario: An older C2 row cannot rewrap
+
+- GIVEN an owner whose encapsulation seal is null
+- WHEN rewrap is called with valid `rewrap` consent
+- THEN it fails closed and no wrap is returned
+
+#### Scenario: The pinned rewrap transcript digest matches
+
+- GIVEN the fixed rewrap transcript in the held-key requirement
+- WHEN SHA-256 is taken
+- THEN the digest is
+  `c5266850c16f4ed35cbddb4a37a4bbac6faf6a421690dc7c110c3c876302caa7`

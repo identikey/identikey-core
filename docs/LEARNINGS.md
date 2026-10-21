@@ -25,6 +25,12 @@ See morphist-tools `CONVENTIONS.md`.
   `encapsulation_unwrap` consent, including a house PTK. The 2026-09-11
   "inert until Elect export or a wallet" line holds only for a null seal.
   (`openspec/specs/guild-keyspaces/spec.md`, `docs/ARCHITECTURE.md` ADR-012)
+- 2026-10-21 — A returned friend wrap cannot be revoked; stopping that
+  friend means a new data key. A friend whose seal is null cannot open
+  the wrap through IdentiKey. Rewrap can share a house PTK with a
+  non-roster friend.
+  (`openspec/changes/archive/2026-10-21-add-friend-rewrapping/specs/managed-custody/spec.md`,
+  `docs/ARCHITECTURE.md` ADR-012)
 - 2026-08-27 — Two concurrent `navigator.credentials.get` (conditional +
   button) finish the same ceremony; 1Password completes both and the
   second is unknown/expired. One in-flight get. (`crates/identikey-server/src/pages.rs`)
