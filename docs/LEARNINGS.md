@@ -20,6 +20,11 @@ See morphist-tools `CONVENTIONS.md`.
   `PublicKey.alg` `x25519` on a §6 `RosterEntry` for the C2 encapsulation
   half. The key is a wrap-target. `admin: true` still needs an Ed25519
   `actor`. (`crates/identikey-keys/src/keyspace.rs`)
+- 2026-10-21 — Sealing the user X25519 (`IKEK`) makes a wrap to that public
+  openable by IdentiKey with the managed wrap key and an
+  `encapsulation_unwrap` consent, including a house PTK. The 2026-09-11
+  "inert until Elect export or a wallet" line holds only for a null seal.
+  (`openspec/specs/guild-keyspaces/spec.md`, `docs/ARCHITECTURE.md` ADR-012)
 - 2026-08-27 — Two concurrent `navigator.credentials.get` (conditional +
   button) finish the same ceremony; 1Password completes both and the
   second is unknown/expired. One in-flight get. (`crates/identikey-server/src/pages.rs`)

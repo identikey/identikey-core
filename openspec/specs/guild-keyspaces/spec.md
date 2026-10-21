@@ -3,9 +3,10 @@
 Living truth for identikey-keys mapping onto identikey-protocol
 `identikey-keyspace-v1` (product word **guild**, protocol word
 **keyspace**). Folded from `add-guild-keyspaces` (2026-09-11),
-`add-keyspace-runtime` (2026-09-15), and `add-access-node-wrap`
-(2026-09-15). Protocol `PublicKey.alg` `x25519` landed as
-identikey-protocol `ikp-2l8` (2026-10-13).
+`add-keyspace-runtime` (2026-09-15), `add-access-node-wrap`
+(2026-09-15), and `add-held-encapsulation-key` (2026-10-21).
+Protocol `PublicKey.alg` `x25519` landed as identikey-protocol
+`ikp-2l8` (2026-10-13).
 
 ### Requirement: Consume identikey-keyspace-v1
 
@@ -62,15 +63,20 @@ encapsulation half of that `PublicKeys`), using protocol §7
 signing half as a wrap-target, SHALL NOT apply protocol §7.2
 (Ed25519→X25519) to Schnorr, SHALL NOT wrap to IdentiKey Sign+Auth,
 `managed_key_blob`, or a `credentials` passkey, and SHALL NOT list a
-C1 row as a member. A row whose user private is not held by the user
-MAY be named as a protocol §7 `Wrap.recipient`; unwrap SHALL fail until
-that private is user-held (inert on purpose; not a reason to wrap to
-`managed_key_blob`). A protocol §6 `RosterEntry` for that row SHALL
-name `PublicKey.alg` `x25519` and the 32-byte u-coordinate (identikey-protocol
-`ikp-2l8`). That key is a wrap-target. `admin: true` still requires an
-Ed25519 `actor`. PUK rotation of that encapsulation key SHALL
-be an Elect-gated XID document write, then `keyspace.epoch-begin` /
-`epoch-commit`.
+C1 row as a member. A row whose user X25519 private is neither sealed
+nor held by the user MAY be named as a protocol §7 `Wrap.recipient`;
+unwrap SHALL fail (inert on purpose; not a reason to wrap to
+`managed_key_blob`). A C2 row with a held encapsulation seal SHALL
+unwrap that PTK under the managed-custody consent for
+`encapsulation_unwrap`. That open is custodial: IdentiKey, holding the
+managed wrap key and a valid consent, can read a data key wrapped to
+that member, including a house keyspace PTK. The held X25519 SHALL NOT
+be an `Op.actor`, an admin, or a signer. A protocol §6 `RosterEntry`
+for that row SHALL name `PublicKey.alg` `x25519` and the 32-byte
+u-coordinate (identikey-protocol `ikp-2l8`). That key is a wrap-target.
+`admin: true` still requires an Ed25519 `actor`. PUK rotation of that
+encapsulation key SHALL be an Elect-gated XID document write, then
+`keyspace.epoch-begin` / `epoch-commit`.
 
 #### Scenario: C2 Sign key is absent from wraps
 
@@ -91,12 +97,23 @@ be an Elect-gated XID document write, then `keyspace.epoch-begin` /
 - WHEN a `keyspace.join` lists that identikey as a wrap-target
 - THEN the op is refused
 
-#### Scenario: C2 wrap is named and inert until user-held private
+#### Scenario: A C2 row with no seal stays inert
 
-- GIVEN a C2 row whose user `PrivateKeyBase` was dropped at signup
+- GIVEN a C2 row whose user `PrivateKeyBase` was dropped at signup and
+  whose encapsulation seal is null
 - WHEN a wrap lists that row's X25519 encapsulation public as recipient
 - THEN the wrap is stored as protocol §7 `Wrap.recipient` and unwrap
-  by that member fails until Elect export or a wallet holds the private
+  by that member fails
+
+#### Scenario: A held C2 seal can open a house PTK
+
+- GIVEN a C2 row with a held encapsulation seal and a valid
+  `encapsulation_unwrap` consent
+- WHEN a house PTK is wrapped to that row's X25519
+- THEN the library unwrap returns the PTK
+- AND IdentiKey can perform that open because it holds the managed wrap
+  key
+- AND the X25519 key was not `Op.actor`
 
 #### Scenario: C2 roster entry names native X25519
 

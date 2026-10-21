@@ -1026,10 +1026,14 @@ protocol onto identikey-keys instead of re-specifying it here.
    The C2 IdentiKey Sign+Auth key is **not** a wrap-target and **must not** appear
    on the roster or author `keyspace.*` ops. `managed_key_blob` is **not** a
    wrap-target. C1 rows have no user key and **cannot be members**. A row whose
-   user private key is not held by the user has a named wrap recipient but cannot
-   unwrap. PUK rotation of that encapsulation key is an Elect rewrite of the XID
-   document (`apply_document_update`), then `keyspace.epoch-begin` /
-   `epoch-commit` to retarget wraps. Join/leave still do not Elect.
+   user X25519 private is neither sealed nor held by the user has a named wrap
+   recipient but cannot unwrap. A held seal is not that case: unwrap runs under
+   `encapsulation_unwrap` consent, and that X25519 is still not an `Op.actor`,
+   an admin, or a signer. PUK rotation of that encapsulation key is an Elect
+   rewrite of the XID document (`apply_document_update`) that sets the
+   encapsulation seal to NULL and installs no replacement, then
+   `keyspace.epoch-begin` / `epoch-commit` to retarget wraps. A later open
+   against the new public fails closed. Join/leave still do not Elect.
 
    **Roster vs wrap.** Protocol §6 `RosterEntry.puks` admits `alg` `ed25519`,
    `x25519`, or `p256`. `ikp-2l8` landed 2026-10-13 (`8ac2c70`): `x25519` is
@@ -1058,6 +1062,9 @@ protocol onto identikey-keys instead of re-specifying it here.
    operator holds the wrap key, so the consent check is policy in this
    service. `encapsulation_export` is how the owner leaves with the scalar.
    Do not wrap to `managed_key_blob` or to the operational companion X25519.
+   Climb refuses while the seal is present and no `encapsulation_export`
+   consent-log entry exists. After a logged export, climb nulls the seal
+   and does not return the scalar.
 
 5. **Device revoke, PUK rotation, and PTK rewrap are three separate steps**, not one. Revoking
    a `credentials` row does not by itself edit the PTK wrap-list. The cascade is: device
@@ -1095,6 +1102,9 @@ stability guarantees; collapsing them into one vocabulary would tempt a guild-na
 that forks the protocol. Refusing Sign+Auth as a wrap-target keeps the C2 privilege split
 (ADR-010) intact inside guilds: we may act as the user's Sign+Auth *operator*, but a guild's
 content must not be readable through *our* key just because we host the account.
+A PTK wrapped to a held user X25519 is readable by the operator who holds the
+managed wrap key, under `encapsulation_unwrap` consent. That open is the sealed
+encapsulation key, not Sign+Auth.
 
 **Consequences.**
 
