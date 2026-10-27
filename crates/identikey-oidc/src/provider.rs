@@ -1488,6 +1488,7 @@ mod tests {
         assert!(json.contains("\"code\""));
         assert!(json.contains("S256"));
         assert!(!json.contains("password"));
+        assert!(!json.contains("registration_endpoint"));
         assert_eq!(
             p.discovery().token_endpoint_auth_methods_supported,
             vec!["none", "client_secret_basic", "client_secret_post"]

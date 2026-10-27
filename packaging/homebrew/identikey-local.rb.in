@@ -1,0 +1,39 @@
+class IdentikeyLocal < Formula
+  desc "Loopback IdentiKey OIDC provider for services on this Mac"
+  homepage "https://github.com/identikey/identikey-core"
+  version "0.1.0"
+  license "AGPL-3.0-or-later"
+  url "IDENTIKEY_LOCAL_URL"
+  sha256 "IDENTIKEY_LOCAL_SHA256"
+
+  def install
+    bin.install "identikey-server"
+    bin.install "identikey-local-launch"
+  end
+
+  def caveats
+    <<~EOS
+      Listens on 127.0.0.1:8070. This is a local test provider.
+      Do not publish that port, and do not set IDENTIKEY_LOCAL_REGISTER
+      on auth.identikey.me.
+
+      Register a loopback client:
+
+        curl -sS -X POST http://127.0.0.1:8070/register \\
+          -H 'content-type: application/json' \\
+          -d '{"client_id":"lightning-mesh","redirect_uris":["http://127.0.0.1:3000/callback"]}'
+
+      Issuer settings and the wrap key live in #{HOMEBREW_PREFIX}/etc/identikey-local.env
+      (mode 0600). `brew services restart identikey-local` reloads the binary.
+    EOS
+  end
+
+  service do
+    run [opt_bin/"identikey-local-launch"]
+    keep_alive true
+    working_dir var/"identikey-local"
+    log_path var/"log/identikey-local.log"
+    error_log_path var/"log/identikey-local.log"
+    environment_variables IDENTIKEY_LOCAL_ENV: "#{HOMEBREW_PREFIX}/etc/identikey-local.env"
+  end
+end

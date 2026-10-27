@@ -26,6 +26,35 @@ code+PKCE `/authorize` with the `smoke` client that `.env.example`
 registers. `IDENTIKEY_DEV_LOGIN=1` enables `/authorize/dev`; never set
 it in production.
 
+## Local provider for other services
+
+`scripts/dev-server.sh` is the checkout you are working on. A second
+process can sit on loopback as a Homebrew service so apps such as
+lightning-mesh register themselves there, instead of on
+`https://auth.identikey.me`:
+
+```sh
+scripts/install-local-op.sh
+# brew services start|stop|restart identikey-local
+```
+
+That service binds `127.0.0.1:8070`, uses the database `identikey-local`,
+and accepts `POST /register` only while `IDENTIKEY_LOCAL_REGISTER=1`.
+Redirect URIs must be loopback (`http://127.0.0.1/...` or
+`http://localhost/...`). Registrations persist in the service data
+directory across restarts. `/register` is 404 when the flag is unset,
+which is how production stays.
+
+```sh
+curl -sS -X POST http://127.0.0.1:8070/register \
+  -H 'content-type: application/json' \
+  -d '{"client_id":"lightning-mesh","redirect_uris":["http://127.0.0.1:3000/callback"]}'
+```
+
+Issuer is `http://127.0.0.1:8070`. Subjects and signing keys belong to
+this local provider. Do not point a deployed service at it, and do not
+set `IDENTIKEY_LOCAL_REGISTER` on the production guest.
+
 The server also serves the static SvelteKit app from `web/build`:
 
 ```sh
@@ -53,7 +82,9 @@ crates/
   identikey-server/       axum binary: hosted pages, WebAuthn, web assets
 web/                      static SvelteKit app served from web/build
 docs/                     architecture, OIDC certification, standards
-scripts/dev-server.sh     local OP launcher
+scripts/dev-server.sh     local OP launcher (this checkout, :8080)
+scripts/install-local-op.sh
+                          Homebrew service identikey-local (:8070)
 ```
 
 ## Documentation

@@ -19,6 +19,10 @@ pub struct DiscoveryDocument {
     pub id_token_signing_alg_values_supported: Vec<&'static str>,
     pub token_endpoint_auth_methods_supported: Vec<&'static str>,
     pub scopes_supported: Vec<&'static str>,
+    /// Set only by a loopback registrar (`IDENTIKEY_LOCAL_REGISTER=1`).
+    /// Production discovery omits this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registration_endpoint: Option<String>,
 }
 
 impl DiscoveryDocument {
@@ -50,7 +54,16 @@ impl DiscoveryDocument {
                 "client_secret_post",
             ],
             scopes_supported: vec!["openid"],
+            registration_endpoint: None,
         }
+    }
+
+    /// Advertise `POST /register`. The server calls this only for the loopback registrar.
+    #[must_use]
+    pub fn with_registration_endpoint(mut self) -> Self {
+        let base = self.issuer.trim_end_matches('/');
+        self.registration_endpoint = Some(format!("{base}/register"));
+        self
     }
 }
 
@@ -91,6 +104,12 @@ mod tests {
         assert_eq!(
             doc.device_authorization_endpoint,
             "https://auth.example/device_authorization"
+        );
+        assert!(!json.contains("registration_endpoint"));
+        let local = doc.with_registration_endpoint();
+        assert_eq!(
+            local.registration_endpoint.as_deref(),
+            Some("https://auth.example/register")
         );
     }
 }

@@ -1,0 +1,11 @@
+#!/bin/sh
+# brew services runs this. The plist only names the env file. The wrap key
+# stays in that file (mode 0600) and is not copied into the LaunchAgent.
+set -eu
+env_file=${IDENTIKEY_LOCAL_ENV:?set IDENTIKEY_LOCAL_ENV to the identikey-local env file}
+set -a
+# shellcheck disable=SC1090
+. "$env_file"
+set +a
+here=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+exec "$here/identikey-server"

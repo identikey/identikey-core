@@ -183,6 +183,31 @@ fn client_from_parts(
     }
 }
 
+/// Fields the loopback registrar has already vetted.
+pub(crate) struct RegisteredParts {
+    pub id: String,
+    pub redirects: Vec<String>,
+    pub secret: Option<String>,
+    pub auth: Option<String>,
+    pub subject_type: Option<String>,
+    pub sector: Option<String>,
+    pub name: Option<String>,
+    pub grants: Option<Vec<String>>,
+}
+
+pub(crate) fn client_from_registered(parts: RegisteredParts) -> Result<Client, BoxError> {
+    client_from_parts(
+        parts.id,
+        parts.redirects,
+        parts.secret,
+        parts.auth,
+        parts.subject_type,
+        parts.sector,
+        parts.name,
+        parts.grants,
+    )
+}
+
 fn merge_redirects(primary: Option<String>, extra: Vec<String>) -> Vec<String> {
     let mut redirects = Vec::new();
     if let Some(primary) = primary.filter(|s| !s.is_empty()) {

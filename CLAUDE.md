@@ -63,6 +63,31 @@ JWK are created under `IDENTIKEY_DATA_DIR` on first boot. Boot fails
 closed without `WEBAUTHN_RP_ID` / `WEBAUTHN_EXPECTED_ORIGIN` (no
 wildcards). Config OP CI is `.github/workflows/oidf-config-op.yml`.
 
+Loopback registrar for locally deployed apps (lightning-mesh and other
+localhost RPs), so they do not need a row on `auth.identikey.me`.
+`scripts/install-local-op.sh` builds a release binary and installs a
+Homebrew service `identikey-local` (`brew services start identikey-local`).
+It listens on `127.0.0.1:8070` (issuer `http://127.0.0.1:8070`), database
+`identikey-local` (not `identikey-core-sqlx`), data dir
+`$(brew --prefix)/var/identikey-local`, env file
+`$(brew --prefix)/etc/identikey-local.env` (mode 0600, holds the wrap
+key; do not rotate it once anything has signed up). `IDENTIKEY_LOCAL_REGISTER`
+must be exactly `1` or boot fails if it is set to anything else. When it
+is `1`, bind must be loopback and `POST /register` accepts loopback
+redirects only, persisted to `local-clients.json`. The route is 404
+without the flag, and discovery omits `registration_endpoint`. Never set
+the flag on the production guest. The service also sets
+`IDENTIKEY_DEV_LOGIN=1` so a local app can finish login without a
+passkey. Re-run the install script after pulling server changes; it
+reinstalls the formula and restarts the service without rewriting the
+env file. The install build sets `CARGO_PROFILE_RELEASE_STRIP=none`
+because the workspace `strip = "debuginfo"` mis-aligns the sqlx
+proc-macro dylib on this Mac (`dyld: mis-aligned LINKEDIT`). Linux
+deploys keep the profile. The local tap is
+`identikey/local` (`$(brew --repository)/Library/Taps/identikey/homebrew-local`),
+not a GitHub remote. `brew tap-new` turns on Homebrew developer mode;
+`brew developer off` if you do not want that left on.
+
 Production OP origin (ADR-004): `https://auth.identikey.me`
 (issuer, WebAuthn RP ID, `WEBAUTHN_EXPECTED_ORIGIN`). Discovery:
 `https://auth.identikey.me/.well-known/openid-configuration`.

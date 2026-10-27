@@ -17,11 +17,13 @@ mod account;
 mod ceremonies;
 mod clients;
 mod encapsulation;
+mod local_register;
 mod managed_challenge;
 mod pages;
 mod passkey_metadata;
 mod webauthn;
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -63,6 +65,8 @@ struct AppState {
     ceremonies: Arc<ceremonies::CeremonyHub>,
     accounts: Arc<account::AccountSessions>,
     managed_keys: Arc<ManagedKeyring>,
+    /// Loopback registrar. Discovery advertises `/register` only when this is set.
+    local_register: bool,
 }
 
 /// Liveness only. This must not grow into a readiness check that reports on the
@@ -92,6 +96,7 @@ fn router(
         webauthn,
         accounts,
         Arc::new(ManagedKeyring::single("test", [0x6d; 32])),
+        None,
     )
 }
 
@@ -102,6 +107,7 @@ fn router_with_keyring(
     webauthn: WebAuthnConfig,
     accounts: Arc<account::AccountSessions>,
     managed_keys: Arc<ManagedKeyring>,
+    local: Option<Arc<local_register::LocalRegistry>>,
 ) -> Router {
     let web_dir = std::env::var_os("IDENTIKEY_WEB_DIR")
         .map(std::path::PathBuf::from)
@@ -163,17 +169,28 @@ fn router_with_keyring(
         // static SPA fallback to turn an unknown POST into a 405 response.
         routes = routes.route("/authorize/dev", any(|| async { StatusCode::NOT_FOUND }));
     }
-    routes
+    if local.is_none() {
+        // Same treatment as `/authorize/dev`: an absent registrar must be 404,
+        // not the static fallback turning POST into 405.
+        routes = routes.route("/register", any(|| async { StatusCode::NOT_FOUND }));
+    }
+    let app = routes
         .layer(middleware::from_fn_with_state(provider.clone(), spa_cors))
         .with_state(AppState {
             store,
-            provider,
+            provider: Arc::clone(&provider),
             webauthn,
             ceremonies,
             accounts,
             managed_keys,
-        })
-        .fallback_service(web_assets(web_dir))
+            local_register: local.is_some(),
+        });
+    let app = if let Some(registry) = local {
+        app.merge(local_register::router(registry, provider))
+    } else {
+        app
+    };
+    app.fallback_service(web_assets(web_dir))
 }
 
 /// CORS for public-client PKCE (CMS / other SPAs). Origins come from
@@ -393,7 +410,13 @@ struct TokenBody {
 }
 
 async fn discovery(State(state): State<AppState>) -> Response {
-    Json(state.provider.discovery()).into_response()
+    let doc = state.provider.discovery();
+    let doc = if state.local_register {
+        doc.with_registration_endpoint()
+    } else {
+        doc
+    };
+    Json(doc).into_response()
 }
 
 fn ceremony_http(err: ceremonies::CeremonyError) -> Response {
@@ -1438,13 +1461,16 @@ async fn main() -> Result<(), BoxError> {
 
     let issuer =
         std::env::var("IDENTIKEY_ISSUER").unwrap_or_else(|_| format!("http://{DEFAULT_BIND}"));
-    let provider = Provider::new(issuer, signing, salt).with_refresh_pool(store.pool().clone());
+    let provider =
+        Arc::new(Provider::new(issuer, signing, salt).with_refresh_pool(store.pool().clone()));
+    let mut pinned = HashSet::new();
     if let Some(client) = optional_client()? {
         tracing::info!(
             client_id = %client.id,
             auth = client.token_endpoint_auth_method.as_str(),
             "registered OIDC client"
         );
+        pinned.insert(client.id.clone());
         provider.register(client);
     }
     for client in extra_clients()? {
@@ -1453,10 +1479,26 @@ async fn main() -> Result<(), BoxError> {
             auth = client.token_endpoint_auth_method.as_str(),
             "registered OIDC client"
         );
+        pinned.insert(client.id.clone());
         provider.register(client);
     }
 
+    let local_register =
+        local_register::flag_from_env(std::env::var("IDENTIKEY_LOCAL_REGISTER").ok().as_deref())?;
     let addr = bind_addr()?;
+    let local = if local_register {
+        local_register::require_loopback_bind(addr)?;
+        let registry = Arc::new(local_register::LocalRegistry::open(
+            data_path.join("local-clients.json"),
+            pinned,
+        )?);
+        let loaded = registry.load_into(&provider)?;
+        tracing::info!(clients = loaded, "loaded local OIDC clients");
+        Some(registry)
+    } else {
+        None
+    };
+
     let listener = TcpListener::bind(addr).await?;
     tracing::info!(%addr, "identikey-server listening");
 
@@ -1465,11 +1507,12 @@ async fn main() -> Result<(), BoxError> {
         listener,
         router_with_keyring(
             store,
-            Arc::new(provider),
+            provider,
             dev_login,
             webauthn,
             Arc::new(account::AccountSessions::default()),
             managed_keys,
+            local,
         ),
     )
     .with_graceful_shutdown(shutdown_signal())
@@ -2270,6 +2313,7 @@ mod tests {
             serde_json::json!(["S256"])
         );
         assert!(!text.contains("password"));
+        assert!(doc.get("registration_endpoint").is_none());
         assert!(
             !doc["response_types_supported"]
                 .as_array()
@@ -2281,6 +2325,28 @@ mod tests {
             doc["token_endpoint_auth_methods_supported"],
             serde_json::json!(["none", "client_secret_basic", "client_secret_post"])
         );
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn local_register_is_not_mounted_by_default(pool: sqlx::PgPool) {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let response = test_router(KeysStore::from_pool(pool))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/register")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"client_id":"mesh","redirect_uris":["http://127.0.0.1:9/cb"]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
