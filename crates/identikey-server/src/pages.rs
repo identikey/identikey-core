@@ -128,7 +128,7 @@ pub struct AccountPasskey {
     pub nickname: Option<String>,
     pub provider_name: Option<String>,
     pub icon: Option<String>,
-    pub backed_up: bool,
+    pub backed_up: Option<bool>,
     pub last_used: Option<String>,
 }
 
@@ -184,10 +184,10 @@ fn render_passkey(passkey: &AccountPasskey) -> String {
     let icon = passkey.icon.as_deref().map_or_else(String::new, |src| {
         format!("<img src=\"{}\" alt=\"\"/>", html_escape(src))
     });
-    let backup = if passkey.backed_up {
-        "Backed up"
-    } else {
-        "Not backed up"
+    let backup = match passkey.backed_up {
+        Some(true) => "Backed up",
+        Some(false) => "Not backed up",
+        None => "Backup unknown",
     };
     let last_used = passkey.last_used.as_deref().map_or_else(
         || "Never used".to_owned(),
@@ -283,7 +283,7 @@ mod tests {
                 nickname: None,
                 provider_name: None,
                 icon: None,
-                backed_up: false,
+                backed_up: Some(false),
                 last_used: None,
             }],
         );
@@ -335,7 +335,7 @@ mod tests {
                 nickname: Some("  Work <key>  ".into()),
                 provider_name: Some("Provider <ignored>".into()),
                 icon: Some("data:image/svg+xml;base64,PHN2Zy8+\" onerror=\"x".into()),
-                backed_up: true,
+                backed_up: Some(true),
                 last_used: Some("2026-09-27 12:34:56 +00:00".into()),
             }],
         );
@@ -355,12 +355,36 @@ mod tests {
                 nickname: None,
                 provider_name: None,
                 icon: None,
-                backed_up: false,
+                backed_up: Some(false),
                 last_used: None,
             }],
         );
         assert!(html.contains("<span>Passkey</span>"));
         assert!(html.contains("Not backed up · Never used"));
+    }
+
+    #[test]
+    fn passkey_legibility_unknown_backup_is_distinct_from_stored_false() {
+        for (backed_up, expected) in [
+            (None, "Backup unknown"),
+            (Some(false), "Not backed up"),
+            (Some(true), "Backed up"),
+        ] {
+            let html = account(
+                "abc123",
+                "Managed (C2)",
+                &[AccountPasskey {
+                    nickname: None,
+                    provider_name: None,
+                    icon: None,
+                    backed_up,
+                    last_used: None,
+                }],
+            );
+            assert!(html.contains(&format!("{expected} · Never used")));
+            assert_eq!(html.contains("Backup unknown"), backed_up.is_none());
+            assert_eq!(html.contains("Not backed up"), backed_up == Some(false));
+        }
     }
 
     #[test]
@@ -372,7 +396,7 @@ mod tests {
                 nickname: None,
                 provider_name: Some("Provider <unsafe> & friends".into()),
                 icon: None,
-                backed_up: false,
+                backed_up: Some(false),
                 last_used: None,
             }],
         );

@@ -3538,6 +3538,105 @@ mod tests {
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn passkey_legibility_two_aaguid_assertions_preserve_backup_snapshot(pool: sqlx::PgPool) {
+        use bc_components::PrivateKeyBase;
+        use identikey_keys::{CustodyRung, c2_native};
+        use url::Url;
+        use webauthn_authenticator_rs::prelude::WebauthnAuthenticator;
+        use webauthn_authenticator_rs::softpasskey::SoftPasskey;
+        use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse};
+
+        let store = KeysStore::from_pool(pool);
+        let doc = c2_native(&PrivateKeyBase::new(), &PrivateKeyBase::new()).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &[0x51, 0x47])
+            .await
+            .unwrap();
+        let origin = Url::parse("https://auth.identikey.me").unwrap();
+        let hub = ceremonies::CeremonyHub::from_config(&test_webauthn());
+        let mut authenticators = [
+            WebauthnAuthenticator::new(SoftPasskey::new(true)),
+            WebauthnAuthenticator::new(SoftPasskey::new(true)),
+        ];
+        let mut credential_ids = Vec::new();
+        let aaguids = [[0x11_u8; 16], [0x22_u8; 16]];
+        let backups = [Some(true), None];
+
+        for (index, authenticator) in authenticators.iter_mut().enumerate() {
+            let (session, mut options) = hub.begin_register(&store, xid).await.unwrap();
+            // SoftPasskey does not support resident storage. The server still
+            // verifies the registration response through the production path.
+            options["authenticatorSelection"]["residentKey"] = "discouraged".into();
+            options["authenticatorSelection"]["requireResidentKey"] = false.into();
+            let credential = authenticator
+                .do_registration(
+                    origin.clone(),
+                    CreationChallengeResponse {
+                        public_key: serde_json::from_value(options).unwrap(),
+                    },
+                )
+                .unwrap();
+            hub.finish_register(&store, &session, xid, credential, None)
+                .await
+                .unwrap();
+            let rows = store.list_passkeys(xid).await.unwrap();
+            let credential_id = rows
+                .iter()
+                .find(|row| !credential_ids.contains(&row.credential_id))
+                .unwrap()
+                .credential_id
+                .clone();
+            // Vary only stored presentation metadata: SoftPasskey uses a fixed
+            // AAGUID. Include a legacy NULL backup and a snapshot that differs
+            // from the authenticator's BS bit to catch assertion-time rewrites.
+            sqlx::query(
+                "UPDATE credentials SET aaguid = $2, backed_up = $3
+                 WHERE webauthn_credential_id = $1",
+            )
+            .bind(&credential_id)
+            .bind(aaguids[index].as_slice())
+            .bind(backups[index])
+            .execute(store.pool())
+            .await
+            .unwrap();
+            credential_ids.push(credential_id);
+        }
+        assert_ne!(credential_ids[0], credential_ids[1]);
+        let before = store.list_passkey_presentations(xid).await.unwrap();
+        assert_eq!(before[0].aaguid, Some(aaguids[0]));
+        assert_eq!(before[1].aaguid, Some(aaguids[1]));
+        assert_eq!(before[0].backed_up, backups[0]);
+        assert_eq!(before[1].backed_up, backups[1]);
+
+        for authenticator in &mut authenticators {
+            let (session, options) = hub.begin_assert(&store, Some(xid), None).await.unwrap();
+            let assertion = authenticator
+                .do_authentication(
+                    origin.clone(),
+                    RequestChallengeResponse {
+                        public_key: serde_json::from_value(options).unwrap(),
+                        mediation: None,
+                    },
+                )
+                .unwrap();
+            let finished = hub
+                .finish_assert(&store, &session, assertion)
+                .await
+                .unwrap();
+            assert_eq!(finished.xid, xid);
+            assert!(finished.pending.is_none());
+            assert!(finished.device.is_none());
+        }
+        let after = store.list_passkey_presentations(xid).await.unwrap();
+        for (before, after) in before.iter().zip(&after) {
+            assert_eq!(after.aaguid, before.aaguid);
+            assert_eq!(after.backed_up, before.backed_up);
+            assert!(before.last_used_at.is_none());
+            assert!(after.last_used_at.is_some());
+        }
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
     async fn ssh_git_insert_refuses_elect_only(pool: sqlx::PgPool) {
         use axum::body::{self, Body};
         use axum::http::{Request, StatusCode};

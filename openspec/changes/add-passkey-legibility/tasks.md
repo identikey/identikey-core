@@ -6,8 +6,8 @@
 - [x] A missing entry or an unreadable list still renders the row and the rest of the page
 - [x] Assertion and authorization do not read `aaguid`
 - [x] Tests for a known AAGUID, an unknown AAGUID, and a nickname override
-- [ ] An assertion test runs two valid credentials with different stored presentation AAGUIDs; the ceremony result does not depend on the AAGUID. The store insert at `store.rs` is not that test
-- [ ] A missing or legacy backup value renders as unknown, not as "Not backed up". The registration BS bit stays the snapshot and is not rewritten on assertion
+- [x] An assertion test runs two valid credentials with different stored presentation AAGUIDs; the ceremony result does not depend on the AAGUID. The store insert at `store.rs` is not that test
+- [x] A missing or legacy backup value renders as unknown, not as "Not backed up". The registration BS bit stays the snapshot and is not rewritten on assertion
 - [x] Fresh advise after preparation
 
 Evidence (2026-09-29): `passkey_metadata` tests (known/unknown/malformed
@@ -24,5 +24,5 @@ backup wording. Not yet folded.
 Review: [2026-10-27-advise.md](reviews/2026-10-27-advise.md).
 
 - [x] Reconcile nickname precedence with missing/unreadable metadata fallback in the design and delta: preserve any trimmed nonempty nickname; qualify generic fallback scenarios; cover nickname plus unavailable metadata and blank nicknames.
-- [ ] Define backup display semantics (registration snapshot versus maintained status, BS versus backup eligibility, and missing/legacy metadata); make display expectations and focused verification match, without presenting unknown state as an observed negative. The contract text now says registration BS snapshot and unknown for a missing value. The page still maps NULL to false and renders "Not backed up", so this box stays open until that display and a focused check match.
+- [x] Define backup display semantics (registration snapshot versus maintained status, BS versus backup eligibility, and missing/legacy metadata); make display expectations and focused verification match, without presenting unknown state as an observed negative. NULL stays unknown ("Backup unknown"). A stored false stays "Not backed up". Assertion does not rewrite the snapshot.
 - [x] Resolve the checked ceremony-test evidence gap: verify real assertions for two valid credentials with different stored presentation AAGUIDs, or explicitly reconcile the promised verification; do not claim store-only lookup tests execute the assertion scenario.

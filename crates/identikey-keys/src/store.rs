@@ -99,7 +99,7 @@ pub struct StoredPasskey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PasskeyPresentation {
     pub aaguid: Option<[u8; 16]>,
-    pub backed_up: bool,
+    pub backed_up: Option<bool>,
     pub nickname: Option<String>,
     pub last_used_at: Option<OffsetDateTime>,
 }
@@ -601,9 +601,7 @@ impl KeysStore {
                     .transpose()?;
                 Ok(PasskeyPresentation {
                     aaguid,
-                    backed_up: row
-                        .try_get::<Option<bool>, _>("backed_up")?
-                        .unwrap_or(false),
+                    backed_up: row.try_get("backed_up")?,
                     nickname: row.try_get("nickname")?,
                     last_used_at: row.try_get("last_used_at")?,
                 })
@@ -1545,8 +1543,8 @@ mod tests {
         assert_eq!(
             presented,
             [
-                (Some(first_aaguid), true, Some("Work key")),
-                (Some(second_aaguid), false, None),
+                (Some(first_aaguid), Some(true), Some("Work key")),
+                (Some(second_aaguid), Some(false), None),
             ]
         );
 
