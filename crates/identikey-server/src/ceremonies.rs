@@ -493,14 +493,18 @@ fn registration_presentation_metadata(attestation_object: &[u8]) -> (Option<[u8;
 
 /// Options 1Password (and iCloud / Google Password Manager) can intercept.
 ///
-/// Do not set `authenticatorAttachment` or `hints: ["client-device"]` — those
-/// hide synced passkey providers behind platform authenticators. Discoverable
-/// credentials are required so usernameless login works from a vault.
+/// Creation and request options always send exactly `client-device`, `hybrid`,
+/// `security-key`, in that order, as hints. Omit `authenticatorAttachment` so
+/// synced passkey providers remain available. Discoverable credentials are
+/// required so usernameless login works from a vault.
 fn passkey_manager_compat(mut public_key: serde_json::Value) -> serde_json::Value {
     let Some(obj) = public_key.as_object_mut() else {
         return public_key;
     };
-    obj.remove("hints");
+    obj.insert(
+        "hints".into(),
+        serde_json::json!(["client-device", "hybrid", "security-key"]),
+    );
     let creation = obj.contains_key("user");
     if creation {
         let mut selection = obj

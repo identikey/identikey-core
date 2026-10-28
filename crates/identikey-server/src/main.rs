@@ -3087,9 +3087,7 @@ mod tests {
                 .unwrap();
         assert_eq!(first_json["publicKey"]["rp"]["id"], "auth.identikey.me");
         assert_eq!(first_json["publicKey"]["rp"]["name"], "IdentiKey");
-        assert!(
-            first_json["publicKey"]["authenticatorSelection"]["authenticatorAttachment"].is_null()
-        );
+        assert_hybrid_hint_options(&first_json["publicKey"]);
         assert_eq!(
             first_json["publicKey"]["authenticatorSelection"]["residentKey"],
             "required"
@@ -3102,7 +3100,6 @@ mod tests {
             first_json["publicKey"]["authenticatorSelection"]["userVerification"],
             "required"
         );
-        assert!(first_json["publicKey"]["hints"].is_null());
         let user_id = first_json["publicKey"]["user"]["id"].clone();
         assert!(!user_id.is_null());
 
@@ -3126,6 +3123,91 @@ mod tests {
         .unwrap();
         assert_eq!(second_json["publicKey"]["user"]["id"], user_id);
         assert_ne!(first_json["session"], second_json["session"]);
+    }
+
+    fn assert_hybrid_hint_options(options: &serde_json::Value) {
+        assert_eq!(
+            options["hints"],
+            serde_json::json!(["client-device", "hybrid", "security-key"])
+        );
+        assert!(options.get("authenticatorAttachment").is_none());
+        assert!(
+            options
+                .get("authenticatorSelection")
+                .and_then(|selection| selection.get("authenticatorAttachment"))
+                .is_none()
+        );
+    }
+
+    async fn register_hybrid_hint_test_passkey(
+        store: &KeysStore,
+        hub: &ceremonies::CeremonyHub,
+    ) -> identikey_keys::Xid {
+        use bc_components::PrivateKeyBase;
+        use identikey_keys::{CustodyRung, c2_native};
+        use webauthn_authenticator_rs::prelude::WebauthnAuthenticator;
+        use webauthn_authenticator_rs::softpasskey::SoftPasskey;
+        use webauthn_rs::prelude::CreationChallengeResponse;
+
+        let doc = c2_native(&PrivateKeyBase::new(), &PrivateKeyBase::new()).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &[0x51, 0x47])
+            .await
+            .unwrap();
+        let (session, mut options) = hub.begin_register(store, xid).await.unwrap();
+        // SoftPasskey needs the same client-side residency relaxation as the
+        // registration/assertion integration test; server options stay required.
+        options["authenticatorSelection"]["residentKey"] = "discouraged".into();
+        options["authenticatorSelection"]["requireResidentKey"] = false.into();
+        let credential = WebauthnAuthenticator::new(SoftPasskey::new(true))
+            .do_registration(
+                url::Url::parse("https://auth.identikey.me").unwrap(),
+                CreationChallengeResponse {
+                    public_key: serde_json::from_value(options).unwrap(),
+                },
+            )
+            .unwrap();
+        hub.finish_register(store, &session, xid, credential, None)
+            .await
+            .unwrap();
+        xid
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn discoverable_assertion_hybrid_hint(pool: sqlx::PgPool) {
+        let store = KeysStore::from_pool(pool);
+        let hub = ceremonies::CeremonyHub::from_config(&test_webauthn());
+        let (_, options) = hub.begin_assert(&store, None, None).await.unwrap();
+        assert_hybrid_hint_options(&options);
+        assert!(options["allowCredentials"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn device_discoverable_assertion_hybrid_hint() {
+        let hub = ceremonies::CeremonyHub::from_config(&test_webauthn());
+        let (_, options, _) = hub.begin_device_assert("ABCD-EFGH").await.unwrap();
+        assert_hybrid_hint_options(&options);
+        assert!(options["allowCredentials"].as_array().unwrap().is_empty());
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn allow_list_assertion_hybrid_hint(pool: sqlx::PgPool) {
+        let store = KeysStore::from_pool(pool);
+        let hub = ceremonies::CeremonyHub::from_config(&test_webauthn());
+        let xid = register_hybrid_hint_test_passkey(&store, &hub).await;
+        let (_, options) = hub.begin_assert(&store, Some(xid), None).await.unwrap();
+        assert_hybrid_hint_options(&options);
+        assert_eq!(options["allowCredentials"].as_array().unwrap().len(), 1);
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn managed_allow_list_assertion_hybrid_hint(pool: sqlx::PgPool) {
+        let store = KeysStore::from_pool(pool);
+        let hub = ceremonies::CeremonyHub::from_config(&test_webauthn());
+        let xid = register_hybrid_hint_test_passkey(&store, &hub).await;
+        let (options, _) = hub.begin_managed_assert(&store, xid).await.unwrap();
+        assert_hybrid_hint_options(&options);
+        assert_eq!(options["allowCredentials"].as_array().unwrap().len(), 1);
     }
 
     /// Account takeover regression: a public XID must not be enough to add a
