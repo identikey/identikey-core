@@ -7,9 +7,14 @@
 
 `passkey_manager_compat` keeps removing `authenticatorAttachment` and
 keeps requiring a discoverable credential. It stops deleting `hints`.
-The hint list is `hybrid`, `security-key`, and `client-device`, in
-that order. A list of only `client-device` stays forbidden. webauthn-rs
-and the browser speak caBLE. This server does not.
+The hint list is `client-device`, `hybrid`, and `security-key`, in
+that order. The list is empty or those three values. A one-value or
+two-value list is rejected by the contract, including a list that is
+only `client-device` and a list that is only `hybrid`. `hybrid` is
+not first, because a hint list is ordered by preference and a
+phone-first list puts the QR sheet ahead of a local or synced
+passkey. webauthn-rs and the browser speak caBLE. This server does
+not. A phone-to-computer ceremony is not verified on hardware.
 
 ## What does not change
 
