@@ -5,13 +5,16 @@
 Bead `identikey-core-5gh.2`. Steer 2026-09-26. Activated in chat
 2026-09-26.
 
-**Preparation:** still valid. `credentials.aaguid`, `backed_up`,
-`nickname`, and `last_used_at` already exist.
-`KeysStore::insert_passkey` does not write the first three.
-`GET /account` shows a passkey count, not a list. The column comment
-already says an AAGUID is a UX hint and never a policy input.
-Authority: Duke said "activate" for this bead and for `5gh.5` only.
-Signal API, counter policy, and the domain monitor stay outside.
+**Preparation:** revised 2026-10-27 after
+`reviews/2026-10-27-advise.md` send-back. Registration already
+writes presentation metadata through `insert_passkey_with_metadata`.
+`GET /account` already lists rows. This revision fixes the contract:
+a trimmed nonempty nickname wins even when metadata is missing; the
+backup flag is the registration-time BS bit and an absent value is
+not "Not backed up"; the two-AAGUID ceremony test is not claimed
+done. Fresh advise is owed. Authority: Duke said "activate" for this
+bead and for `5gh.5` only. Signal API, counter policy, and the domain
+monitor stay outside.
 
 ## Why
 
@@ -21,14 +24,27 @@ backup flag on the floor.
 
 ## What
 
-- Store AAGUID, backed-up, and an optional nickname when a passkey
-  is registered.
-- On `GET /account`, list each passkey. The label is the nickname,
-  otherwise the provider name from a pinned public AAGUID metadata
-  list, otherwise "Passkey". Show the list's icon when the entry has
-  one. Show backed-up and last used.
-- A missing entry or an unreadable list still renders the row as
-  "Passkey". Login and registration do not read the AAGUID.
+- Store the AAGUID when authenticator data has one, the
+  registration-time backup state (the BS bit, not backup
+  eligibility), and a nickname when the trimmed value is nonempty.
+  Assertion does not refresh the backup bit.
+- On `GET /account`, list each passkey. A trimmed nonempty nickname
+  is the label even when the metadata list has no entry or cannot
+  be read. Otherwise the label is the provider name from the pinned
+  list, otherwise "Passkey". A blank nickname is absent. Show the
+  list's icon when the entry has one.
+- The backup line is that registration snapshot: backed up, or not.
+  A missing or legacy backup value is unknown. It is not shown as
+  "Not backed up". Show last used.
+- The pinned list is the compact public AAGUID file (1Password,
+  Google Password Manager, Apple Passwords), source URL recorded,
+  pinned 2026-09-27. `GET /account` does not fetch it.
+- A missing entry or an unreadable list still renders the row and
+  the rest of the page. Assertion and authorization do not accept
+  or reject a ceremony from the AAGUID. Registration may read it
+  only to store it.
+- The claim that a ceremony test already accepts two AAGUIDs is
+  withdrawn. That assertion test is still owed.
 - Capability: MODIFIED `passkeys`.
 
 ## Impact
