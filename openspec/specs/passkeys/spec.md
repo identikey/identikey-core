@@ -16,10 +16,13 @@ The system SHALL perform WebAuthn registration and assertion with
 `webauthn-rs`, using the fail-closed RP ID and origin allowlist
 already parsed at boot. Discoverable (resident) keys SHALL be
 **required** so a synced authenticator (1Password, iCloud Keychain,
-Google Password Manager) can store the passkey. Creation options
-SHALL NOT set `authenticatorAttachment` or `hints` that prefer a
-platform authenticator only. A verified assertion SHALL bind to an
-existing account XID and SHALL NOT create an account implicitly.
+Google Password Manager) can store the passkey. Creation and request options
+SHALL NOT set `authenticatorAttachment`. The hint list SHALL be
+absent or exactly `client-device`, `hybrid`, `security-key`, in that
+order. A one-value or two-value list SHALL NOT be sent. The server
+SHALL NOT implement caBLE itself and SHALL NOT render a QR. A
+verified assertion SHALL bind to an existing
+account XID and SHALL NOT create an account implicitly.
 
 #### Scenario: Registration stores a passkey credential
 
@@ -32,6 +35,14 @@ existing account XID and SHALL NOT create an account implicitly.
 - GIVEN no account for the asserted credential
 - WHEN assertion is submitted
 - THEN the ceremony fails and no account is inserted
+
+#### Scenario: Options nudge a phone without leading with it
+
+- GIVEN a registration or assertion ceremony is begun
+- WHEN the public-key options are returned
+- THEN the hint list is `client-device`, `hybrid`, and `security-key`
+- AND `authenticatorAttachment` is absent
+- AND the response is not a QR image and not a new ceremony route
 
 ### Requirement: Authorization passkey page is a product surface
 
