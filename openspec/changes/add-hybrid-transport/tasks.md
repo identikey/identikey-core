@@ -5,7 +5,7 @@
 - [ ] The hint list is absent or exactly those three values; a one-value or two-value list is not sent
 - [ ] No new route and no server-rendered QR
 - [ ] Tests assert the exact hint list and order, and the absent attachment, on registration, discoverable assertion (`ceremonies.rs:225`, `:250`), and allow-list assertion (`:219`, `:345`) options
-- [ ] Fresh advise after preparation
+- [x] Fresh advise after preparation
 
 ## Owed (advise 2026-10-27, opus-arch-review — send-back)
 
