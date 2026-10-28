@@ -12,7 +12,7 @@
 - [x] R2: The signature does not establish the key. The caller supplies a key only when establishment outside this change bound it to that opening and peer. The MAC names the opening id, so two openings with the same audience, digest, and key do not share a proof. The ML-KEM spike stays out of scope.
 - [x] R3: A follow-up resolves the session digest through current trust. Rotation, a fork, or missing authority rejects it. A successful MAC does not outlive those events.
 - [x] R4: Opening and MAC bytes are canonical dCBOR with the domains `identikey-pq-session/v1` and `identikey-pq-session-mac/v1`. The tag is 32 bytes, compared in constant time. The delta includes the vector and rejects a non-canonical encoding.
-- [ ] Fresh advise after preparation
+- [x] Fresh advise after preparation
 
 ## Out of scope
 
