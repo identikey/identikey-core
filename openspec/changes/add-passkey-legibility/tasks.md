@@ -8,7 +8,7 @@
 - [x] Tests for a known AAGUID, an unknown AAGUID, and a nickname override
 - [ ] An assertion test runs two valid credentials with different stored presentation AAGUIDs; the ceremony result does not depend on the AAGUID. The store insert at `store.rs` is not that test
 - [ ] A missing or legacy backup value renders as unknown, not as "Not backed up". The registration BS bit stays the snapshot and is not rewritten on assertion
-- [ ] Fresh advise after preparation
+- [x] Fresh advise after preparation
 
 Evidence (2026-09-29): `passkey_metadata` tests (known/unknown/malformed
 list, unsafe icon), `ceremonies` registration-metadata tests, the store test
