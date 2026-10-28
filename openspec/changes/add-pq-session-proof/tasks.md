@@ -8,11 +8,11 @@
 
 ## Owed from advise — astra-arch-review, 2026-10-27
 
-- [ ] R1: Specify verifier expectations for audience/challenge, ownership and atomic consumption of challenge freshness, and follow-up replay semantics; add unexpected/consumed challenge and wrong expected-audience scenarios. Caller-managed freshness is permitted. See `reviews/2026-10-27-advise.md`.
-- [ ] R2: Specify the external authenticated-secret binding precondition and how a session binds its supplied key to the accepted opening; prevent cross-opening MAC reuse and cover distinct openings with the same audience/digest. Keep key establishment and the unverified ML-KEM spike out of scope.
-- [ ] R3: Choose current-authority or opening-time authority semantics for established sessions; define the lifetime/revocation boundary and add follow-up scenarios after rotation, loss of authority, and a detected fork. Correct the older-digest scenario to test the chosen semantics.
-- [ ] R4: Pin exact versioned, domain-separated opening and MAC byte encodings, field validation, full tag length, and constant-time tag verification; include a byte-level vector and malformed/ambiguous-encoding checks.
-- [ ] Obtain fresh advise after reconciling R1–R4 and before implementation.
+- [x] R1: The verifier supplies the expected audience and challenge. Success consumes the challenge. Failure, an unexpected challenge, and a consumed challenge do not open a session. A follow-up MAC is reusable and is not a fresh action.
+- [x] R2: The signature does not establish the key. The caller supplies a key only when establishment outside this change bound it to that opening and peer. The MAC names the opening id, so two openings with the same audience, digest, and key do not share a proof. The ML-KEM spike stays out of scope.
+- [x] R3: A follow-up resolves the session digest through current trust. Rotation, a fork, or missing authority rejects it. A successful MAC does not outlive those events.
+- [x] R4: Opening and MAC bytes are canonical dCBOR with the domains `identikey-pq-session/v1` and `identikey-pq-session-mac/v1`. The tag is 32 bytes, compared in constant time. The delta includes the vector and rejects a non-canonical encoding.
+- [ ] Fresh advise after preparation
 
 ## Out of scope
 

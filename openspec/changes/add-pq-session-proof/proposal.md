@@ -10,9 +10,13 @@ verifier in identikey-protocol `0ff2dea`, living spec
 `Trust::resolve` returns the head only when the cited digest is that
 head and the chain is not forked. Outcome: new contract, not a
 revision of an accepted one. The human activated this change on
-2026-10-28. `pq-session-secret` stays unverified. That activation
-does not mark the spike skipped and does not include key
-establishment. The key-source menu is not asked again.
+2026-10-28. Astra sent the first contract back
+(`reviews/2026-10-27-advise.md`). The delta now pins challenge
+consumption, the external key-binding precondition, current-head
+checks on follow-ups, and the canonical bytes. Fresh advise from
+`astra-arch-review` is still owed. `pq-session-secret` stays
+unverified. Activation does not mark the spike skipped and does not
+include key establishment. The key-source menu is not asked again.
 
 ## Why
 
@@ -35,8 +39,17 @@ holder of the session key produced them.
 - The proof names the XID. It does not name the classical
   fingerprint.
 - No proof is appended to a log.
-- How the session key is established is not decided. See the spike
-  in `design.md`.
+- The verifier holds the expected audience and challenge. Success
+  consumes the challenge. Failure does not. A signature without a
+  caller-supplied key is not a session.
+- The MAC names the opening id, so two openings do not share proofs.
+  Each follow-up still requires that digest to be the current
+  unforked head. A repeated MAC is not a fresh action.
+- The opening and the MAC are canonical dCBOR, domain-separated the
+  same way as `identikey-pq-state/v1`. One vector is in the delta.
+- How the session key is established is not decided. The caller
+  supplies a key that establishment outside this change has bound to
+  that opening. See the spike in `design.md`.
 
 ## Impact
 
