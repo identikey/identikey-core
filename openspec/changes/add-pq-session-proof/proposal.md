@@ -1,6 +1,6 @@
 # add-pq-session-proof
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 Bead `identikey-core-pgz.2`. Depends on `add-pq-state-chain`.
 
@@ -9,10 +9,10 @@ verifier in identikey-protocol `0ff2dea`, living spec
 `openspec/specs/pq-state-chain/spec.md`, folded `922b188`.
 `Trust::resolve` returns the head only when the cited digest is that
 head and the chain is not forked. Outcome: new contract, not a
-revision of an accepted one. Authority: the `identikey-core-pgz`
-grant covers this node once that artifact exists. Activation stays
-off. `pq-session-secret` is an unresolved hypothesis, and campaign
-authority does not bypass it. The key-source menu is not asked again.
+revision of an accepted one. The human activated this change on
+2026-10-28. `pq-session-secret` stays unverified. That activation
+does not mark the spike skipped and does not include key
+establishment. The key-source menu is not asked again.
 
 ## Why
 

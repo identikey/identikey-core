@@ -22,4 +22,9 @@
 
 ## Feeds change
 
-Scaffold PENDING. Do not activate while `pq-session-secret` is unverified. Do not implement key establishment.
+The opening signature and the follow-up MAC are the contract. Key establishment stays out of scope while `pq-session-secret` is unverified.
+
+## Activated
+
+- 2026-10-28, user: `activate add-pq-session-proof`.
+  The spike line stays unverified. Do not start ML-KEM or classical Diffie-Hellman.
