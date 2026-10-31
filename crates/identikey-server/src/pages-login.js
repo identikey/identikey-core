@@ -36,14 +36,19 @@ async function signIn() {
   clearStatus();
   setBusy("Opening passkey prompt…");
   try {
-    if (renew) await freshOptions();
+    if (renew) {
+      setStage("prepare");
+      await freshOptions();
+    }
     // Every retry gets a fresh challenge, including a delayed/cancelled prompt.
     renew = true;
+    setStage("prompt");
     const credential = await navigator.credentials.get({
       publicKey: decodePublicKey(structuredClone(options.publicKey)),
     });
     if (!credential)
       throw new DOMException("No credential returned", "NotAllowedError");
+    setStage("finish");
     setBusy("Signing in…");
     const response = await postJson("/webauthn/assert/finish", {
       session: options.session,

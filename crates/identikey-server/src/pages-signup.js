@@ -11,6 +11,7 @@ async function signUp() {
   clearStatus();
   setBusy("Preparing your passkey…");
   try {
+    setStage("prepare");
     if (!pending) {
       const created = await request("/signup", { method: "POST" });
       if (!created.ok) throw await responseError(created);
@@ -24,11 +25,13 @@ async function signUp() {
       pending = { ...(await begun.json()), xid: pending.xid };
     }
     setBusy("Save your passkey in the prompt…");
+    setStage("prompt");
     const credential = await navigator.credentials.create({
       publicKey: decodePublicKey(structuredClone(pending.publicKey)),
     });
     if (!credential)
       throw new DOMException("No credential returned", "NotAllowedError");
+    setStage("finish");
     setBusy("Saving your passkey…");
     const response = await postJson("/webauthn/register/finish", {
       session: pending.session,

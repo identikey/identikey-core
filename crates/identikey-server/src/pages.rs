@@ -56,7 +56,9 @@ const LOCAL_NOTICE: &str = "<p id=\"local-notice\" class=\"local\" hidden>\
 /// and is announced, so keyboard and screen-reader users hear the outcome.
 const STATUS_PANEL: &str = "<div id=\"status\" class=\"status\" role=\"status\" \
      aria-live=\"polite\" tabindex=\"-1\" hidden>\
-     <h2 id=\"status-title\"></h2><p id=\"status-description\"></p></div>";
+     <h2 id=\"status-title\"></h2><p id=\"status-description\"></p>\
+     <button type=\"button\" id=\"copy-report\" hidden>Copy diagnostics</button>\
+     <p id=\"copy-result\" role=\"status\"></p></div>";
 
 /// Collapsed API error for developers: code, description and HTTP status,
 /// written with `textContent`, never as HTML.

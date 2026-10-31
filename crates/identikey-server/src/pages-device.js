@@ -17,16 +17,19 @@ async function approve() {
   clearStatus();
   setBusy("Approve");
   try {
+    setStage("prepare");
     const began = await postJson("/device/assert/begin", {
       user_code: device.user_code,
     });
     if (!began.ok) throw await responseError(began);
     const options = await began.json();
+    setStage("prompt");
     const credential = await navigator.credentials.get({
       publicKey: decodePublicKey(structuredClone(options.publicKey)),
     });
     if (!credential)
       throw new DOMException("No credential returned", "NotAllowedError");
+    setStage("finish");
     const finished = await postJson("/device/assert/finish", {
       session: options.session,
       credential: credToJson(credential),
@@ -48,6 +51,7 @@ async function refuse() {
   deny.disabled = true;
   clearStatus();
   try {
+    setStage("deny");
     const response = await postJson("/device/deny", {
       user_code: device.user_code,
     });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { chromium } from 'playwright';
 
 // Against a running local OP (scripts/dev-server.sh; defaults match .env.example).
@@ -157,7 +158,7 @@ test('cancellation never claims the account is missing and offers a retry', asyn
 		})
 	);
 	await page.getByRole('button', { name: 'Continue with passkey' }).click();
-	await page.getByRole('heading', { name: 'No passkey was selected.' }).waitFor();
+	await page.getByRole('heading', { name: 'The passkey prompt was not completed.' }).waitFor();
 	assert.equal(await page.getByRole('button', { name: 'Try again' }).isEnabled(), true);
 	assert.ok(!(await page.locator('#status').innerText()).includes('registered'));
 });
@@ -254,4 +255,198 @@ test('unsupported browsers get an explanation rather than a broken button', asyn
 		await page.getByRole('button', { name: 'Continue with passkey' }).isDisabled(),
 		true
 	);
+});
+
+const src = (name) =>
+	readFileSync(new URL(`../../crates/identikey-server/src/${name}`, import.meta.url), 'utf8');
+const devicePage = `<!doctype html><body><h1>Sign in</h1>
+<div id="status" hidden tabindex="-1"><h2 id="status-title"></h2><p id="status-description"></p>
+<button type="button" id="copy-report" hidden>Copy diagnostics</button><p id="copy-result"></p></div>
+<button id="go">Approve</button><button id="deny">Cancel</button>
+<details id="technical" hidden><summary>Technical details</summary><pre id="technical-message"></pre></details>
+<div id="local-notice" hidden></div>
+<script type="application/json" id="device">{"user_code":"ABCD-EFGH"}</script>
+<script>${src('pages-common.js')}\n${src('pages-device.js')}</script></body>`;
+
+async function devicePageFor(t) {
+	const page = await pageFor(t);
+	await page.route('**/device?*', (route) =>
+		route.fulfill({ contentType: 'text/html', body: devicePage })
+	);
+	await page.goto(`${origin}/device?user_code=ABCD-EFGH`);
+	return page;
+}
+const stubClipboard = (page, fail = false) =>
+	page.evaluate((fail) => {
+		window.copied = [];
+		Object.defineProperty(navigator, 'clipboard', {
+			configurable: true,
+			value: {
+				writeText: async (text) => {
+					if (fail) throw new Error('denied');
+					window.copied.push(text);
+				}
+			}
+		});
+	}, fail);
+const countPrompts = (page) =>
+	page.evaluate(() => {
+		window.prompts = 0;
+		for (const name of ['get', 'create'])
+			Object.defineProperty(navigator.credentials, name, {
+				configurable: true,
+				value: async () => {
+					window.prompts++;
+					return { id: 'SECRET-CRED-ID', rawId: new ArrayBuffer(4), type: 'public-key', response: {} };
+				}
+			});
+	});
+const copied = async (page) => {
+	await page.getByRole('button', { name: 'Copy diagnostics' }).click();
+	await page.waitForFunction(() => window.copied.length === 1);
+	return JSON.parse(await page.evaluate(() => window.copied[0]));
+};
+
+test('copy report has the error name and omits credential ids', async (t) => {
+	const page = await pageFor(t);
+	await stubClipboard(page);
+	await page.route('**/webauthn/assert/finish', (route) => failure(route, 'credential not found'));
+	await page.getByRole('button', { name: 'Continue with passkey' }).click();
+	await page.getByRole('heading', { name: "That passkey isn't registered here." }).waitFor();
+	const raw = await page.evaluate(
+		() => (window.__r = null) ?? document.getElementById('status').innerText
+	);
+	assert.ok(raw.includes('Copy diagnostics'));
+	const report = await copied(page);
+	assert.equal(report.stage, 'finish');
+	assert.equal(report.error_name, 'ResponseError');
+	assert.equal(report.server_error, 'invalid_request');
+	assert.equal(report.http_status, 400);
+	assert.equal(report.secure_context, true);
+	assert.equal(report.public_key_credential, true);
+	assert.equal(report.navigator_credentials, true);
+	const text = JSON.stringify(report);
+	assert.ok(!text.includes('test'.repeat(1) + '"'));
+	for (const banned of ['session', 'challenge', 'rawId', 'credential_id', 'email', 'cookie'])
+		assert.ok(!(banned in report), banned);
+});
+
+test('failed clipboard write keeps the status and says the copy did not happen', async (t) => {
+	const page = await pageFor(t);
+	await stubClipboard(page, true);
+	await page.route('**/webauthn/assert/finish', (route) => failure(route, 'x', 503));
+	await page.getByRole('button', { name: 'Continue with passkey' }).click();
+	await page.getByRole('heading', { name: 'IdentiKey is temporarily unavailable.' }).waitFor();
+	await page.getByRole('button', { name: 'Copy diagnostics' }).click();
+	await page.getByText('The copy did not happen', { exact: false }).waitFor();
+	assert.equal(await page.locator('#status').isVisible(), true);
+	assert.ok(!(await page.locator('#copy-result').innerText()).includes('copied'));
+});
+
+test('unsupported browser report uses the support stage', async (t) => {
+	const page = await pageFor(t);
+	await page.addInitScript(() =>
+		Object.defineProperty(window, 'PublicKeyCredential', { value: undefined })
+	);
+	await page.reload();
+	await stubClipboard(page);
+	const report = await copied(page);
+	assert.equal(report.stage, 'support');
+	assert.equal(report.public_key_credential, false);
+	assert.equal(report.error_name, 'NotSupportedError');
+});
+
+test('the five outcomes have distinct headings and the prompt wording is ambiguous', async (t) => {
+	const titles = new Set();
+	const page = await pageFor(t);
+	const title = () => page.locator('#status-title').innerText();
+	await page.evaluate(() =>
+		Object.defineProperty(navigator.credentials, 'get', {
+			configurable: true,
+			value: async () => {
+				throw new DOMException('x', 'AbortError');
+			}
+		})
+	);
+	await page.getByRole('button', { name: 'Continue with passkey' }).click();
+	await page.locator('#status-title').filter({ hasText: 'not completed' }).waitFor();
+	const body = await page.locator('#status').innerText();
+	assert.ok(body.includes('does not mean your account is missing'));
+	const claims = body.toLowerCase().replace('does not mean your account is missing', '');
+	for (const bad of ['cancel', 'not installed', 'missing', 'no account', "isn't registered"])
+		assert.ok(!claims.includes(bad), bad);
+	titles.add(await title());
+	await page.evaluate(() =>
+		Object.defineProperty(navigator.credentials, 'get', {
+			configurable: true,
+			value: async () => ({ id: 'a', rawId: new ArrayBuffer(4), type: 'public-key', response: {} })
+		})
+	);
+	for (const [message, status] of [
+		['credential not found', 400],
+		['unknown or expired ceremony', 400],
+		['down', 503]
+	]) {
+		await page.unroute('**/webauthn/assert/finish').catch(() => {});
+		await page.route('**/webauthn/assert/finish', (route) => failure(route, message, status));
+		await page.getByRole('button', { name: /Try/ }).click();
+		await page.waitForFunction(
+			(old) => document.getElementById('status-title').textContent !== old,
+			await title()
+		);
+		titles.add(await title());
+	}
+	// the fifth, unavailable WebAuthn, is covered by the unsupported-browser test
+	assert.equal(titles.size, 4);
+});
+
+test('prepare failures do not open the prompt (login renewal, signup, device)', async (t) => {
+	// login: a retry renews options first
+	let page = await pageFor(t);
+	await stubClipboard(page);
+	await page.evaluate(() =>
+		Object.defineProperty(navigator.credentials, 'get', {
+			configurable: true,
+			value: async () => {
+				throw new DOMException('x', 'NotAllowedError');
+			}
+		})
+	);
+	await page.getByRole('button', { name: 'Continue with passkey' }).click();
+	await page.locator('#status-title').filter({ hasText: 'not completed' }).waitFor();
+	await countPrompts(page);
+	await page.route('**/authorize/passkey?*', (route) => failure(route, 'down', 503));
+	await page.getByRole('button', { name: 'Try again' }).click();
+	await page.getByRole('heading', { name: 'IdentiKey is temporarily unavailable.' }).waitFor();
+	assert.equal(await page.evaluate(() => window.prompts), 0);
+	assert.equal((await copied(page)).stage, 'prepare');
+
+	// signup
+	page = await pageFor(t, 'signup');
+	await stubClipboard(page);
+	await countPrompts(page);
+	await page.route('**/signup', (route) => failure(route, 'down', 503));
+	await page.getByRole('button', { name: 'Create account and add a passkey' }).click();
+	await page.getByRole('heading', { name: 'IdentiKey is temporarily unavailable.' }).waitFor();
+	assert.equal(await page.evaluate(() => window.prompts), 0);
+	assert.equal((await copied(page)).stage, 'prepare');
+
+	// device approval
+	page = await devicePageFor(t);
+	await stubClipboard(page);
+	await countPrompts(page);
+	await page.route('**/device/assert/begin', (route) => failure(route, 'down', 503));
+	await page.getByRole('button', { name: 'Approve' }).click();
+	await page.getByRole('heading', { name: 'IdentiKey is temporarily unavailable.' }).waitFor();
+	assert.equal(await page.evaluate(() => window.prompts), 0);
+	assert.equal((await copied(page)).stage, 'prepare');
+});
+
+test('a failed device denial copies the deny stage', async (t) => {
+	const page = await devicePageFor(t);
+	await stubClipboard(page);
+	await page.route('**/device/deny', (route) => failure(route, 'down', 503));
+	await page.getByRole('button', { name: 'Cancel' }).click();
+	await page.getByRole('heading', { name: 'IdentiKey is temporarily unavailable.' }).waitFor();
+	assert.equal((await copied(page)).stage, 'deny');
 });

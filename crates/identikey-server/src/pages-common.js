@@ -65,7 +65,36 @@ async function responseError(res) {
   error.code = data?.error || "unexpected_response";
   return error;
 }
+let stage = "prepare";
+let lastReport = null;
+function setStage(next) {
+  stage = next;
+}
+function buildReport(error) {
+  const report = {
+    stage: error.stage || stage,
+    secure_context: Boolean(window.isSecureContext),
+    public_key_credential: Boolean(window.PublicKeyCredential),
+    navigator_credentials: Boolean(navigator.credentials),
+    error_name: error.name || "Error",
+  };
+  if (typeof error.code === "string") report.server_error = error.code;
+  if (typeof error.status === "number") report.http_status = error.status;
+  return report;
+}
+async function copyReport() {
+  const result = document.getElementById("copy-result");
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(lastReport, null, 2));
+    result.textContent = "Diagnostics copied. Nothing was sent.";
+  } catch {
+    result.textContent = "The copy did not happen. Your status is unchanged.";
+  }
+}
 function clearStatus() {
+  lastReport = null;
+  document.getElementById("copy-report").hidden = true;
+  document.getElementById("copy-result").textContent = "";
   document.getElementById("status").hidden = true;
   const technical = document.getElementById("technical");
   technical.hidden = true;
@@ -97,9 +126,9 @@ function showFailure(error, creating = false) {
   } else if (error.name === "NotAllowedError" || error.name === "AbortError") {
     title = creating
       ? "Passkey setup was not completed."
-      : "No passkey was selected.";
+      : "The passkey prompt was not completed.";
     message =
-      "The prompt may have been closed or timed out. Try again, or choose a different password manager or device in the prompt.";
+      "The browser ended the prompt without a passkey. This can happen for several reasons, and it does not mean your account is missing. Try again, or choose a different password manager or device in the prompt.";
     help = !creating;
   } else if (error.name === "InvalidStateError" && creating) {
     title = "A passkey may already be saved.";
@@ -129,6 +158,10 @@ function showFailure(error, creating = false) {
       "Try again using the same account setup, or go back to sign-in if you already have an account.";
   }
   status(title, message);
+  lastReport = buildReport(error);
+  const copy = document.getElementById("copy-report");
+  copy.hidden = false;
+  document.getElementById("copy-result").textContent = "";
   const details = document.getElementById("technical");
   document.getElementById("technical-message").textContent = JSON.stringify(
     {
@@ -166,10 +199,12 @@ function checkSupport() {
     "WebAuthn unavailable or origin is not a secure context",
   );
   error.name = "NotSupportedError";
+  setStage("support");
   showFailure(error);
   document.getElementById("go").disabled = true;
   return false;
 }
+document.getElementById("copy-report").addEventListener("click", copyReport);
 if (["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) {
   document.getElementById("local-notice").hidden = false;
 }
