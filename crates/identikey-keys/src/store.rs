@@ -616,7 +616,7 @@ impl KeysStore {
     ) -> Result<(), StoreError> {
         let result = sqlx::query!(
             "UPDATE credentials
-             SET sign_counter = $2, last_used_at = now()
+             SET sign_counter = GREATEST(sign_counter, $2), last_used_at = now()
              WHERE webauthn_credential_id = $1
                AND kind = 'passkey'
                AND revoked_at IS NULL",

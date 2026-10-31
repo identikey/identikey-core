@@ -3538,6 +3538,263 @@ mod tests {
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn counter_policy_all_verifiers(pool: sqlx::PgPool) {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+        use bc_components::{Ed25519PrivateKey, PrivateKeyBase};
+        use identikey_keys::{BeginEncapsulationRequest, HeldProof};
+        use sha2::{Digest, Sha256};
+        use webauthn_authenticator_rs::{prelude::WebauthnAuthenticator, softpasskey::SoftPasskey};
+        use webauthn_rs::prelude::{CreationChallengeResponse, Passkey, WebauthnBuilder};
+
+        #[derive(Clone)]
+        struct LogBuffer(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for LogBuffer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
+            type Writer = Self;
+            fn make_writer(&'a self) -> Self {
+                self.clone()
+            }
+        }
+        let logs = LogBuffer(Arc::new(std::sync::Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(logs.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let store = KeysStore::from_pool(pool);
+        let user = PrivateKeyBase::new();
+        let operational = OperationalEd25519::generate();
+        let doc = c2_native(&user, operational.public_keys()).unwrap();
+        let xid = Xid::from(doc.xid());
+        let recipient: [u8; 32] = c2_wrap_recipient(&doc).unwrap().try_into().unwrap();
+        let keys = ManagedKeyring::single("test", [0x6d; 32]);
+        let blob = keys
+            .seal_encapsulation(xid, &recipient, user.x25519_private_key().data())
+            .unwrap();
+        let public = identikey_keys::operational_ed25519_public(&doc).unwrap();
+        let managed = keys.seal(xid, &public, operational.seed()).unwrap();
+        store
+            .create_managed_with_encapsulation(CustodyRung::C2, &doc, &managed, Some(&blob))
+            .await
+            .unwrap();
+        let hub = ceremonies::CeremonyHub::from_config(&test_webauthn());
+        let origin = url::Url::parse("https://auth.identikey.me").unwrap();
+        let webauthn = WebauthnBuilder::new("auth.identikey.me", &origin)
+            .unwrap()
+            .build()
+            .unwrap();
+        let (session, mut options) = hub.begin_register(&store, xid).await.unwrap();
+        options["authenticatorSelection"]["residentKey"] = "discouraged".into();
+        options["authenticatorSelection"]["requireResidentKey"] = false.into();
+        let registration = WebauthnAuthenticator::new(SoftPasskey::new(true))
+            .do_registration(
+                origin.clone(),
+                CreationChallengeResponse {
+                    public_key: serde_json::from_value(options).unwrap(),
+                },
+            )
+            .unwrap();
+        hub.finish_register(&store, &session, xid, registration, None)
+            .await
+            .unwrap();
+        let row = store.list_passkeys(xid).await.unwrap().remove(0);
+        let cred_id = row.credential_id;
+        let signing = Ed25519PrivateKey::from_data([0x37; 32]);
+        // A positive-counter registration snapshot with a test-controlled signer
+        // lets us exercise counter 0 and regressions with valid signatures.
+        let mut snapshot: serde_json::Value = serde_json::from_slice(&row.passkey_json).unwrap();
+        snapshot["cred"]["counter"] = 10.into();
+        snapshot["cred"]["cred"] = serde_json::json!({
+            "type_": "EDDSA", "key": {"EC_OKP": {
+                "curve": "ED25519", "x": B64.encode(signing.public_key().data())
+            }}
+        });
+        let passkey: Passkey = serde_json::from_value(snapshot).unwrap();
+        let snapshot = serde_json::to_vec(&passkey).unwrap();
+        sqlx::query(
+            "UPDATE credentials SET cose_public_key = $2 WHERE webauthn_credential_id = $1",
+        )
+        .bind(&cred_id)
+        .bind(&snapshot)
+        .execute(store.pool())
+        .await
+        .unwrap();
+
+        for site in ["hosted", "discoverable", "managed", "encapsulation"] {
+            for (presented, accepted, bad_signature) in [
+                (3_u32, true, false),
+                (0, true, false),
+                (10, false, false),
+                (11, true, false),
+                (3, false, true),
+            ] {
+                sqlx::query("UPDATE credentials SET sign_counter = 10, last_used_at = now() - interval '1 day' WHERE webauthn_credential_id = $1")
+                    .bind(&cred_id).execute(store.pool()).await.unwrap();
+                let before: sqlx::types::time::OffsetDateTime = sqlx::query_scalar(
+                    "SELECT last_used_at FROM credentials WHERE webauthn_credential_id = $1",
+                )
+                .bind(&cred_id)
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+                let (session, options, state) = match site {
+                    "hosted" | "discoverable" => {
+                        let (session, options) = hub
+                            .begin_assert(
+                                &store,
+                                if site == "hosted" { Some(xid) } else { None },
+                                None,
+                            )
+                            .await
+                            .unwrap();
+                        (session, options, Vec::new())
+                    }
+                    _ => {
+                        let (options, state) = hub.begin_managed_assert(&store, xid).await.unwrap();
+                        let value: serde_json::Value = serde_json::from_slice(&state).unwrap();
+                        assert_eq!(value["ast"]["credentials"][0]["counter"], 0);
+                        (String::new(), options, state)
+                    }
+                };
+                let client = serde_json::to_vec(&serde_json::json!({
+                    "type": "webauthn.get", "challenge": options["challenge"], "origin": origin.as_str(), "crossOrigin": false
+                })).unwrap();
+                let mut auth_data = Sha256::digest(b"auth.identikey.me").to_vec();
+                auth_data.push(0x05); // user present + verified
+                auth_data.extend_from_slice(&presented.to_be_bytes());
+                let mut signed = auth_data.clone();
+                signed.extend_from_slice(&Sha256::digest(&client));
+                let mut signature = signing.sign(signed);
+                if bad_signature {
+                    signature[0] ^= 1;
+                }
+                let assertion = serde_json::from_value(serde_json::json!({
+                    "id": B64.encode(&cred_id), "rawId": B64.encode(&cred_id), "type": "public-key",
+                    "response": { "clientDataJSON": B64.encode(client), "authenticatorData": B64.encode(auth_data),
+                        "signature": B64.encode(signature), "userHandle": B64.encode(ceremonies::xid_user_id(xid).as_bytes()) },
+                    "extensions": {}
+                })).unwrap();
+                logs.0.lock().unwrap().clear();
+                let ok = match site {
+                    "hosted" | "discoverable" => {
+                        let result = hub.finish_assert(&store, &session, assertion).await;
+                        if presented == 10 {
+                            assert_eq!(
+                                result.err().unwrap().to_string(),
+                                "webauthn: sign counter did not increase"
+                            );
+                            false
+                        } else {
+                            result.is_ok()
+                        }
+                    }
+                    "managed" => {
+                        let result = hub
+                            .finish_managed_assert(&store, xid, &state, assertion)
+                            .await;
+                        if presented == 10 {
+                            assert_eq!(
+                                result.err().unwrap().to_string(),
+                                "webauthn: sign counter did not increase"
+                            );
+                            false
+                        } else {
+                            result.is_ok()
+                        }
+                    }
+                    _ => {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs();
+                        // Exercise normalization at the encapsulation persistence boundary too.
+                        let mut state: serde_json::Value = serde_json::from_slice(&state).unwrap();
+                        state["ast"]["credentials"][0]["counter"] = 10.into();
+                        let state = serde_json::to_vec(&state).unwrap();
+                        let attempt = store
+                            .begin_encapsulation(BeginEncapsulationRequest {
+                                xid,
+                                purpose: "export",
+                                challenge: options["challenge"].as_str().unwrap().as_bytes(),
+                                webauthn_state: Some(&state),
+                                wrap: None,
+                                friend: None,
+                                now,
+                            })
+                            .await
+                            .unwrap();
+                        let persisted: Vec<u8> = sqlx::query_scalar(
+                            "SELECT webauthn_state FROM encapsulation_attempts WHERE id = $1",
+                        )
+                        .bind(attempt.id)
+                        .fetch_one(store.pool())
+                        .await
+                        .unwrap();
+                        let persisted: serde_json::Value =
+                            serde_json::from_slice(&persisted).unwrap();
+                        assert_eq!(persisted["ast"]["credentials"][0]["counter"], 0);
+                        store
+                            .export_encapsulation(
+                                &keys,
+                                attempt.id,
+                                HeldProof::A3 {
+                                    webauthn: &webauthn,
+                                    credential: &assertion,
+                                },
+                                now,
+                            )
+                            .await
+                            .is_ok()
+                    }
+                };
+                assert_eq!(
+                    ok, accepted,
+                    "{site}: presented={presented}, bad_signature={bad_signature}"
+                );
+                let log = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+                assert_eq!(
+                    log.contains("passkey sign counter decreased"),
+                    accepted && presented == 3,
+                    "{site}: {log}"
+                );
+                let after = store
+                    .get_passkey_by_credential_id(&cred_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    after.sign_counter,
+                    if accepted {
+                        10.max(i64::from(presented))
+                    } else {
+                        10
+                    }
+                );
+                assert_eq!(after.passkey_json, snapshot);
+                let used: sqlx::types::time::OffsetDateTime = sqlx::query_scalar(
+                    "SELECT last_used_at FROM credentials WHERE webauthn_credential_id = $1",
+                )
+                .bind(&cred_id)
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+                assert_eq!(used > before, accepted, "{site}: last_used_at");
+            }
+        }
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
     async fn passkey_legibility_two_aaguid_assertions_preserve_backup_snapshot(pool: sqlx::PgPool) {
         use bc_components::PrivateKeyBase;
         use identikey_keys::{CustodyRung, c2_native};

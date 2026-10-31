@@ -113,6 +113,66 @@ pub use store::{
 };
 pub use xid::{Xid, XidError};
 
+/// Apply our counter policy only after the assertion signature has verified.
+/// Equal positive counters remain replay errors; regressions are diagnostic.
+pub fn accept_passkey_counter(credential_id: &[u8], stored: i64, presented: u32) -> bool {
+    let presented = i64::from(presented);
+    if presented == 0 {
+        return true;
+    }
+    if presented == stored {
+        return false;
+    }
+    if presented < stored {
+        tracing::warn!(
+            ?credential_id,
+            stored_counter = stored,
+            presented_counter = presented,
+            "passkey sign counter decreased"
+        );
+    }
+    true
+}
+
+/// Give webauthn-rs a transient credential with no counter history. The durable
+/// column owns counter policy; the registration snapshot is never rewritten.
+pub fn passkey_for_assertion(
+    passkey: webauthn_rs::prelude::Passkey,
+) -> Result<webauthn_rs::prelude::Passkey, serde_json::Error> {
+    let mut value = serde_json::to_value(passkey)?;
+    clear_credential_counter(&mut value, "/cred/counter")?;
+    serde_json::from_value(value)
+}
+
+/// Also normalize durable ceremony state, including states supplied by callers
+/// other than the hosted ceremony hub.
+pub fn authentication_state_for_assertion(
+    state: webauthn_rs::prelude::PasskeyAuthentication,
+) -> Result<webauthn_rs::prelude::PasskeyAuthentication, serde_json::Error> {
+    let mut value = serde_json::to_value(state)?;
+    let credentials = value
+        .pointer_mut("/ast/credentials")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| {
+            <serde_json::Error as serde::de::Error>::custom("missing authentication credentials")
+        })?;
+    for credential in credentials {
+        clear_credential_counter(credential, "/counter")?;
+    }
+    serde_json::from_value(value)
+}
+
+fn clear_credential_counter(
+    value: &mut serde_json::Value,
+    path: &str,
+) -> Result<(), serde_json::Error> {
+    let counter = value.pointer_mut(path).ok_or_else(|| {
+        <serde_json::Error as serde::de::Error>::custom("missing credential counter")
+    })?;
+    *counter = serde_json::json!(0);
+    Ok(())
+}
+
 /// sqlx migrator for the schema in `migrations/`.
 ///
 /// The server runs this at boot. Tests use `#[sqlx::test]`, which applies the
@@ -597,6 +657,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn counter_policy_zero_drop_equal_increase() {
+        assert!(accept_passkey_counter(b"test", 10, 0));
+        assert!(accept_passkey_counter(b"test", 10, 3));
+        assert!(!accept_passkey_counter(b"test", 10, 10));
+        assert!(accept_passkey_counter(b"test", 10, 11));
+        assert!(accept_passkey_counter(b"test", 0, 0));
+        assert!(accept_passkey_counter(b"test", 0, 1));
+    }
+
     #[sqlx::test]
     async fn passkey_lookup_and_counter_update(pool: PgPool) {
         let id = xid(21);
@@ -615,7 +685,18 @@ mod tests {
         assert_eq!(got.xid, id);
         assert_eq!(got.sign_counter, 3);
         assert_eq!(store.list_passkeys(id).await.unwrap().len(), 1);
-        store.update_passkey_sign_counter(&cred, 4).await.unwrap();
+        for presented in [0, 2, 4] {
+            sqlx::query("UPDATE credentials SET last_used_at = now() - interval '1 day' WHERE webauthn_credential_id = $1")
+                .bind(&cred).execute(store.pool()).await.unwrap();
+            store
+                .update_passkey_sign_counter(&cred, presented)
+                .await
+                .unwrap();
+            let (counter, recent): (i64, bool) = sqlx::query_as("SELECT sign_counter, last_used_at > now() - interval '1 minute' FROM credentials WHERE webauthn_credential_id = $1")
+                .bind(&cred).fetch_one(store.pool()).await.unwrap();
+            assert_eq!(counter, 3.max(presented));
+            assert!(recent);
+        }
         assert_eq!(
             store
                 .get_passkey_by_credential_id(&cred)

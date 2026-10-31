@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE credentials\n             SET sign_counter = GREATEST(sign_counter, $2), last_used_at = now()\n             WHERE webauthn_credential_id = $1\n               AND kind = 'passkey'\n               AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7b91f99d2f0aaf8e0d4ef9c6f756c314b02619a0ba775baeb229aa8848126b58"
+}

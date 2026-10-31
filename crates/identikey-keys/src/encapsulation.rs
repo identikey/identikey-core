@@ -240,6 +240,16 @@ impl KeysStore {
             .checked_add(CONSENT_TTL)
             .ok_or(EncapsulationError::InvalidProof)?;
         let exp = i64::try_from(exp_u).map_err(|_| EncapsulationError::InvalidProof)?;
+        let webauthn_state = request
+            .webauthn_state
+            .map(|bytes| {
+                let state: PasskeyAuthentication =
+                    serde_json::from_slice(bytes).map_err(|_| EncapsulationError::InvalidProof)?;
+                let state = crate::authentication_state_for_assertion(state)
+                    .map_err(|_| EncapsulationError::InvalidProof)?;
+                serde_json::to_vec(&state).map_err(|_| EncapsulationError::InvalidProof)
+            })
+            .transpose()?;
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO encapsulation_attempts
@@ -251,7 +261,7 @@ impl KeysStore {
         .bind(request.xid.as_bytes().as_slice())
         .bind(request.purpose)
         .bind(request.challenge)
-        .bind(request.webauthn_state)
+        .bind(webauthn_state)
         .bind(wrap_digest.as_ref().map(|d| d.as_slice()))
         .bind(friend_xid.as_ref().map(|d| d.as_slice()))
         .bind(friend_recipient.as_ref().map(|d| d.as_slice()))
@@ -489,11 +499,11 @@ impl KeysStore {
                     .map_err(|_| EncapsulationError::InvalidProof)?;
                 let counter = i64::from(result.counter());
                 let stored_counter: i64 = cred.try_get("sign_counter")?;
-                if result.counter() > 0 && counter <= stored_counter {
+                if !crate::accept_passkey_counter(&cred_bytes, stored_counter, result.counter()) {
                     return Err(EncapsulationError::InvalidProof);
                 }
                 sqlx::query(
-                    "UPDATE credentials SET sign_counter = $2 WHERE webauthn_credential_id = $1",
+                    "UPDATE credentials SET sign_counter = GREATEST(sign_counter, $2), last_used_at = now() WHERE webauthn_credential_id = $1",
                 )
                 .bind(&cred_bytes)
                 .bind(counter)

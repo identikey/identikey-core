@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use identikey_keys::{
     ADD_DEVICE_ACTION, AccessLevel, ConsentAppend, ConsentResult, KeysStore, ProofKind,
-    SshGitInsert, StoreError, Xid, XidError,
+    SshGitInsert, StoreError, Xid, XidError, accept_passkey_counter,
+    authentication_state_for_assertion, passkey_for_assertion,
 };
 use identikey_oidc::PendingAuthorization;
 use serde::{Deserialize, Serialize};
@@ -301,6 +302,8 @@ impl CeremonyHub {
         }
         let passkey: Passkey = serde_json::from_slice(&stored.passkey_json)
             .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        let passkey =
+            passkey_for_assertion(passkey).map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
 
         let result = match kind {
             AssertKind::Known(state) => self
@@ -314,7 +317,7 @@ impl CeremonyHub {
                     .map_err(|e| CeremonyError::Webauthn(e.to_string()))?
             }
         };
-        if result.counter() > 0 && i64::from(result.counter()) <= stored.sign_counter {
+        if !accept_passkey_counter(&cred_id, stored.sign_counter, result.counter()) {
             return Err(CeremonyError::Webauthn(
                 "sign counter did not increase".into(),
             ));
@@ -343,6 +346,8 @@ impl CeremonyHub {
         let (challenge, state) = self
             .webauthn
             .start_passkey_authentication(&passkeys)
+            .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        let state = authentication_state_for_assertion(state)
             .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
         let state =
             serde_json::to_vec(&state).map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
@@ -374,7 +379,7 @@ impl CeremonyHub {
             .webauthn
             .finish_passkey_authentication(&credential, &state)
             .map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
-        if result.counter() > 0 && i64::from(result.counter()) <= stored.sign_counter {
+        if !accept_passkey_counter(&cred_id, stored.sign_counter, result.counter()) {
             return Err(CeremonyError::Webauthn(
                 "sign counter did not increase".into(),
             ));
@@ -532,7 +537,9 @@ async fn load_passkeys(store: &KeysStore, xid: Xid) -> Result<Vec<Passkey>, Cere
     let mut out = Vec::new();
     for row in store.list_passkeys(xid).await? {
         if let Ok(pk) = serde_json::from_slice::<Passkey>(&row.passkey_json) {
-            out.push(pk);
+            out.push(
+                passkey_for_assertion(pk).map_err(|e| CeremonyError::Webauthn(e.to_string()))?,
+            );
         }
     }
     Ok(out)
