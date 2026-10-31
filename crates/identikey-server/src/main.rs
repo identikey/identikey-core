@@ -15,6 +15,7 @@
 //!
 mod account;
 mod ceremonies;
+mod device_passkeys;
 mod clients;
 mod encapsulation;
 mod local_register;
@@ -435,12 +436,88 @@ fn signed_in_xid(state: &AppState, headers: &HeaderMap) -> Option<Xid> {
 /// Mint a first-party account session for `xid` as a `Set-Cookie` value.
 fn account_cookie(state: &AppState, xid: Xid) -> Option<HeaderValue> {
     let token = state.accounts.issue(xid).ok()?;
-    let secure = state
+    Some(account::set_cookie(&token, cookie_secure(state)))
+}
+
+fn cookie_secure(state: &AppState) -> bool {
+    state
         .webauthn
         .expected_origins
         .iter()
-        .any(|origin| origin.starts_with("https://"));
-    Some(account::set_cookie(&token, secure))
+        .any(|origin| origin.starts_with("https://"))
+}
+
+fn request_cookies(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+}
+
+/// Record a passkey that just succeeded in this browser. Hint only.
+fn device_passkey_cookie(state: &AppState, headers: &HeaderMap, credential_id: &[u8]) -> HeaderValue {
+    let existing = device_passkeys::parse(request_cookies(headers));
+    let ids = device_passkeys::remember(&existing, credential_id);
+    device_passkeys::set_cookie(&ids, cookie_secure(state))
+}
+
+fn append_set_cookie(response: &mut Response, cookie: HeaderValue) {
+    response.headers_mut().append(header::SET_COOKIE, cookie);
+}
+
+/// Provider or nickname for each live passkey this browser has used.
+/// Drops ids that are no longer live by returning a replacement cookie.
+async fn browser_passkey_labels(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> (Vec<String>, Option<HeaderValue>) {
+    let stored = device_passkeys::parse(request_cookies(headers));
+    if stored.is_empty() {
+        return (Vec::new(), None);
+    }
+    let mut live = Vec::new();
+    let mut labels = Vec::new();
+    let mut unnamed = false;
+    for id in &stored {
+        match state
+            .store
+            .passkey_presentation_by_credential_id(id)
+            .await
+        {
+            Ok(Some(row)) => {
+                live.push(id.clone());
+                let label = row
+                    .nickname
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        row.aaguid
+                            .as_ref()
+                            .and_then(passkey_metadata::resolve)
+                            .map(|entry| entry.name)
+                    });
+                match label {
+                    Some(name) if !labels.contains(&name) => labels.push(name),
+                    Some(_) => {}
+                    None => unnamed = true,
+                }
+            }
+            Ok(None) => {}
+            Err(_) => return (Vec::new(), None),
+        }
+    }
+    if labels.is_empty() && unnamed {
+        labels.push("a passkey here".to_owned());
+    }
+    let cookie = if live == stored {
+        None
+    } else if live.is_empty() {
+        Some(device_passkeys::clear_cookie(cookie_secure(state)))
+    } else {
+        Some(device_passkeys::set_cookie(&live, cookie_secure(state)))
+    };
+    (labels, cookie)
 }
 
 /// Adding a passkey is adding a way in, so it needs the account session
@@ -490,6 +567,7 @@ async fn passkey_signal_fields(store: &KeysStore, xid: Xid) -> serde_json::Value
 
 async fn register_finish(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<ceremonies::RegisterFinish>,
 ) -> Response {
     let Ok(xid) = Xid::parse(&body.xid) else {
@@ -506,13 +584,13 @@ async fn register_finish(
         )
         .await
     {
-        Ok(()) => {
+        Ok(credential_id) => {
             let Some(cookie) = account_cookie(&state, xid) else {
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             };
             let mut result = passkey_signal_fields(&state.store, xid).await;
             result["next"] = serde_json::json!("/account");
-            (
+            let mut response = (
                 StatusCode::OK,
                 [
                     (
@@ -523,7 +601,12 @@ async fn register_finish(
                 ],
                 result.to_string(),
             )
-                .into_response()
+                .into_response();
+            append_set_cookie(
+                &mut response,
+                device_passkey_cookie(&state, &headers, &credential_id),
+            );
+            response
         }
         Err(err) => ceremony_http(err),
     }
@@ -561,17 +644,26 @@ async fn account_page(State(state): State<AppState>, headers: HeaderMap) -> Resp
         }
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    let used_here = device_passkeys::parse(request_cookies(&headers));
+    let passkey_ids = match state.store.list_passkeys(xid).await {
+        Ok(rows) => rows,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
     let passkeys = match state.store.list_passkey_presentations(xid).await {
         Ok(rows) => rows
             .into_iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(index, row)| {
                 let metadata = row.aaguid.as_ref().and_then(passkey_metadata::resolve);
+                let credential_id = passkey_ids.get(index).map(|row| &row.credential_id);
                 pages::AccountPasskey {
                     nickname: row.nickname,
                     provider_name: metadata.as_ref().map(|entry| entry.name.clone()),
                     icon: metadata.and_then(|entry| entry.icon),
                     backed_up: row.backed_up,
                     last_used: row.last_used_at.map(|value| value.date().to_string()),
+                    used_here: credential_id
+                        .is_some_and(|id| used_here.iter().any(|stored| stored == id)),
                 }
             })
             .collect::<Vec<_>>(),
@@ -615,6 +707,7 @@ async fn assert_begin(
 
 async fn assert_finish(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<ceremonies::AssertFinish>,
 ) -> Response {
     match state
@@ -630,12 +723,16 @@ async fn assert_finish(
                     "confirm this login on the device page",
                 );
             }
+            let cookie = device_passkey_cookie(&state, &headers, &finished.credential_id);
             let mut result = passkey_signal_fields(&state.store, finished.xid).await;
-            if let Some(pending) = finished.pending {
-                return issue_authorize_code(&state, pending, finished.xid, result);
-            }
-            result["xid"] = serde_json::json!(finished.xid.to_string());
-            Json(result).into_response()
+            let mut response = if let Some(pending) = finished.pending {
+                issue_authorize_code(&state, pending, finished.xid, result)
+            } else {
+                result["xid"] = serde_json::json!(finished.xid.to_string());
+                Json(result).into_response()
+            };
+            append_set_cookie(&mut response, cookie);
+            response
         }
         Err(err) => ceremony_http(err),
     }
@@ -660,6 +757,7 @@ fn issue_authorize_code(
 
 async fn passkey_login_page(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<AuthorizeParams>,
 ) -> Response {
     let query = authorize_query(&params);
@@ -686,13 +784,18 @@ async fn passkey_login_page(
                 "session": session,
                 "publicKey": public_key,
             });
-            let body = pages::passkey_login(&options.to_string());
-            (
+            let (labels, cookie) = browser_passkey_labels(&state, &headers).await;
+            let body = pages::passkey_login(&options.to_string(), &labels);
+            let mut response = (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
                 body,
             )
-                .into_response()
+                .into_response();
+            if let Some(cookie) = cookie {
+                append_set_cookie(&mut response, cookie);
+            }
+            response
         }
         Err(err) => ceremony_http(err),
     }
@@ -700,9 +803,10 @@ async fn passkey_login_page(
 
 async fn passkey_login_finish(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<ceremonies::AssertFinish>,
 ) -> Response {
-    assert_finish(State(state), Json(body)).await
+    assert_finish(State(state), headers, Json(body)).await
 }
 
 async fn add_ssh_git(
@@ -1277,6 +1381,7 @@ async fn device_assert_begin(
 
 async fn device_assert_finish(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<ceremonies::AssertFinish>,
 ) -> Response {
     match state
@@ -1306,7 +1411,12 @@ async fn device_assert_finish(
                 Ok(()) => {
                     let mut result = passkey_signal_fields(&state.store, finished.xid).await;
                     result["approved"] = serde_json::json!(true);
-                    Json(result).into_response()
+                    let mut response = Json(result).into_response();
+                    append_set_cookie(
+                        &mut response,
+                        device_passkey_cookie(&state, &headers, &finished.credential_id),
+                    );
+                    response
                 }
                 Err(err) => token_error(err, false),
             }
@@ -1666,9 +1776,13 @@ mod tests {
                 )
                 .unwrap();
             ids.push(serde_json::to_value(&credential).unwrap()["id"].clone());
-            let (status, result) = signal_json(register_finish(State(state.clone()), Json(
-                serde_json::from_value(serde_json::json!({ "session": begin["session"], "xid": xid.to_string(), "credential": credential })).unwrap()
-            )).await).await;
+            let (status, result) = signal_json(register_finish(
+                State(state.clone()),
+                HeaderMap::new(),
+                Json(
+                    serde_json::from_value(serde_json::json!({ "session": begin["session"], "xid": xid.to_string(), "credential": credential })).unwrap(),
+                ),
+            ).await).await;
             assert_eq!(status, StatusCode::OK);
             assert_eq!(result["next"], "/account");
             assert_eq!(result["signal_user_id"], handle);
@@ -1697,6 +1811,7 @@ mod tests {
         let (status, result) = signal_json(
             assert_finish(
                 State(state.clone()),
+                HeaderMap::new(),
                 Json(ceremonies::AssertFinish {
                     session,
                     credential,
@@ -1744,6 +1859,7 @@ mod tests {
         let (status, result) = signal_json(
             assert_finish(
                 State(state.clone()),
+                HeaderMap::new(),
                 Json(ceremonies::AssertFinish {
                     session,
                     credential,
@@ -1800,6 +1916,7 @@ mod tests {
         let (status, result) = signal_json(
             device_assert_finish(
                 State(state.clone()),
+                HeaderMap::new(),
                 Json(ceremonies::AssertFinish {
                     session,
                     credential: serde_json::from_value(credential).unwrap(),
@@ -1840,6 +1957,7 @@ mod tests {
             let (status, result) = signal_json(
                 assert_finish(
                     State(state.clone()),
+                    HeaderMap::new(),
                     Json(ceremonies::AssertFinish {
                         session,
                         credential,
@@ -1886,6 +2004,7 @@ mod tests {
         let (status, result) = signal_json(
             assert_finish(
                 State(state.clone()),
+                HeaderMap::new(),
                 Json(ceremonies::AssertFinish {
                     session,
                     credential,
@@ -3234,6 +3353,61 @@ mod tests {
         assert!(body.contains("navigator.credentials.get"));
         assert!(!body.contains("name=\"username\""));
         assert!(body.contains("Continue with passkey"));
+        assert!(!body.contains("device-passkeys"));
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn login_page_remembers_passkeys_used_in_this_browser(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::{Request, StatusCode};
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool);
+        let hub = ceremonies::CeremonyHub::from_config(&test_webauthn());
+        let xid = register_hybrid_hint_test_passkey(&store, &hub).await;
+        let cred = store
+            .list_passkeys(xid)
+            .await
+            .unwrap()
+            .remove(0)
+            .credential_id;
+        let cookie = format!(
+            "{}={}",
+            device_passkeys::COOKIE_NAME,
+            device_passkeys::encode(&[cred.clone(), b"gone".to_vec()])
+        );
+        let response = test_router(store)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/authorize/passkey?{}", authorize_qs(&s256_challenge(VERIFIER))))
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let set_cookie = response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with("identikey_device_passkeys="))
+            .unwrap()
+            .to_owned();
+        let body = String::from_utf8(
+            body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(body.contains("This browser has used "));
+        assert!(!body.contains(&URL_SAFE_NO_PAD.encode(&cred)));
+        assert!(body.contains("\"allowCredentials\":[]") || body.contains("\"allowCredentials\": []"));
+        let kept = device_passkeys::parse(Some(&set_cookie));
+        assert_eq!(kept, vec![cred]);
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
@@ -3843,7 +4017,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(finish.status(), StatusCode::OK);
-        assert_eq!(store.list_passkeys(xid).await.unwrap().len(), 1);
+        let stored = store.list_passkeys(xid).await.unwrap();
+        assert_eq!(stored.len(), 1);
+        let device_cookie = finish
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with("identikey_device_passkeys="))
+            .expect("registration remembers the passkey");
+        assert_eq!(
+            device_passkeys::parse(Some(device_cookie)),
+            vec![stored[0].credential_id.clone()]
+        );
+        assert!(
+            finish
+                .headers()
+                .get_all(header::SET_COOKIE)
+                .iter()
+                .any(|value| value.to_str().unwrap_or("").starts_with("identikey_account="))
+        );
 
         let provider = test_provider();
         let pending = provider

@@ -67,14 +67,16 @@ const TECHNICAL_DETAILS: &str = "<details id=\"technical\" hidden>\
 
 /// Production assertion page for `GET /authorize/passkey`.
 #[must_use]
-pub fn passkey_login(ceremony_json: &str) -> String {
+pub fn passkey_login(ceremony_json: &str, used_here: &[String]) -> String {
     let json = json_for_script(ceremony_json);
+    let remembered = device_passkey_line(used_here);
     shell(
         "Sign in — IdentiKey",
         &format!(
             "{LOCAL_NOTICE}\
              <h1>Sign in</h1>\
              <p>Use a passkey from 1Password, iCloud Keychain, or this device. No username.</p>\
+             {remembered}\
              {STATUS_PANEL}\
              <button type=\"button\" id=\"go\">Continue with passkey</button>\
              <div class=\"secondary-path\">\
@@ -98,6 +100,29 @@ pub fn passkey_login(ceremony_json: &str) -> String {
              <script>{COMMON_JS}\n{LOGIN_JS}</script>"
         ),
     )
+}
+
+/// Names of passkeys this browser has already used. Empty when there are none.
+fn device_passkey_line(labels: &[String]) -> String {
+    if labels.is_empty() {
+        return String::new();
+    }
+    let rendered = match labels {
+        [one] => html_escape(one),
+        [first, second] => format!("{} and {}", html_escape(first), html_escape(second)),
+        many => {
+            let Some((last, head)) = many.split_last() else {
+                return String::new();
+            };
+            let head = head
+                .iter()
+                .map(|label| html_escape(label))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{head}, and {}", html_escape(last))
+        }
+    };
+    format!("<p class=\"device-passkeys\">This browser has used {rendered}.</p>")
 }
 
 /// `GET /signup` — creates nothing until POST.
@@ -132,6 +157,7 @@ pub struct AccountPasskey {
     pub icon: Option<String>,
     pub backed_up: Option<bool>,
     pub last_used: Option<String>,
+    pub used_here: bool,
 }
 
 #[must_use]
@@ -195,9 +221,14 @@ fn render_passkey(passkey: &AccountPasskey) -> String {
         || "Never used".to_owned(),
         |value| format!("Last used {}", html_escape(value)),
     );
+    let here = if passkey.used_here {
+        " · On this browser"
+    } else {
+        ""
+    };
     format!(
         "<li class=\"passkey\"><div class=\"passkey-name\">{icon}<span>{label}</span></div>\
-         <div class=\"passkey-meta\">{backup} · {last_used}</div></li>"
+         <div class=\"passkey-meta\">{backup} · {last_used}{here}</div></li>"
     )
 }
 
@@ -287,6 +318,7 @@ mod tests {
                 icon: None,
                 backed_up: Some(false),
                 last_used: None,
+                used_here: false,
             }],
         );
         assert!(html.contains("abc123"));
@@ -300,7 +332,14 @@ mod tests {
     /// week without being embedded, so pin the wiring and the ids they use.
     #[test]
     fn hosted_pages_embed_recovery_ui() {
-        let login = passkey_login(r#"{"session":"s","publicKey":{}}"#);
+        let login = passkey_login(r#"{"session":"s","publicKey":{}}"#, &[]);
+        assert!(!login.contains("device-passkeys"));
+        let remembered = passkey_login(
+            r#"{"session":"s","publicKey":{}}"#,
+            &["1Password".into(), "Desk <mac>".into()],
+        );
+        assert!(remembered.contains("This browser has used 1Password and Desk &lt;mac&gt;."));
+        assert!(!remembered.contains("Desk <mac>"));
         for id in [
             "status",
             "status-title",
@@ -339,8 +378,10 @@ mod tests {
                 icon: Some("data:image/svg+xml;base64,PHN2Zy8+\" onerror=\"x".into()),
                 backed_up: Some(true),
                 last_used: Some("2026-09-27 12:34:56 +00:00".into()),
+                used_here: true,
             }],
         );
+        assert!(html.contains("On this browser"));
         assert!(html.contains("Work &lt;key&gt;"));
         assert!(!html.contains("Provider &lt;ignored&gt;"));
         assert!(html.contains("&quot; onerror=&quot;x"));
@@ -359,6 +400,7 @@ mod tests {
                 icon: None,
                 backed_up: Some(false),
                 last_used: None,
+                used_here: false,
             }],
         );
         assert!(html.contains("<span>Passkey</span>"));
@@ -381,6 +423,7 @@ mod tests {
                     icon: None,
                     backed_up,
                     last_used: None,
+                    used_here: false,
                 }],
             );
             assert!(html.contains(&format!("{expected} · Never used")));
@@ -400,6 +443,7 @@ mod tests {
                 icon: None,
                 backed_up: Some(false),
                 last_used: None,
+                used_here: false,
             }],
         );
         assert!(html.contains("Provider &lt;unsafe&gt; &amp; friends"));

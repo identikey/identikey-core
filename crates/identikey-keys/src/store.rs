@@ -114,6 +114,27 @@ pub struct DeviceRecord {
     pub last_used_at: Option<OffsetDateTime>,
 }
 
+fn presentation_from_row(
+    row: sqlx::postgres::PgRow,
+) -> Result<PasskeyPresentation, StoreError> {
+    use sqlx::Row;
+
+    let raw: Option<Vec<u8>> = row.try_get("aaguid")?;
+    let aaguid = raw
+        .map(|bytes| {
+            bytes
+                .try_into()
+                .map_err(|_| StoreError::Document("stored AAGUID is not 16 bytes".into()))
+        })
+        .transpose()?;
+    Ok(PasskeyPresentation {
+        aaguid,
+        backed_up: row.try_get("backed_up")?,
+        nickname: row.try_get("nickname")?,
+        last_used_at: row.try_get("last_used_at")?,
+    })
+}
+
 fn stored_passkey(
     xid: Vec<u8>,
     webauthn_credential_id: Option<Vec<u8>>,
@@ -547,6 +568,24 @@ impl KeysStore {
         .transpose()
     }
 
+    /// Presentation for one live passkey. No key material. `None` when revoked or absent.
+    pub async fn passkey_presentation_by_credential_id(
+        &self,
+        webauthn_credential_id: &[u8],
+    ) -> Result<Option<PasskeyPresentation>, StoreError> {
+        let row = sqlx::query(
+            "SELECT aaguid, backed_up, nickname, last_used_at
+             FROM credentials
+             WHERE webauthn_credential_id = $1
+               AND kind = 'passkey'
+               AND revoked_at IS NULL",
+        )
+        .bind(webauthn_credential_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(presentation_from_row).transpose()
+    }
+
     pub async fn list_passkeys(&self, xid: Xid) -> Result<Vec<StoredPasskey>, StoreError> {
         let rows = sqlx::query!(
             "SELECT xid, webauthn_credential_id, cose_public_key, sign_counter
@@ -587,26 +626,7 @@ impl KeysStore {
         .bind(xid.as_bytes().as_slice())
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter()
-            .map(|row| {
-                use sqlx::Row;
-
-                let raw: Option<Vec<u8>> = row.try_get("aaguid")?;
-                let aaguid = raw
-                    .map(|bytes| {
-                        bytes.try_into().map_err(|_| {
-                            StoreError::Document("stored AAGUID is not 16 bytes".into())
-                        })
-                    })
-                    .transpose()?;
-                Ok(PasskeyPresentation {
-                    aaguid,
-                    backed_up: row.try_get("backed_up")?,
-                    nickname: row.try_get("nickname")?,
-                    last_used_at: row.try_get("last_used_at")?,
-                })
-            })
-            .collect()
+        rows.into_iter().map(presentation_from_row).collect()
     }
 
     pub async fn update_passkey_sign_counter(

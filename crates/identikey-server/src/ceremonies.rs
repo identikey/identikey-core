@@ -64,6 +64,7 @@ pub struct DeviceAssertionBind {
 
 pub struct FinishedAssertion {
     pub xid: Xid,
+    pub credential_id: Vec<u8>,
     pub pending: Option<PendingAuthorization>,
     pub device: Option<DeviceAssertionBind>,
 }
@@ -166,7 +167,7 @@ impl CeremonyHub {
         xid: Xid,
         credential: RegisterPublicKeyCredential,
         nickname: Option<&str>,
-    ) -> Result<(), CeremonyError> {
+    ) -> Result<Vec<u8>, CeremonyError> {
         if store.get_account(xid).await?.is_none() {
             return Err(CeremonyError::UnknownAccount);
         }
@@ -192,6 +193,7 @@ impl CeremonyHub {
             registration_presentation_metadata(credential.response.attestation_object.as_ref());
         let json =
             serde_json::to_vec(&passkey).map_err(|e| CeremonyError::Webauthn(e.to_string()))?;
+        let credential_id = passkey.cred_id().as_slice().to_vec();
         store
             .insert_passkey_with_metadata(
                 xid,
@@ -203,7 +205,7 @@ impl CeremonyHub {
                 nickname,
             )
             .await?;
-        Ok(())
+        Ok(credential_id)
     }
 
     pub async fn begin_assert(
@@ -329,6 +331,7 @@ impl CeremonyHub {
             .await?;
         Ok(FinishedAssertion {
             xid: stored.xid,
+            credential_id: cred_id,
             pending,
             device,
         })
