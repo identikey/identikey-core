@@ -30,6 +30,8 @@ pub enum CeremonyError {
     UnknownAccount,
     #[error("credential not found")]
     UnknownCredential,
+    #[error("credential belongs to another account")]
+    ForeignCredential,
     #[error("ssh_git requires a fresh A3 assertion, not Elect")]
     ElectCannotAddDevice,
     #[error("webauthn: {0}")]
@@ -297,7 +299,7 @@ impl CeremonyHub {
             .ok_or(CeremonyError::UnknownCredential)?;
         if let Some(bound) = bound {
             if bound != stored.xid {
-                return Err(CeremonyError::UnknownCredential);
+                return Err(CeremonyError::ForeignCredential);
             }
         }
         let passkey: Passkey = serde_json::from_slice(&stored.passkey_json)

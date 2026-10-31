@@ -35,7 +35,12 @@ async function approve() {
       credential: credToJson(credential),
       confirmed: true,
     });
-    if (!finished.ok) throw await responseError(finished);
+    if (!finished.ok) {
+      const error = await responseError(finished);
+      signalUnknown(error, options.publicKey.rpId, credential.id);
+      throw error;
+    }
+    signalAccepted(await finished.json().catch(() => ({})), options.publicKey.rpId);
     finish("Approved");
   } catch (error) {
     showFailure(error);

@@ -450,3 +450,128 @@ test('a failed device denial copies the deny stage', async (t) => {
 	await page.getByRole('heading', { name: 'IdentiKey is temporarily unavailable.' }).waitFor();
 	assert.equal((await copied(page)).stage, 'deny');
 });
+
+// Source-backed fixtures exercise each shipped page without requiring a restart
+// of the local OP after editing its embedded scripts.
+async function signalPageFor(t, kind, behavior = 'ok', rpId = 'auth.identikey.me') {
+	const page = await pageFor(t);
+	const calls = [];
+	await page.exposeFunction('recordSignal', (method, payload) => calls.push({ method, payload }));
+	await page.addInitScript(({ behavior }) => {
+		for (const method of ['signalAllAcceptedCredentials', 'signalUnknownCredential']) {
+			Object.defineProperty(PublicKeyCredential, method, {
+				configurable: true,
+				value: behavior === 'missing' ? undefined : (payload) => {
+					if (payload?.userId instanceof Uint8Array) {
+						payload = { ...payload, userId: Array.from(payload.userId) };
+					}
+					window.recordSignal(method, payload);
+					if (behavior === 'throw') throw new Error('provider threw');
+					if (behavior === 'reject') return Promise.reject(new Error('provider rejected'));
+					if (behavior === 'pending') return new Promise(() => {});
+					return Promise.resolve();
+				}
+			});
+		}
+	}, { behavior });
+	const publicKey = { challenge: 'YWJj', rpId, rp: { id: rpId }, user: { id: 'aGFuZGxl' } };
+	const options = { session: 'signal-test', xid: 'test-xid', publicKey };
+	const html = devicePage
+		.replace('<script>', `<a id="signup"></a><a id="back"></a><details id="passkey-help"></details>
+<script type="application/json" id="ceremony">${JSON.stringify(options)}</script><script>`)
+		.replace(src('pages-device.js'), src(`pages-${kind}.js`));
+	await page.route('**/signal-harness*', (route) => route.fulfill({ contentType: 'text/html', body: html }));
+	await page.route('**/signup', (route) => route.fulfill({ json: options }));
+	await page.route('**/device/assert/begin', (route) => route.fulfill({ json: options }));
+	await page.route('**/signal-complete', (route) => route.fulfill({ contentType: 'text/html', body: '<h1>Complete</h1>' }));
+	await page.goto(`${origin}/signal-harness`);
+	return { page, calls, rpId };
+}
+
+for (const kind of ['login', 'signup', 'device']) {
+	for (const behavior of ['ok', 'missing', 'throw', 'reject', 'pending']) {
+		test(`signal ${kind}: ${behavior} provider still completes after server accept`, async (t) => {
+			const { page, calls, rpId } = await signalPageFor(t, kind, behavior);
+			const result = {
+				redirect: '/signal-complete', next: '/signal-complete', approved: true,
+				signal_user_id: 'aGFuZGxl', signal_credential_ids: ['test', 'other']
+			};
+			const endpoint = kind === 'signup' ? '**/webauthn/register/finish' :
+				kind === 'device' ? '**/device/assert/finish' : '**/webauthn/assert/finish';
+			await page.route(endpoint, async (route) => {
+				assert.equal(calls.length, 0, 'no signal before server acceptance');
+				assert.equal(route.request().postDataJSON().credential.id, 'test');
+				await route.fulfill({ json: result });
+			});
+			await page.locator('#go').click();
+			await page.getByRole('heading', { name: kind === 'device' ? 'Approved' : 'Complete', exact: true }).waitFor();
+			if (behavior === 'missing') assert.deepEqual(calls, []);
+			else {
+				await page.waitForTimeout(20);
+				assert.deepEqual(calls, [{ method: 'signalAllAcceptedCredentials', payload: {
+					rpId, userId: [104, 97, 110, 100, 108, 101], allAcceptedCredentialIds: ['test', 'other']
+				} }]);
+			}
+		});
+	}
+	for (const list of [undefined, []]) {
+		test(`signal ${kind}: ${list ? 'empty' : 'missing'} list still completes without signaling`, async (t) => {
+			const { page, calls } = await signalPageFor(t, kind);
+			const endpoint = kind === 'signup' ? '**/webauthn/register/finish' :
+				kind === 'device' ? '**/device/assert/finish' : '**/webauthn/assert/finish';
+			await page.route(endpoint, (route) => route.fulfill({ json: {
+				redirect: '/signal-complete', next: '/signal-complete', approved: true,
+				signal_user_id: list ? 'aGFuZGxl' : undefined, signal_credential_ids: list
+			} }));
+			await page.locator('#go').click();
+			await page.getByRole('heading', { name: kind === 'device' ? 'Approved' : 'Complete', exact: true }).waitFor();
+			assert.deepEqual(calls, []);
+		});
+	}
+}
+for (const kind of ['login', 'device']) {
+	for (const [error, rpId, signals] of [
+		['credential not found', 'auth.identikey.me', true], // includes a revoked row
+		['credential not found', 'localhost', false],
+		['credential belongs to another account', 'auth.identikey.me', false],
+		['unknown or expired ceremony', 'auth.identikey.me', false],
+		['cancel', 'auth.identikey.me', false]
+	]) {
+		test(`signal ${kind}: ${error} on ${rpId}`, async (t) => {
+			const { page, calls } = await signalPageFor(t, kind, 'ok', rpId);
+			if (error === 'cancel') {
+				await page.evaluate(() => Object.defineProperty(navigator.credentials, 'get', {
+					value: async () => { throw new DOMException('Cancelled', 'NotAllowedError'); }
+				}));
+			} else {
+				await page.route(kind === 'device' ? '**/device/assert/finish' : '**/webauthn/assert/finish',
+					(route) => failure(route, error));
+			}
+			await page.locator('#go').click();
+			await page.locator('#status').waitFor({ state: 'visible' });
+			if (signals) {
+				await page.waitForFunction(() => document.getElementById('go').disabled === false);
+				assert.deepEqual(calls, [{ method: 'signalUnknownCredential', payload: { rpId, credentialId: 'test' } }]);
+			} else assert.deepEqual(calls, []);
+			assert.equal(await page.locator('#technical-message').isHidden(), true);
+		});
+	}
+}
+
+
+test('signal signup with app context still navigates when the provider never settles', async (t) => {
+	const { page, calls } = await signalPageFor(t, 'signup', 'pending');
+	await page.goto(`${origin}/signal-harness?${query}`);
+	await page.route('**/webauthn/register/finish', (route) => route.fulfill({ json: {
+		next: '/account', signal_user_id: 'aGFuZGxl', signal_credential_ids: ['test']
+	} }));
+	await page.route('**/authorize/passkey?*', (route) => route.fulfill({
+		contentType: 'text/html', body: '<h1>Complete</h1>'
+	}));
+	await page.locator('#go').click();
+	await page.getByRole('heading', { name: 'Complete', exact: true }).waitFor();
+	assert.equal(new URL(page.url()).hash, '#passkey-saved');
+	assert.equal(new URL(page.url()).search, '?' + query);
+	assert.equal(calls.length, 1);
+	assert.equal(calls[0].method, 'signalAllAcceptedCredentials');
+});

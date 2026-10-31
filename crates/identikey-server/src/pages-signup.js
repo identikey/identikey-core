@@ -39,12 +39,13 @@ async function signUp() {
       credential: credToJson(credential),
     });
     if (!response.ok) throw await responseError(response);
+    const body = await response.json().catch(() => ({}));
+    signalAccepted(body, pending.publicKey.rp.id);
     if (hasApp) {
       location.assign(
         "/authorize/passkey" + location.search + "#passkey-saved",
       );
     } else {
-      const body = await response.json().catch(() => ({}));
       location.assign(body.next || "/account");
     }
   } catch (error) {

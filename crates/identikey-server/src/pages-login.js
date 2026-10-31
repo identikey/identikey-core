@@ -54,10 +54,15 @@ async function signIn() {
       session: options.session,
       credential: credToJson(credential),
     });
-    if (!response.ok) throw await responseError(response);
+    if (!response.ok) {
+      const error = await responseError(response);
+      signalUnknown(error, options.publicKey.rpId, credential.id);
+      throw error;
+    }
     const result = await response.json();
     if (!result.redirect)
       throw new Error("Authorization response is missing its redirect");
+    signalAccepted(result, options.publicKey.rpId);
     location.assign(result.redirect);
     return;
   } catch (error) {

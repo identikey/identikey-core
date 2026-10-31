@@ -208,3 +208,25 @@ document.getElementById("copy-report").addEventListener("click", copyReport);
 if (["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) {
   document.getElementById("local-notice").hidden = false;
 }
+
+// Provider hygiene is best effort and never gates the accepted ceremony.
+function signalAccepted(result, rpId) {
+  if (!result.signal_user_id || !Array.isArray(result.signal_credential_ids) ||
+      result.signal_credential_ids.length === 0) return;
+  try {
+    Promise.resolve(window.PublicKeyCredential?.signalAllAcceptedCredentials?.({
+      rpId,
+      userId: b64urlToBuf(result.signal_user_id),
+      allAcceptedCredentialIds: result.signal_credential_ids,
+    })).catch(() => {});
+  } catch { /* A provider failure must not block navigation. */ }
+}
+function signalUnknown(error, rpId, credentialId) {
+  if (error.name !== "ResponseError" || error.message !== "credential not found" ||
+      rpId === "localhost") return;
+  try {
+    Promise.resolve(window.PublicKeyCredential?.signalUnknownCredential?.({
+      rpId, credentialId,
+    })).catch(() => {});
+  } catch { /* Keep the original ceremony failure. */ }
+}

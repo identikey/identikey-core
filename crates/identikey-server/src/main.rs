@@ -472,6 +472,22 @@ async fn register_begin(
     }
 }
 
+// Hygiene metadata is loaded only after acceptance. Store failure must not
+// turn an accepted ceremony into a failed sign-in.
+async fn passkey_signal_fields(store: &KeysStore, xid: Xid) -> serde_json::Value {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    let Ok(rows) = store.list_passkeys(xid).await else {
+        return serde_json::json!({});
+    };
+    if rows.is_empty() {
+        return serde_json::json!({});
+    }
+    serde_json::json!({
+        "signal_user_id": URL_SAFE_NO_PAD.encode(ceremonies::xid_user_id(xid).as_bytes()),
+        "signal_credential_ids": rows.iter().map(|row| URL_SAFE_NO_PAD.encode(&row.credential_id)).collect::<Vec<_>>()
+    })
+}
+
 async fn register_finish(
     State(state): State<AppState>,
     Json(body): Json<ceremonies::RegisterFinish>,
@@ -494,6 +510,8 @@ async fn register_finish(
             let Some(cookie) = account_cookie(&state, xid) else {
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             };
+            let mut result = passkey_signal_fields(&state.store, xid).await;
+            result["next"] = serde_json::json!("/account");
             (
                 StatusCode::OK,
                 [
@@ -503,7 +521,7 @@ async fn register_finish(
                     ),
                     (account::cookie_header(), cookie),
                 ],
-                serde_json::json!({ "next": "/account" }).to_string(),
+                result.to_string(),
             )
                 .into_response()
         }
@@ -612,10 +630,12 @@ async fn assert_finish(
                     "confirm this login on the device page",
                 );
             }
+            let mut result = passkey_signal_fields(&state.store, finished.xid).await;
             if let Some(pending) = finished.pending {
-                return issue_authorize_code(&state, pending, finished.xid);
+                return issue_authorize_code(&state, pending, finished.xid, result);
             }
-            Json(serde_json::json!({ "xid": finished.xid.to_string() })).into_response()
+            result["xid"] = serde_json::json!(finished.xid.to_string());
+            Json(result).into_response()
         }
         Err(err) => ceremony_http(err),
     }
@@ -625,9 +645,15 @@ fn issue_authorize_code(
     state: &AppState,
     pending: identikey_oidc::PendingAuthorization,
     xid: Xid,
+    signal_fields: serde_json::Value,
 ) -> Response {
     match state.provider.issue_code(&pending, xid) {
-        Ok(code) => json_redirect(&pending.redirect_uri, &code, pending.state.as_deref()),
+        Ok(code) => json_redirect(
+            &pending.redirect_uri,
+            &code,
+            pending.state.as_deref(),
+            signal_fields,
+        ),
         Err(err) => token_error(err, false),
     }
 }
@@ -1010,7 +1036,12 @@ async fn complete_dev_login(state: AppState, params: DevLoginParams) -> Response
 
 /// Fetch-based WebAuthn cannot follow a 302 to the RP: `redirect:manual`
 /// is opaque and hides `Location`. Return a JSON body the page can assign.
-fn json_redirect(uri: &str, code: &str, state: Option<&str>) -> Response {
+fn json_redirect(
+    uri: &str,
+    code: &str,
+    state: Option<&str>,
+    mut result: serde_json::Value,
+) -> Response {
     let Ok(mut parsed) = url::Url::parse(uri) else {
         return oauth_error(
             StatusCode::BAD_REQUEST,
@@ -1025,11 +1056,11 @@ fn json_redirect(uri: &str, code: &str, state: Option<&str>) -> Response {
             pairs.append_pair("state", state);
         }
     }
-    let location = parsed.to_string();
+    result["redirect"] = serde_json::json!(parsed.to_string());
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
-        serde_json::json!({ "redirect": location }).to_string(),
+        result.to_string(),
     )
         .into_response()
 }
@@ -1272,7 +1303,11 @@ async fn device_assert_finish(
                 .provider
                 .approve_device(&device.user_code, finished.xid, &device.challenge)
             {
-                Ok(()) => Json(serde_json::json!({ "approved": true })).into_response(),
+                Ok(()) => {
+                    let mut result = passkey_signal_fields(&state.store, finished.xid).await;
+                    result["approved"] = serde_json::json!(true);
+                    Json(result).into_response()
+                }
                 Err(err) => token_error(err, false),
             }
         }
@@ -1563,6 +1598,313 @@ mod tests {
             test_webauthn(),
             Arc::new(account::AccountSessions::default()),
         )
+    }
+
+    async fn signal_json(response: Response) -> (StatusCode, serde_json::Value) {
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn signal_live_ids_encodings_and_failure_isolation(pool: sqlx::PgPool) {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+        use webauthn_authenticator_rs::{prelude::WebauthnAuthenticator, softpasskey::SoftPasskey};
+        use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse};
+        let store = KeysStore::from_pool(pool);
+        let doc = c2_native(&PrivateKeyBase::new(), &PrivateKeyBase::new()).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &[0x51, 0x47])
+            .await
+            .unwrap();
+        let state = AppState {
+            store: store.clone(),
+            provider: test_provider(),
+            webauthn: test_webauthn(),
+            ceremonies: Arc::new(ceremonies::CeremonyHub::from_config(&test_webauthn())),
+            accounts: Arc::new(account::AccountSessions::default()),
+            managed_keys: Arc::new(ManagedKeyring::single("test", [0x6d; 32])),
+            local_register: false,
+        };
+        let origin = url::Url::parse("https://auth.identikey.me").unwrap();
+        let mut authenticators = [
+            WebauthnAuthenticator::new(SoftPasskey::new(true)),
+            WebauthnAuthenticator::new(SoftPasskey::new(true)),
+            WebauthnAuthenticator::new(SoftPasskey::new(true)),
+        ];
+        let mut ids = Vec::new();
+        let mut handle = serde_json::Value::Null;
+        for authenticator in &mut authenticators {
+            let (_, begin) = signal_json(
+                register_begin(
+                    State(state.clone()),
+                    HeaderMap::from_iter([(
+                        header::COOKIE,
+                        format!("identikey_account={}", state.accounts.issue(xid).unwrap())
+                            .parse()
+                            .unwrap(),
+                    )]),
+                    Json(ceremonies::RegisterBegin {
+                        xid: xid.to_string(),
+                    }),
+                )
+                .await,
+            )
+            .await;
+            let mut options = begin["publicKey"].clone();
+            handle = options["user"]["id"].clone();
+            options["authenticatorSelection"]["residentKey"] = "discouraged".into();
+            options["authenticatorSelection"]["requireResidentKey"] = false.into();
+            let credential = authenticator
+                .do_registration(
+                    origin.clone(),
+                    CreationChallengeResponse {
+                        public_key: serde_json::from_value(options).unwrap(),
+                    },
+                )
+                .unwrap();
+            ids.push(serde_json::to_value(&credential).unwrap()["id"].clone());
+            let (status, result) = signal_json(register_finish(State(state.clone()), Json(
+                serde_json::from_value(serde_json::json!({ "session": begin["session"], "xid": xid.to_string(), "credential": credential })).unwrap()
+            )).await).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(result["next"], "/account");
+            assert_eq!(result["signal_user_id"], handle);
+            assert_eq!(result["signal_credential_ids"], serde_json::json!(ids));
+        }
+        sqlx::query("UPDATE credentials SET revoked_at = now() WHERE webauthn_credential_id = $1")
+            .bind(B64.decode(ids[2].as_str().unwrap()).unwrap())
+            .execute(store.pool())
+            .await
+            .unwrap();
+        let (session, options) = state
+            .ceremonies
+            .begin_assert(&store, Some(xid), None)
+            .await
+            .unwrap();
+        let credential = authenticators[0]
+            .do_authentication(
+                origin.clone(),
+                RequestChallengeResponse {
+                    public_key: serde_json::from_value(options).unwrap(),
+                    mediation: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(serde_json::to_value(&credential).unwrap()["id"], ids[0]);
+        let (status, result) = signal_json(
+            assert_finish(
+                State(state.clone()),
+                Json(ceremonies::AssertFinish {
+                    session,
+                    credential,
+                    confirmed: false,
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(result["signal_user_id"], handle);
+        assert_eq!(
+            result["signal_credential_ids"],
+            serde_json::json!(&ids[..2])
+        );
+
+        let pending = state
+            .provider
+            .validate_authorize(&identikey_oidc::AuthorizeQuery {
+                response_type: Some("code".into()),
+                client_id: Some("smoke".into()),
+                redirect_uri: Some("http://127.0.0.1:9999/cb".into()),
+                code_challenge: Some(s256_challenge(VERIFIER)),
+                code_challenge_method: Some("S256".into()),
+                scope: Some("openid".into()),
+                state: None,
+                nonce: None,
+            })
+            .unwrap();
+        let retry_pending = pending.clone();
+        let (session, options) = state
+            .ceremonies
+            .begin_assert(&store, Some(xid), Some(pending))
+            .await
+            .unwrap();
+        let credential = authenticators[0]
+            .do_authentication(
+                origin.clone(),
+                RequestChallengeResponse {
+                    public_key: serde_json::from_value(options).unwrap(),
+                    mediation: None,
+                },
+            )
+            .unwrap();
+        let (status, result) = signal_json(
+            assert_finish(
+                State(state.clone()),
+                Json(ceremonies::AssertFinish {
+                    session,
+                    credential,
+                    confirmed: false,
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(result["redirect"].as_str().unwrap().contains("code="));
+        assert_eq!(result["signal_user_id"], handle);
+        assert_eq!(
+            result["signal_credential_ids"],
+            serde_json::json!(&ids[..2])
+        );
+
+        state.provider.register(
+            identikey_oidc::Client::new("signal-cli", "cli.example")
+                .with_grants([identikey_oidc::GRANT_DEVICE_CODE]),
+        );
+        let device = state
+            .provider
+            .start_device(
+                &TokenRequest {
+                    client_id: Some("signal-cli".into()),
+                    ..TokenRequest::default()
+                },
+                Some("openid"),
+            )
+            .unwrap();
+        let (session, mut options, challenge) = state
+            .ceremonies
+            .begin_device_assert(&device.user_code)
+            .await
+            .unwrap();
+        state
+            .provider
+            .bind_device_assertion(&device.user_code, &challenge)
+            .unwrap();
+        // SoftPasskey needs an allow-list to select its non-resident test key.
+        options["allowCredentials"] = serde_json::json!([{ "type": "public-key", "id": ids[0] }]);
+        let credential = authenticators[0]
+            .do_authentication(
+                origin,
+                RequestChallengeResponse {
+                    public_key: serde_json::from_value(options).unwrap(),
+                    mediation: None,
+                },
+            )
+            .unwrap();
+        let mut credential = serde_json::to_value(credential).unwrap();
+        credential["response"]["userHandle"] = handle.clone();
+        let (status, result) = signal_json(
+            device_assert_finish(
+                State(state.clone()),
+                Json(ceremonies::AssertFinish {
+                    session,
+                    credential: serde_json::from_value(credential).unwrap(),
+                    confirmed: true,
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+        assert_eq!(result["approved"], true);
+        assert_eq!(result["signal_user_id"], handle);
+        assert_eq!(
+            result["signal_credential_ids"],
+            serde_json::json!(&ids[..2])
+        );
+
+        // Lookup rejects revoked and foreign ids before signature verification.
+        let foreign = register_hybrid_hint_test_passkey(&store, &state.ceremonies).await;
+        for (id, bound, expected) in [
+            (&ids[2], None, "credential not found"),
+            (
+                &ids[0],
+                Some(foreign),
+                "credential belongs to another account",
+            ),
+        ] {
+            let (session, _) = state
+                .ceremonies
+                .begin_assert(&store, bound, None)
+                .await
+                .unwrap();
+            let credential = serde_json::from_value(serde_json::json!({
+                "id": id, "rawId": id, "type": "public-key", "extensions": {},
+                "response": { "clientDataJSON": "", "authenticatorData": "", "signature": "" }
+            }))
+            .unwrap();
+            let (status, result) = signal_json(
+                assert_finish(
+                    State(state.clone()),
+                    Json(ceremonies::AssertFinish {
+                        session,
+                        credential,
+                        confirmed: false,
+                    }),
+                )
+                .await,
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(result["error_description"], expected);
+            assert!(result.get("signal_credential_ids").is_none());
+        }
+        assert_eq!(
+            passkey_signal_fields(&store, Xid::from_bytes([0xab; 32])).await,
+            serde_json::json!({})
+        );
+        // Model a broken stored list while leaving the asserted row usable.
+        // Only this test database relaxes the row-shape constraint.
+        let (session, options) = state
+            .ceremonies
+            .begin_assert(&store, Some(xid), Some(retry_pending))
+            .await
+            .unwrap();
+        let credential = authenticators[0]
+            .do_authentication(
+                url::Url::parse("https://auth.identikey.me").unwrap(),
+                RequestChallengeResponse {
+                    public_key: serde_json::from_value(options).unwrap(),
+                    mediation: None,
+                },
+            )
+            .unwrap();
+        sqlx::query("ALTER TABLE credentials DROP CONSTRAINT credentials_kind_shape")
+            .execute(store.pool())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE credentials SET sign_counter = NULL WHERE webauthn_credential_id = $1")
+            .bind(B64.decode(ids[1].as_str().unwrap()).unwrap())
+            .execute(store.pool())
+            .await
+            .unwrap();
+        assert!(store.list_passkeys(xid).await.is_err());
+        let (status, result) = signal_json(
+            assert_finish(
+                State(state.clone()),
+                Json(ceremonies::AssertFinish {
+                    session,
+                    credential,
+                    confirmed: false,
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(result["redirect"].as_str().unwrap().contains("code="));
+        assert!(result.get("signal_user_id").is_none());
+        assert!(result.get("signal_credential_ids").is_none());
+        // A database read failure also supplies no hygiene metadata.
+        store.pool().close().await;
+        assert_eq!(
+            passkey_signal_fields(&store, xid).await,
+            serde_json::json!({})
+        );
     }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
