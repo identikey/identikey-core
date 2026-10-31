@@ -123,6 +123,12 @@ See morphist-tools `CONVENTIONS.md`.
   returns the redeem URL in the JSON body (`redeem_url`, expires in
   900 seconds). The link is not sent.
   (`crates/identikey-server/src/email_link.rs`)
+- 2026-10-31 — `revoke_device` stays an unconditional soft-revoke, including
+  the sole credential. Last-access confirmation lives on
+  `revoke_account_access`. A delta that makes the primitive refuse the
+  last login contradicts the living "Revoke hides the device" scenario.
+  (`crates/identikey-keys/src/store.rs`,
+  `openspec/specs/managed-custody/spec.md`)
 - 2026-10-31 — Papyrus `device_enroll` loads or creates the local device
   signer and returns its classical public key and fingerprint. The command
   comment says "register", but the body does not insert an `identikey_auth`
