@@ -1,12 +1,12 @@
 # add-password-credential
 
-> **PENDING**
+> **ACTIVE BUILD**
 
-Node `identikey-core-zlf.9`. The key model, the email link, and
-passkey management have landed. This node was not in the
-2026-10-31 activate-and-run grant. The hasher spike is go:
-Argon2id m=19456 KiB, t=2, p=1 (`docs/spikes/password-hasher/finding.md`).
-This node stays pending until a human activates it.
+**Rigor:** change
+
+Node `identikey-core-zlf.9`. Activated 2026-10-31. The hasher spike
+is go: Argon2id m=19456 KiB, t=2, p=1
+(`docs/spikes/password-hasher/finding.md`).
 
 ## Why
 
