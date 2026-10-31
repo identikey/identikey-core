@@ -1,0 +1,11 @@
+algorithm=argon2id
+phc=$argon2id$v=19$m=19456,t=2,p=1$c3Bpa2Utc2FsdC0xNmJ5dA$rR6DDwhsmx8I4PWlfUHZELwkXwIAvKB2j/HVB0r+97Y
+phc_bytes=97
+param_m=19456
+param_t=2
+param_p=1
+hash_ms=22.959210000000002
+verify_ms=21.700529
+wrong_rejected=true
+rss_before_kib=2520
+hwm_kib=22048
