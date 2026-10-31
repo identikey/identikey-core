@@ -5,12 +5,15 @@ A3) on `identikey-server`, stored as `credentials` rows in
 `identikey-keys`. Folded from `add-passkey-ceremonies` (2026-08-20),
 `add-hosted-login-ui` (2026-08-27), `add-account-profile`
 (2026-09-24), `add-passkey-legibility` (2026-10-27),
-`add-passkey-counter-policy` (2026-10-31), and
-`add-passkey-signal-api` (2026-10-31).
+`add-passkey-counter-policy` (2026-10-31),
+`add-passkey-signal-api` (2026-10-31), and
+`add-passkey-account-management` (2026-10-31).
 
 RP ID and expected origins are fail-closed at boot (`62j`). Related
 origins are already served (`2js`). Signal APIs are best-effort
 hygiene after a ceremony the server has already accepted (`5gh.3`).
+A signed-in account page adds, renames, and revokes its passkeys
+(`zlf.6`).
 
 ### Requirement: Registration and assertion use webauthn-rs
 
@@ -425,3 +428,57 @@ either call as authorization. This slice SHALL NOT call
 - WHEN the page handles that error
 - THEN it calls neither Signal API
 - AND the existing failure is shown
+
+### Requirement: The account page manages its passkeys
+
+A signed-in `GET /account` SHALL let the account holder add a passkey
+on that XID, set or change that passkey's nickname, and revoke a
+passkey. A missing session SHALL NOT add, rename, or revoke. A
+credential that is not on that XID SHALL NOT be revoked.
+
+Revoke of a counted credential SHALL use account-access revocation.
+`revoke_device` SHALL stay an unconditional soft-revoke and SHALL
+NOT be what the page calls for a counted kind. While another counted
+credential remains, the revoke SHALL complete and the remaining
+passkey SHALL still be able to sign in. When the addressed row is
+the last counted credential, the page SHALL ask for an explicit
+last-access confirmation and SHALL NOT remove the row until that
+confirmation. The confirmation SHALL NOT start recovery.
+
+The decision and the revocation SHALL be one atomic account-scoped
+operation, with the custody row locked before the credential row.
+Two concurrent unconfirmed account-access revocations of the last
+two counted credentials SHALL leave one of them listed.
+
+#### Scenario: Add and rename on the same account
+
+- GIVEN a signed-in account with one passkey
+- WHEN the account holder adds a second passkey and sets its nickname
+- THEN `list_devices` shows both passkeys on that XID
+- AND the second row's label is the nickname
+
+#### Scenario: Ordinary revoke leaves a way in
+
+- GIVEN a signed-in account with two non-revoked passkeys
+- WHEN the account holder revokes one without a last-access confirmation
+- THEN that passkey is absent from the list
+- AND the remaining passkey can complete assertion
+
+#### Scenario: The last counted credential waits for confirmation
+
+- GIVEN a signed-in account whose only counted credential is one passkey
+- WHEN the account holder asks to revoke it and does not confirm
+- THEN the passkey remains listed
+- AND no recovery ceremony starts
+
+#### Scenario: Concurrent revokes cannot clear both last credentials
+
+- GIVEN two non-revoked counted credentials and no last-access confirmation
+- WHEN two account-access revocations for those credentials run concurrently
+- THEN one credential remains listed
+
+#### Scenario: A signed-out browser cannot manage passkeys
+
+- GIVEN no account session
+- WHEN a caller posts an add, rename, or revoke
+- THEN no credential is inserted, renamed, or revoked
