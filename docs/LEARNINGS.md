@@ -123,3 +123,9 @@ See morphist-tools `CONVENTIONS.md`.
   returns the redeem URL in the JSON body (`redeem_url`, expires in
   900 seconds). The link is not sent.
   (`crates/identikey-server/src/email_link.rs`)
+- 2026-10-31 — Papyrus `device_enroll` loads or creates the local device
+  signer and returns its classical public key and fingerprint. The command
+  comment says "register", but the body does not insert an `identikey_auth`
+  row and does not contact the OP.
+  (`Papyrus/src-tauri/src/commands/identity.rs`,
+  `openspec/specs/managed-custody/spec.md`)
