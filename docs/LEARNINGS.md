@@ -119,3 +119,7 @@ See morphist-tools `CONVENTIONS.md`.
   broke. `bc-components` 0.31.1 already ships `XID`, and `bc-xid` (BSD-2-Clause-Patent, matching
   our protocol tier) has the full document + rotation model. `bc-components` also ships SSKR,
   relevant to guardian recovery. (docs/ARCHITECTURE.md ADR-001)
+- 2026-10-31 — There is no mailer. Signed-in `POST /account/email/begin`
+  returns the redeem URL in the JSON body (`redeem_url`, expires in
+  900 seconds). The link is not sent.
+  (`crates/identikey-server/src/email_link.rs`)
