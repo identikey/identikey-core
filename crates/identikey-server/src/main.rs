@@ -17,6 +17,7 @@ mod account;
 mod ceremonies;
 mod device_passkeys;
 mod clients;
+mod email_link;
 mod encapsulation;
 mod local_register;
 mod managed_challenge;
@@ -127,6 +128,8 @@ fn router_with_keyring(
         )
         .route("/signup", get(signup_page).post(signup))
         .route("/account", get(account_page))
+        .route("/account/email/begin", post(email_link::begin))
+        .route("/account/email/redeem", get(email_link::redeem))
         .route("/account/encapsulation/begin", post(encapsulation::begin))
         .route("/account/encapsulation/export", post(encapsulation::export))
         .route("/account/encapsulation/rewrap", post(encapsulation::rewrap))
@@ -1676,6 +1679,139 @@ async fn main() -> Result<(), BoxError> {
 mod tests {
     use super::*;
     use identikey_oidc::{Client, s256_challenge};
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn email_magic_link_requires_session_and_redeems_without_cookie(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool.clone());
+        let doc = c2_native(&PrivateKeyBase::new(), &PrivateKeyBase::new()).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, &[0x73; 32])
+            .await
+            .unwrap();
+        let other_doc = c2_native(&PrivateKeyBase::new(), &PrivateKeyBase::new()).unwrap();
+        let other = store
+            .create_managed(CustodyRung::C2, &other_doc, &[0x74; 32])
+            .await
+            .unwrap();
+        let sessions = Arc::new(account::AccountSessions::default());
+        let cookie = format!("identikey_account={}", sessions.issue(xid).unwrap());
+        let other_cookie = format!("identikey_account={}", sessions.issue(other).unwrap());
+        let app = test_router_with_accounts(store, sessions);
+        for cookie in [None, Some("identikey_account=unknown")] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/account/email/begin")
+                .header(header::CONTENT_TYPE, "application/json");
+            if let Some(cookie) = cookie {
+                request = request.header(header::COOKIE, cookie);
+            }
+            let response = app
+                .clone()
+                .oneshot(
+                    request
+                        .body(Body::from(r#"{"email":"holder@example.com"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM email_magic_links")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        // The signed-in account cannot request a binding to a different XID.
+        let response = app.clone().oneshot(Request::builder().method("POST").uri("/account/email/begin")
+            .header(header::CONTENT_TYPE, "application/json").header(header::COOKIE, &cookie)
+            .body(Body::from(serde_json::json!({"email": "holder@example.com", "xid": other.to_string()}).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/account/email/begin")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::from(r#"{"email":"holder@example.com"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let result: serde_json::Value = serde_json::from_slice(
+            &body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let url = url::Url::parse(result["redeem_url"].as_str().unwrap()).unwrap();
+        let uri = format!("{}?{}", url.path(), url.query().unwrap());
+        // Even a different account cookie cannot change the token's binding.
+        let retarget = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{uri}&xid={other}"))
+                    .header(header::COOKIE, &other_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(retarget.status(), StatusCode::BAD_REQUEST);
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+        let before: Vec<(Vec<u8>, Option<String>)> =
+            sqlx::query_as("SELECT xid, email FROM accounts ORDER BY xid")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(before.contains(&(xid.as_bytes().to_vec(), Some("holder@example.com".into()))));
+        assert!(before.contains(&(other.as_bytes().to_vec(), None)));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .header(header::COOKIE, &other_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let after: Vec<(Vec<u8>, Option<String>)> =
+            sqlx::query_as("SELECT xid, email FROM accounts ORDER BY xid")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(before, after);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM credentials")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        let held: Vec<u8> =
+            sqlx::query_scalar("SELECT managed_key_blob FROM custody_records WHERE xid = $1")
+                .bind(xid.as_bytes().as_slice())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(held, vec![0x73; 32]);
+    }
 
     fn test_provider() -> Arc<Provider> {
         let salt = PairwiseSalt::from_hex(&"ab".repeat(32)).unwrap();

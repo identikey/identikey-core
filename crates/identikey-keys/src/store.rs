@@ -49,6 +49,12 @@ pub enum StoreError {
     BadXid,
     #[error("encapsulation export must be logged before climb")]
     EncapsulationExportRequired,
+    #[error("email address is invalid")]
+    InvalidEmail,
+    #[error("email link is invalid, expired, or already redeemed")]
+    InvalidEmailLink,
+    #[error("email address belongs to another account")]
+    EmailInUse,
 }
 
 /// Consent-log action for adding a hosted-being git-signing device.
@@ -179,6 +185,86 @@ impl KeysStore {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// Begin address verification for an authenticated account. The caller must
+    /// deliver the returned bearer secret only to that account holder.
+    pub async fn begin_email_magic_link(
+        &self,
+        xid: Xid,
+        email: &str,
+    ) -> Result<String, StoreError> {
+        use rand::RngCore;
+        use sha2::{Digest, Sha256};
+
+        let email = email.trim();
+        let Some((local, domain)) = email.split_once('@') else {
+            return Err(StoreError::InvalidEmail);
+        };
+        if email.len() > 254
+            || local.is_empty()
+            || domain.is_empty()
+            || domain.contains('@')
+            || email.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(StoreError::InvalidEmail);
+        }
+        let mut random = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut random);
+        let token = bs58::encode(random).into_string();
+        let hash = Sha256::digest(token.as_bytes());
+        let inserted = sqlx::query(
+            "INSERT INTO email_magic_links (token_hash, xid, email)
+             SELECT $1, xid, $3 FROM accounts WHERE xid = $2 AND disabled_at IS NULL",
+        )
+        .bind(hash.as_slice())
+        .bind(xid.as_bytes().as_slice())
+        .bind(email)
+        .execute(&self.pool)
+        .await?;
+        if inserted.rows_affected() != 1 {
+            return Err(StoreError::NotFound);
+        }
+        Ok(token)
+    }
+
+    /// Consume the token and write only its bound account's recovery address.
+    /// No custody or credentials query belongs in this transaction.
+    pub async fn redeem_email_magic_link(&self, token: &str) -> Result<Xid, StoreError> {
+        use sha2::{Digest, Sha256};
+
+        let hash = Sha256::digest(token.as_bytes());
+        let mut tx = self.pool.begin().await?;
+        let row: Option<(Vec<u8>, String)> = sqlx::query_as(
+            "DELETE FROM email_magic_links WHERE token_hash = $1 AND expires_at > now()
+             RETURNING xid, email",
+        )
+        .bind(hash.as_slice())
+        .fetch_optional(&mut *tx)
+        .await?;
+        let (bytes, email) = row.ok_or(StoreError::InvalidEmailLink)?;
+        let xid = Xid::try_from_slice(&bytes).map_err(|_| StoreError::BadXid)?;
+        let updated = sqlx::query(
+            "UPDATE accounts SET email = $2, email_verified_at = now(), updated_at = now()
+             WHERE xid = $1 AND disabled_at IS NULL",
+        )
+        .bind(&bytes)
+        .bind(email)
+        .execute(&mut *tx)
+        .await;
+        let updated = match updated {
+            Err(sqlx::Error::Database(error))
+                if error.constraint() == Some("accounts_email_lower_unique") =>
+            {
+                return Err(StoreError::EmailInUse);
+            }
+            result => result?,
+        };
+        if updated.rows_affected() != 1 {
+            return Err(StoreError::NotFound);
+        }
+        tx.commit().await?;
+        Ok(xid)
     }
 
     /// Create a C1/C2 identity: account + custody row + signup event.
@@ -1100,6 +1186,155 @@ mod tests {
 
     fn blob() -> Vec<u8> {
         vec![0x51, 0x47]
+    }
+
+    async fn email_magic_link_account(store: &KeysStore) -> Xid {
+        let doc = c2_native(&PrivateKeyBase::new(), &PrivateKeyBase::new()).unwrap();
+        store
+            .create_managed(CustodyRung::C2, &doc, &blob())
+            .await
+            .unwrap()
+    }
+
+    #[sqlx::test]
+    async fn email_magic_link_single_use_and_no_key_or_credential_changes(pool: PgPool) {
+        use sha2::{Digest, Sha256};
+        let store = KeysStore::from_pool(pool);
+        let xid = email_magic_link_account(&store).await;
+        let other = email_magic_link_account(&store).await;
+        let token = store
+            .begin_email_magic_link(xid, "Person@example.com")
+            .await
+            .unwrap();
+        let stored: Vec<u8> = sqlx::query_scalar("SELECT token_hash FROM email_magic_links")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(stored, Sha256::digest(token.as_bytes()).as_slice());
+        assert_ne!(stored, token.as_bytes());
+        let (first, second) = tokio::join!(
+            store.redeem_email_magic_link(&token),
+            store.redeem_email_magic_link(&token)
+        );
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        assert_eq!(first.or(second).unwrap(), xid);
+        assert!(matches!(
+            store.redeem_email_magic_link(&token).await,
+            Err(StoreError::InvalidEmailLink)
+        ));
+        let row: (String, bool) = sqlx::query_as(
+            "SELECT email, email_verified_at IS NOT NULL FROM accounts WHERE xid = $1",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(row, ("Person@example.com".into(), true));
+        let other_email: Option<String> =
+            sqlx::query_scalar("SELECT email FROM accounts WHERE xid = $1")
+                .bind(other.as_bytes().as_slice())
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert!(other_email.is_none());
+        let held: Vec<u8> =
+            sqlx::query_scalar("SELECT managed_key_blob FROM custody_records WHERE xid = $1")
+                .bind(xid.as_bytes().as_slice())
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(held, blob());
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM credentials")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[sqlx::test]
+    async fn email_magic_link_refuses_case_insensitive_conflict_atomically(pool: PgPool) {
+        let store = KeysStore::from_pool(pool);
+        let first = email_magic_link_account(&store).await;
+        let second = email_magic_link_account(&store).await;
+        let token = store
+            .begin_email_magic_link(first, "Same@example.com")
+            .await
+            .unwrap();
+        store.redeem_email_magic_link(&token).await.unwrap();
+        let original = store
+            .begin_email_magic_link(second, "original@example.com")
+            .await
+            .unwrap();
+        store.redeem_email_magic_link(&original).await.unwrap();
+        let before: Vec<(Vec<u8>, Option<String>, OffsetDateTime)> =
+            sqlx::query_as("SELECT xid, email, updated_at FROM accounts ORDER BY xid")
+                .fetch_all(store.pool())
+                .await
+                .unwrap();
+        let conflict = store
+            .begin_email_magic_link(second, "SAME@EXAMPLE.COM")
+            .await
+            .unwrap();
+        assert!(matches!(
+            store.redeem_email_magic_link(&conflict).await,
+            Err(StoreError::EmailInUse)
+        ));
+        let after: Vec<(Vec<u8>, Option<String>, OffsetDateTime)> =
+            sqlx::query_as("SELECT xid, email, updated_at FROM accounts ORDER BY xid")
+                .fetch_all(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(before, after);
+    }
+
+    #[sqlx::test]
+    async fn email_magic_link_invalid_expired_and_unknown_account(pool: PgPool) {
+        let store = KeysStore::from_pool(pool);
+        let xid = email_magic_link_account(&store).await;
+        for email in [
+            "",
+            "missing-at",
+            "@example.com",
+            "a@",
+            "a@@b",
+            "a b@example.com",
+        ] {
+            assert!(matches!(
+                store.begin_email_magic_link(xid, email).await,
+                Err(StoreError::InvalidEmail)
+            ));
+        }
+        assert!(matches!(
+            store
+                .begin_email_magic_link(Xid::from_bytes([0xff; 32]), "a@example.com")
+                .await,
+            Err(StoreError::NotFound)
+        ));
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM email_magic_links")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        let token = store
+            .begin_email_magic_link(xid, "a@example.com")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE email_magic_links SET expires_at = now() - interval '1 second'")
+            .execute(store.pool())
+            .await
+            .unwrap();
+        for token in [&token, "unknown"] {
+            assert!(matches!(
+                store.redeem_email_magic_link(token).await,
+                Err(StoreError::InvalidEmailLink)
+            ));
+        }
+        let email: Option<String> = sqlx::query_scalar("SELECT email FROM accounts WHERE xid = $1")
+            .bind(xid.as_bytes().as_slice())
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert!(email.is_none());
     }
 
     #[sqlx::test]
