@@ -98,7 +98,49 @@ pub fn passkey_login(ceremony_json: &str, used_here: &[String]) -> String {
              </details>\
              {TECHNICAL_DETAILS}\
              <script type=\"application/json\" id=\"ceremony\">{json}</script>\
-             <script>{COMMON_JS}\n{LOGIN_JS}</script>"
+             <script>{COMMON_JS}\n{LOGIN_JS}</script>\
+             <p><a id=\"password-link\" href=\"/authorize/password\">Sign in with password</a></p>\
+             <script>document.getElementById('password-link').search = location.search;</script>"
+        ),
+    )
+}
+
+/// Password login preserves the validated authorization query in the form action.
+#[must_use]
+pub fn password_login() -> String {
+    shell(
+        "Sign in with password — IdentiKey",
+        r#"
+        <h1>Sign in with password</h1>
+        <form method="post">
+        <label>Verified email <input type="email" name="email" autocomplete="username" required></label>
+        <label>Password <input type="password" name="password" autocomplete="current-password" required maxlength="1024"></label>
+        <button type="submit">Sign in</button></form>
+        <p><a id="passkey-link" href="/authorize/passkey">Use a passkey</a></p>
+        <script>document.getElementById('passkey-link').search = location.search;</script>"#,
+    )
+}
+
+#[must_use]
+pub fn password_account(devices: &[identikey_keys::DeviceRecord]) -> String {
+    let rows = devices.iter().map(|row| {
+        let kind = html_escape(&row.kind);
+        let revoke = if row.kind == "password" {
+            format!(r#"<form method="post" action="/account/devices/{}/revoke"><button type="submit">Revoke password</button></form>"#, row.id)
+        } else { String::new() };
+        format!("<li>{kind} {revoke}</li>")
+    }).collect::<String>();
+    shell(
+        "Password and devices — IdentiKey",
+        &format!(
+            r#"
+        <h1>Password and devices</h1><ul>{rows}</ul>
+        <h2>Attach a password</h2>
+        <p>A saved passkey and verified email are required. Use that email to sign in.</p>
+        <form method="post" action="/account/password">
+        <label>New password <input type="password" name="password" autocomplete="new-password" required maxlength="1024"></label>
+        <button type="submit">Attach password</button></form>
+        <p><a href="/account">Back to account</a></p>"#
         ),
     )
 }
@@ -193,6 +235,7 @@ pub fn account(
         "Your account — IdentiKey",
         &format!(
             "<h1>Your IdentiKey</h1>\
+             <p><a href=\"/account/password\">Password and devices</a></p>\
              <p>Use your passkeys to sign in to apps that use IdentiKey.</p>\
              <dl class=\"facts\">\
              <dt>Account</dt><dd><code>{xid}</code></dd>\

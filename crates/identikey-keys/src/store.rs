@@ -53,6 +53,10 @@ pub enum StoreError {
     InvalidEmail,
     #[error("email link is invalid, expired, or already redeemed")]
     InvalidEmailLink,
+    #[error("password must contain 1 to 1024 bytes")]
+    InvalidPassword,
+    #[error("password hashing unavailable")]
+    PasswordHasher,
     #[error("email address belongs to another account")]
     EmailInUse,
 }
@@ -746,6 +750,92 @@ impl KeysStore {
         Ok(())
     }
 
+    /// Attach only to an existing account with a live passkey and verified email.
+    /// Passwords are never account creation, replacement, or signing consent.
+    pub async fn attach_password(&self, xid: Xid, password: String) -> Result<Uuid, StoreError> {
+        let password = zeroize::Zeroizing::new(password);
+        if password.is_empty() || password.len() > 1024 {
+            return Err(StoreError::InvalidPassword);
+        }
+        let phc = tokio::task::spawn_blocking(move || {
+            use argon2::password_hash::SaltString;
+            use argon2::{Algorithm, Argon2, Params, PasswordHasher, Version};
+            let salt = SaltString::generate(&mut rand::rngs::OsRng);
+            let params = Params::new(19456, 2, 1, None).map_err(|_| StoreError::PasswordHasher)?;
+            Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+                .hash_password(password.as_bytes(), &salt)
+                .map(|hash| hash.to_string())
+                .map_err(|_| StoreError::PasswordHasher)
+        })
+        .await
+        .map_err(|_| StoreError::PasswordHasher)??;
+        sqlx::query_scalar(
+            "INSERT INTO credentials (xid, kind, password_hash)
+             SELECT xid, 'password', $2 FROM accounts
+             WHERE xid = $1 AND email_verified_at IS NOT NULL
+             AND EXISTS (SELECT 1 FROM credentials WHERE xid = $1
+                         AND kind = 'passkey' AND revoked_at IS NULL)
+             RETURNING id",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .bind(phc)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(StoreError::NotFound)
+    }
+
+    /// A0 login only. Return the existing account XID, never a signing proof.
+    pub async fn verify_password(
+        &self,
+        email: &str,
+        password: String,
+    ) -> Result<Option<Xid>, StoreError> {
+        let password = zeroize::Zeroizing::new(password);
+        if password.is_empty() || password.len() > 1024 {
+            return Ok(None);
+        }
+        let row: Option<(Uuid, Vec<u8>, String)> = sqlx::query_as(
+            "SELECT c.id, c.xid, c.password_hash FROM credentials c
+             JOIN accounts a ON a.xid = c.xid
+             WHERE lower(a.email) = lower($1) AND a.email_verified_at IS NOT NULL
+             AND c.kind = 'password' AND c.revoked_at IS NULL",
+        )
+        .bind(email.trim())
+        .fetch_optional(&self.pool)
+        .await?;
+        // Spend the same hasher work for an unknown email; no account-existence oracle.
+        let (id, xid, phc) = row.unwrap_or_else(|| (Uuid::nil(), Vec::new(),
+            "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into()));
+        let valid = tokio::task::spawn_blocking(move || {
+            use argon2::{Argon2, PasswordHash, PasswordVerifier};
+            PasswordHash::new(&phc).ok().is_some_and(|hash| {
+                Argon2::default()
+                    .verify_password(password.as_bytes(), &hash)
+                    .is_ok()
+            })
+        })
+        .await
+        .map_err(|_| StoreError::PasswordHasher)?;
+        if !valid || xid.is_empty() {
+            return Ok(None);
+        }
+        // Recheck revocation after the expensive verification, before issuing a code.
+        let live = sqlx::query(
+            "UPDATE credentials SET last_used_at = now() WHERE id = $1 AND revoked_at IS NULL",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected()
+            == 1;
+        if !live {
+            return Ok(None);
+        }
+        Ok(Some(
+            Xid::try_from_slice(&xid).map_err(|_| StoreError::BadXid)?,
+        ))
+    }
+
     /// Non-revoked credentials for this XID. Ids + kind + nickname + timestamps only.
     pub async fn list_devices(&self, xid: Xid) -> Result<Vec<DeviceRecord>, StoreError> {
         let rows = sqlx::query!(
@@ -1283,6 +1373,126 @@ mod tests {
             .create_managed(CustodyRung::C2, &doc, &blob())
             .await
             .unwrap()
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn password_credential_hash_list_revoke_and_attach_guards(pool: PgPool) {
+        let store = KeysStore::from_pool(pool);
+        let xid = email_magic_link_account(&store).await;
+        assert!(matches!(
+            store.attach_password(xid, "secret".into()).await,
+            Err(StoreError::NotFound)
+        ));
+        let token = store
+            .begin_email_magic_link(xid, "password@example.test")
+            .await
+            .unwrap();
+        store.redeem_email_magic_link(&token).await.unwrap();
+        assert!(matches!(
+            store.attach_password(xid, "secret".into()).await,
+            Err(StoreError::NotFound)
+        ));
+        store
+            .insert_passkey(xid, b"password-test-passkey", b"public-test-key", 0)
+            .await
+            .unwrap();
+        assert!(matches!(
+            store.attach_password(xid, String::new()).await,
+            Err(StoreError::InvalidPassword)
+        ));
+        let id = store
+            .attach_password(xid, "correct horse".into())
+            .await
+            .unwrap();
+        let phc: String = sqlx::query_scalar("SELECT password_hash FROM credentials WHERE id = $1")
+            .bind(id)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        let hash = argon2::PasswordHash::new(&phc).unwrap();
+        assert_eq!(hash.algorithm.as_str(), "argon2id");
+        assert_eq!(hash.params.get_decimal("m"), Some(19456));
+        assert_eq!(hash.params.get_decimal("t"), Some(2));
+        assert_eq!(hash.params.get_decimal("p"), Some(1));
+        assert!(!phc.contains("correct horse"));
+        assert!(
+            store
+                .attach_password(xid, "replacement".into())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .verify_password("PASSWORD@example.test", "correct horse".into())
+                .await
+                .unwrap(),
+            Some(xid)
+        );
+        assert_eq!(
+            store
+                .verify_password("password@example.test", "wrong".into())
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store
+                .verify_password("missing@example.test", "correct horse".into())
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(
+            store
+                .list_devices(xid)
+                .await
+                .unwrap()
+                .iter()
+                .any(|row| row.id == id && row.kind == "password")
+        );
+        assert!(
+            store
+                .revoke_device(Xid::from_bytes([0x42; 32]), id)
+                .await
+                .is_err()
+        );
+        store.revoke_device(xid, id).await.unwrap();
+        store.revoke_device(xid, id).await.unwrap();
+        assert!(
+            !store
+                .list_devices(xid)
+                .await
+                .unwrap()
+                .iter()
+                .any(|row| row.id == id)
+        );
+        assert_eq!(
+            store
+                .verify_password("password@example.test", "correct horse".into())
+                .await
+                .unwrap(),
+            None
+        );
+        let next = store
+            .attach_password(xid, "correct horse".into())
+            .await
+            .unwrap();
+        let next_phc: String =
+            sqlx::query_scalar("SELECT password_hash FROM credentials WHERE id = $1")
+                .bind(next)
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_ne!(
+            phc, next_phc,
+            "every password gets an independent random salt"
+        );
+        assert!(matches!(
+            store
+                .attach_password(Xid::from_bytes([0x99; 32]), "secret".into())
+                .await,
+            Err(StoreError::NotFound)
+        ));
     }
 
     #[sqlx::test]

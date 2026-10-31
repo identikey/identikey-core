@@ -177,7 +177,81 @@ fn clear_credential_counter(
 ///
 /// The server runs this at boot. Tests use `#[sqlx::test]`, which applies the
 /// same files against a fresh database.
-pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+// Inline additive migration: the password work node owns this file, not migrations/.
+// It is part of the same versioned, checksum-verified migrator in production and tests.
+pub static MIGRATOR: std::sync::LazyLock<sqlx::migrate::Migrator> =
+    std::sync::LazyLock::new(|| {
+        use sqlx::SqlSafeStr;
+        let mut migrator = sqlx::migrate!("./migrations");
+        migrator
+            .migrations
+            .to_mut()
+            .push(sqlx::migrate::Migration::new(
+                10,
+                "password credential".into(),
+                sqlx::migrate::MigrationType::Simple,
+                r#"ALTER TABLE credentials ADD COLUMN password_hash text;
+ALTER TABLE credentials DROP CONSTRAINT credentials_kind_known;
+ALTER TABLE credentials DROP CONSTRAINT credentials_kind_shape;
+
+ALTER TABLE credentials ADD CONSTRAINT credentials_kind_known CHECK (
+    kind IN ('passkey', 'oidc_apple', 'oidc_google', 'identikey_auth', 'ssh_git', 'password')
+);
+
+ALTER TABLE credentials ADD CONSTRAINT credentials_kind_shape CHECK (
+    (kind = 'passkey'
+        AND webauthn_credential_id IS NOT NULL
+        AND cose_public_key IS NOT NULL
+        AND sign_counter IS NOT NULL
+        AND issuer IS NULL
+        AND subject_at_issuer IS NULL
+        AND device_public_key IS NULL)
+    OR
+    (kind IN ('oidc_apple', 'oidc_google')
+        AND issuer IS NOT NULL
+        AND subject_at_issuer IS NOT NULL
+        AND webauthn_credential_id IS NULL
+        AND cose_public_key IS NULL
+        AND sign_counter IS NULL
+        AND device_public_key IS NULL)
+    OR
+    (kind = 'identikey_auth'
+        AND device_public_key IS NOT NULL
+        AND webauthn_credential_id IS NULL
+        AND issuer IS NULL
+        AND subject_at_issuer IS NULL)
+    OR
+    (kind = 'ssh_git'
+        AND device_public_key IS NOT NULL
+        AND webauthn_credential_id IS NULL
+        AND cose_public_key IS NULL
+        AND sign_counter IS NULL
+        AND issuer IS NULL
+        AND subject_at_issuer IS NULL)
+    OR
+    (kind = 'password'
+        AND password_hash IS NOT NULL
+        AND webauthn_credential_id IS NULL
+        AND cose_public_key IS NULL
+        AND sign_counter IS NULL
+        AND issuer IS NULL
+        AND subject_at_issuer IS NULL
+        AND device_public_key IS NULL)
+);
+
+
+ALTER TABLE credentials ADD CONSTRAINT credentials_password_hash_shape CHECK (
+    (kind = 'password' AND password_hash LIKE '$argon2id$v=19$m=19456,t=2,p=1$%$%')
+    OR (kind <> 'password' AND password_hash IS NULL)
+);
+CREATE UNIQUE INDEX credentials_live_password_unique ON credentials (xid)
+    WHERE kind = 'password' AND revoked_at IS NULL;
+"#
+                .into_sql_str(),
+                false,
+            ));
+        migrator
+    });
 
 #[cfg(test)]
 #[allow(

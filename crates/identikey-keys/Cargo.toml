@@ -35,6 +35,8 @@ chacha20poly1305 = "0.10"
 blake3 = "1"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 rand = "0.8"
+argon2 = "=0.5.3"
+tokio.workspace = true
 zeroize = "1"
 
 [dev-dependencies]

@@ -126,6 +126,15 @@ fn router_with_keyring(
             "/authorize/passkey",
             get(passkey_login_page).post(passkey_login_finish),
         )
+        .route(
+            "/authorize/password",
+            get(password_login_page).post(password_login),
+        )
+        .route(
+            "/account/password",
+            get(password_account_page).post(password_attach),
+        )
+        .route("/account/devices/{id}/revoke", post(password_revoke))
         .route("/signup", get(signup_page).post(signup))
         .route("/account", get(account_page))
         .route("/account/passkeys/{id}/nickname", post(passkey_nickname))
@@ -692,6 +701,186 @@ async fn passkey_revoke(
             .into_response(),
         Err(error) => account_store_error(error),
     }
+}
+
+// Password forms carry no signing proof and never create an account session.
+#[derive(Deserialize)]
+struct PasswordAttach {
+    password: String,
+}
+
+#[derive(Deserialize)]
+struct PasswordLogin {
+    email: String,
+    password: String,
+}
+
+fn password_private(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    response
+}
+
+fn password_same_origin(state: &AppState, headers: &HeaderMap) -> bool {
+    let expected = url::Url::parse(state.provider.issuer())
+        .ok()
+        .map(|url| url.origin().ascii_serialization());
+    headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) == expected.as_deref()
+        && expected.is_some()
+}
+
+async fn password_account_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(xid) = signed_in_xid(&state, &headers) else {
+        return password_private(StatusCode::UNAUTHORIZED.into_response());
+    };
+    match state.store.list_devices(xid).await {
+        Ok(rows) => password_private(
+            (
+                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                pages::password_account(&rows),
+            )
+                .into_response(),
+        ),
+        Err(_) => password_private(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+    }
+}
+
+async fn password_attach(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(body): Form<PasswordAttach>,
+) -> Response {
+    let Some(xid) = signed_in_xid(&state, &headers) else {
+        return password_private(StatusCode::UNAUTHORIZED.into_response());
+    };
+    if !password_same_origin(&state, &headers) {
+        return password_private(StatusCode::FORBIDDEN.into_response());
+    }
+    let result = match state.store.attach_password(xid, body.password).await {
+        Ok(_) => (
+            StatusCode::SEE_OTHER,
+            [(header::LOCATION, "/account/password")],
+        )
+            .into_response(),
+        Err(identikey_keys::StoreError::InvalidPassword) => (
+            StatusCode::BAD_REQUEST,
+            "Enter a password of 1 to 1024 bytes.",
+        )
+            .into_response(),
+        Err(identikey_keys::StoreError::NotFound) => (
+            StatusCode::FORBIDDEN,
+            "A saved passkey and verified email are required.",
+        )
+            .into_response(),
+        Err(identikey_keys::StoreError::Sql(sqlx::Error::Database(error)))
+            if error.is_unique_violation() =>
+        {
+            (
+                StatusCode::CONFLICT,
+                "A password is already attached. Revoke it before adding another.",
+            )
+                .into_response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    password_private(result)
+}
+
+async fn password_revoke(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<uuid::Uuid>,
+) -> Response {
+    let Some(xid) = signed_in_xid(&state, &headers) else {
+        return password_private(StatusCode::UNAUTHORIZED.into_response());
+    };
+    if !password_same_origin(&state, &headers) {
+        return password_private(StatusCode::FORBIDDEN.into_response());
+    }
+    match state.store.list_devices(xid).await {
+        Ok(rows)
+            if rows
+                .iter()
+                .any(|row| row.id == id && row.kind == "password") => {}
+        Ok(_) => return password_private(StatusCode::NOT_FOUND.into_response()),
+        Err(_) => return password_private(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+    }
+    password_private(match state.store.revoke_device(xid, id).await {
+        Ok(()) => (
+            StatusCode::SEE_OTHER,
+            [(header::LOCATION, "/account/password")],
+        )
+            .into_response(),
+        Err(error) => account_store_error(error),
+    })
+}
+
+async fn password_login_page(
+    State(state): State<AppState>,
+    Query(params): Query<AuthorizeParams>,
+) -> Response {
+    password_private(
+        match state.provider.validate_authorize(&authorize_query(&params)) {
+            Ok(_) => (
+                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                pages::password_login(),
+            )
+                .into_response(),
+            Err(AuthorizeError::Redirect {
+                uri,
+                error,
+                description,
+                state,
+            }) => redirect_with_error(&uri, error, &description, state.as_deref()),
+            Err(AuthorizeError::Deny { error, description }) => {
+                oauth_error(StatusCode::BAD_REQUEST, error, &description)
+            }
+        },
+    )
+}
+
+async fn password_login(
+    State(state): State<AppState>,
+    Query(params): Query<AuthorizeParams>,
+    Form(body): Form<PasswordLogin>,
+) -> Response {
+    let pending = match state.provider.validate_authorize(&authorize_query(&params)) {
+        Ok(pending) => pending,
+        Err(AuthorizeError::Redirect {
+            uri,
+            error,
+            description,
+            state,
+        }) => {
+            return password_private(redirect_with_error(
+                &uri,
+                error,
+                &description,
+                state.as_deref(),
+            ));
+        }
+        Err(AuthorizeError::Deny { error, description }) => {
+            return password_private(oauth_error(StatusCode::BAD_REQUEST, error, &description));
+        }
+    };
+    let response = match state
+        .store
+        .verify_password(&body.email, body.password)
+        .await
+    {
+        Ok(Some(xid)) => match state.provider.issue_code(&pending, xid) {
+            Ok(code) => redirect_with_code(&pending.redirect_uri, &code, pending.state.as_deref()),
+            Err(error) => token_error(error, false),
+        },
+        Ok(None) => (StatusCode::UNAUTHORIZED, "Email or password is incorrect.").into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    password_private(response)
 }
 
 async fn account_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -2390,10 +2579,9 @@ mod tests {
         assert_eq!(devices[0].kind, "passkey");
         assert_ne!(devices[0].id, original_device_id);
 
-        let mut challenge = identikey_auth::Challenge::from_bytes(
-            &test_provider().issue_challenge().unwrap(),
-        )
-        .unwrap();
+        let mut challenge =
+            identikey_auth::Challenge::from_bytes(&test_provider().issue_challenge().unwrap())
+                .unwrap();
         // Managed signing expects the verifier's Edge XID as its audience.
         challenge.audience = Xid::from_bytes([0xab; 32]).to_string();
         let challenge = challenge.to_bytes();
@@ -3726,6 +3914,379 @@ mod tests {
             .unwrap();
         let err: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
         assert_eq!(err["error"], "invalid_grant");
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn password_credential_code_pkce_same_xid_and_no_signing(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::Request;
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+        use tower::ServiceExt;
+        let store = KeysStore::from_pool(pool);
+        let hub = ceremonies::CeremonyHub::from_config(&test_webauthn());
+        let xid = register_hybrid_hint_test_passkey(&store, &hub).await;
+        assert_eq!(store.list_passkeys(xid).await.unwrap()[0].xid, xid);
+        let token = store
+            .begin_email_magic_link(xid, "login@example.test")
+            .await
+            .unwrap();
+        store.redeem_email_magic_link(&token).await.unwrap();
+        let accounts = Arc::new(account::AccountSessions::default());
+        let cookie = format!("identikey_account={}", accounts.issue(xid).unwrap());
+        let provider = test_provider();
+        let app = router(
+            store.clone(),
+            provider.clone(),
+            false,
+            test_webauthn(),
+            accounts,
+        );
+        async fn form(
+            app: &Router,
+            path: &str,
+            content: &str,
+            cookie: Option<&str>,
+            origin: &str,
+        ) -> Response {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::ORIGIN, origin);
+            if let Some(cookie) = cookie {
+                request = request.header(header::COOKIE, cookie);
+            }
+            app.clone()
+                .oneshot(request.body(Body::from(content.to_owned())).unwrap())
+                .await
+                .unwrap()
+        }
+        let origin = "http://127.0.0.1:8080";
+        assert_eq!(
+            form(&app, "/account/password", "password=correct", None, origin)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            form(
+                &app,
+                "/account/password",
+                "password=correct",
+                Some(&cookie),
+                "https://evil.example"
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        let attach = form(
+            &app,
+            "/account/password",
+            "password=correct",
+            Some(&cookie),
+            origin,
+        )
+        .await;
+        assert_eq!(attach.status(), StatusCode::SEE_OTHER);
+        let id = store
+            .list_devices(xid)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.kind == "password")
+            .unwrap()
+            .id;
+        let page = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/account/password")
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.status(), StatusCode::OK);
+        let page = String::from_utf8(
+            body::to_bytes(page.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(page.contains(&format!("/account/devices/{id}/revoke")));
+        assert!(!page.contains("$argon2"));
+        let path = format!(
+            "/authorize/password?{}&scope=openid&state=password-state",
+            authorize_qs(&s256_challenge(VERIFIER))
+        );
+        for (email, password) in [
+            ("login%40example.test", "wrong"),
+            ("unknown%40example.test", "correct"),
+        ] {
+            assert_eq!(
+                form(
+                    &app,
+                    &path,
+                    &format!("email={email}&password={password}"),
+                    None,
+                    origin
+                )
+                .await
+                .status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        let response = form(
+            &app,
+            &path,
+            "email=login%40example.test&password=correct",
+            None,
+            origin,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert!(response.headers().get(header::SET_COOKIE).is_none());
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let redirect =
+            url::Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        assert!(
+            redirect
+                .query_pairs()
+                .any(|(k, v)| k == "state" && v == "password-state")
+        );
+        let code = redirect
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .unwrap()
+            .1
+            .into_owned();
+        let token_form = format!(
+            "grant_type=authorization_code&client_id=smoke&redirect_uri=http://127.0.0.1:9999/cb&code={code}&code_verifier={VERIFIER}"
+        );
+        let bad = token_form.replace(VERIFIER, &"z".repeat(43));
+        assert_eq!(
+            form(&app, "/token", &bad, None, origin).await.status(),
+            StatusCode::BAD_REQUEST
+        );
+        // An invalid verifier consumes the code; obtain another through password login.
+        let response = form(
+            &app,
+            &path,
+            "email=login%40example.test&password=correct",
+            None,
+            origin,
+        )
+        .await;
+        let redirect =
+            url::Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        let code = redirect
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .unwrap()
+            .1
+            .into_owned();
+        let token_form = format!(
+            "grant_type=authorization_code&client_id=smoke&redirect_uri=http://127.0.0.1:9999/cb&code={code}&code_verifier={VERIFIER}"
+        );
+        let response = form(&app, "/token", &token_form, None, origin).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let issued: serde_json::Value = serde_json::from_slice(
+            &body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(
+            &B64.decode(
+                issued["id_token"]
+                    .as_str()
+                    .unwrap()
+                    .split('.')
+                    .nth(1)
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let expected = identikey_oidc::subject(
+            &PairwiseSalt::from_hex(&"ab".repeat(32)).unwrap(),
+            xid,
+            &Client::new("smoke", "127.0.0.1").with_redirect("http://127.0.0.1:9999/cb"),
+        )
+        .unwrap();
+        assert_eq!(claims["sub"], expected);
+        // Public-subject clients receive this account's raw XID, as with a passkey.
+        provider.register(
+            Client::new("public-password", "127.0.0.1")
+                .with_redirect("http://127.0.0.1:9999/cb")
+                .with_subject_type(SubjectType::Public),
+        );
+        let public_path = path.replace("client_id=smoke", "client_id=public-password");
+        let response = form(
+            &app,
+            &public_path,
+            "email=login%40example.test&password=correct",
+            None,
+            origin,
+        )
+        .await;
+        let redirect =
+            url::Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        let code = redirect
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .unwrap()
+            .1
+            .into_owned();
+        let public_form = format!(
+            "grant_type=authorization_code&client_id=public-password&redirect_uri=http://127.0.0.1:9999/cb&code={code}&code_verifier={VERIFIER}"
+        );
+        let response = form(&app, "/token", &public_form, None, origin).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let public_tokens: serde_json::Value = serde_json::from_slice(
+            &body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let public_claims: serde_json::Value = serde_json::from_slice(
+            &B64.decode(
+                public_tokens["id_token"]
+                    .as_str()
+                    .unwrap()
+                    .split('.')
+                    .nth(1)
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(public_claims["sub"], xid.to_string());
+        assert_eq!(
+            form(&app, "/token", &token_form, None, origin)
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(form(&app, "/token", "grant_type=password&client_id=smoke&username=login%40example.test&password=correct", None, origin).await.status(), StatusCode::BAD_REQUEST);
+        let missing_pkce = form(&app, "/authorize/password?response_type=code&client_id=smoke&redirect_uri=http://127.0.0.1:9999/cb", "email=login%40example.test&password=correct", None, origin).await;
+        assert!(
+            !missing_pkce
+                .headers()
+                .get(header::LOCATION)
+                .is_some_and(|v| v.to_str().unwrap().contains("code="))
+        );
+        let unknown_client = path.replace("client_id=smoke", "client_id=unknown");
+        assert_eq!(
+            form(
+                &app,
+                &unknown_client,
+                "email=login%40example.test&password=correct",
+                None,
+                origin
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+        let evil_redirect = path.replace("http://127.0.0.1:9999/cb", "https://evil.example/cb");
+        assert_eq!(
+            form(
+                &app,
+                &evil_redirect,
+                "email=login%40example.test&password=correct",
+                None,
+                origin
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        // A valid Challenge and password/token still cannot enter signing at A0.
+        let mut challenge =
+            identikey_auth::Challenge::from_bytes(&provider.issue_challenge().unwrap()).unwrap();
+        challenge.audience = Xid::from_bytes([0xab; 32]).to_string();
+        let begin = serde_json::json!({
+            "xid": xid.to_string(), "challenge": B64.encode(challenge.to_bytes()),
+            "verifier_commitment": B64.encode(identikey_keys::verifier_commitment("password verifier")),
+            "proof": "password",
+            "session_public_key": {"alg": "ed25519", "key": B64.encode([0x11;32])},
+            "operation": ["vms", "stop"], "resource": ["vm", "A"], "channel": B64.encode([0x22;32])
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/managed-challenge/begin")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", issued["access_token"].as_str().unwrap()),
+                    )
+                    .body(Body::from(begin.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        for path in [
+            "/managed-challenge/finish/a3",
+            "/managed-challenge/finish/a4",
+        ] {
+            let response = app.clone().oneshot(Request::builder().method("POST").uri(path)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {}", issued["access_token"].as_str().unwrap()))
+                .body(Body::from(serde_json::json!({"request_id": uuid::Uuid::new_v4(), "password": "correct"}).to_string())).unwrap()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        let consents: i64 = sqlx::query_scalar("SELECT count(*) FROM consent_log WHERE xid = $1")
+            .bind(xid.as_bytes().as_slice())
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(consents, 0);
+        assert_eq!(
+            form(
+                &app,
+                &format!("/account/devices/{id}/revoke"),
+                "",
+                Some(&cookie),
+                origin
+            )
+            .await
+            .status(),
+            StatusCode::SEE_OTHER
+        );
+        assert_eq!(
+            form(
+                &app,
+                &path,
+                "email=login%40example.test&password=correct",
+                None,
+                origin
+            )
+            .await
+            .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(
+            !store
+                .list_devices(xid)
+                .await
+                .unwrap()
+                .iter()
+                .any(|row| row.id == id)
+        );
+        let accounts: i64 = sqlx::query_scalar("SELECT count(*) FROM accounts")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(accounts, 1);
     }
 
     fn authorize_qs(challenge: &str) -> String {
