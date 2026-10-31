@@ -1,20 +1,28 @@
 # add-passkey-signal-api
 
-> **PENDING**
+> **ACTIVE BUILD**
 
-Bead `identikey-core-5gh.6`, extracted from `identikey-core-5gh.3`.
+Bead `identikey-core-5gh.3`. Passkey add, rename, and
+`revoke_device` are `identikey-core-5gh.6`, not this change.
 Depends on the passkey ceremonies and hosted pages already in the
-living spec. Preparation 2026-10-28: `openspec/specs/passkeys/spec.md`
-names this slice as later work. `finish_assert` returns
+living spec. Preparation 2026-10-30: `openspec/specs/passkeys/spec.md`
+still names this slice as later work. `finish_assert` returns
 `FinishedAssertion` and the login page reads only `redirect`
-(`json_redirect`). Unknown credentials already fail as
+(`json_redirect`). Unknown credentials still fail as
 `credential not found` (`CeremonyError::UnknownCredential`).
-`pages-login.js` already shows "Try another passkey" for that
+`pages-login.js` still shows "Try another passkey" for that
 message. Signup and device approval are the other success pages.
-No passkey-removal route exists. WebAuthn `user.id` is
-`xid_user_id` (UUID v5). Outcome: new contract. Authority: none.
-The post-quantum campaign grant does not cover this node.
-Activation stays off.
+Passkey removal is `revoke_device` on the `kind = passkey`
+credentials row, owned by `identikey-core-5gh.6`. WebAuthn `user.id` is
+`xid_user_id` (UUID v5). Outcome: revised. Amended 2026-10-30 after
+`reviews/2026-10-30-advise.md` (send-back, `opus-arch-review`):
+encodings are unpadded base64url, an empty list is not signaled,
+the call cannot hang navigation, a foreign XID is a different
+error, and `localhost` does not call `signalUnknownCredential`.
+Authority: the account-keys first-wave grant on
+`identikey-core-zlf` ("activate first wave"). It covers this node
+and does not include act. It supersedes the 2026-10-28 note that
+the post-quantum grant left activation off.
 
 ## Why
 
@@ -70,9 +78,11 @@ redirects, navigates, or shows "Approved" exactly as it does now.
 ## Out of scope
 
 - `signalCurrentUserDetails`. No surface renames `user.name`.
-- Signaling after a passkey is removed. No removal control exists.
-- Synced-passkey counter policy (`identikey-core-5gh.4`). A counter
-  that does not increase still fails closed in `finish_assert`.
+- Signaling after a passkey is removed. Removal is
+  `identikey-core-5gh.6` (`revoke_device` on the passkey row).
+- Synced-passkey counter policy (`identikey-core-5gh.4`,
+  `add-passkey-counter-policy`). This change does not edit the
+  counter checks.
 - Whether a provider actually drops the passkey. The owed check is
   the page call and an unchanged ceremony result.
 - Passkey login, the URN grant, and classical OIDC token signatures.
