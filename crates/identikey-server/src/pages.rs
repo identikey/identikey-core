@@ -160,11 +160,32 @@ pub struct AccountPasskey {
     pub used_here: bool,
 }
 
+/// Public information only; private custody material never enters the renderer.
+pub enum AccountManagedKey {
+    Ed25519(String),
+    LegacySchnorr,
+    Unavailable,
+}
+
 #[must_use]
-pub fn account(xid: &str, rung: &str, passkeys: &[AccountPasskey]) -> String {
+pub fn account(
+    xid: &str,
+    rung: &str,
+    managed_key: &AccountManagedKey,
+    passkeys: &[AccountPasskey],
+) -> String {
     let xid = html_escape(xid);
     let rung = html_escape(rung);
     let passkeys = render_passkeys(passkeys);
+    let managed_key = match managed_key {
+        AccountManagedKey::Ed25519(public) => format!(
+            "<p>Held by IdentiKey</p><p>Ed25519 operational public key (base64url): <code>{}</code></p>",
+            html_escape(public)
+        ),
+        AccountManagedKey::LegacySchnorr =>
+            "<p>Held by IdentiKey</p><p>This legacy Schnorr operational key is not usable for the responder.</p>".to_owned(),
+        AccountManagedKey::Unavailable => "<p>No operational public key available.</p>".to_owned(),
+    };
     shell(
         "Your account — IdentiKey",
         &format!(
@@ -175,6 +196,9 @@ pub fn account(xid: &str, rung: &str, passkeys: &[AccountPasskey]) -> String {
              <dt>Custody</dt><dd>{rung}</dd>\
              <dt>Passkeys</dt><dd>{passkeys}</dd>\
              </dl>\
+             <section aria-labelledby=\"managed-key-title\">\
+             <h2 id=\"managed-key-title\">Operational key</h2>\
+             {managed_key}</section>\
              <p>Keep the passkey. Creating another account will not restore this one.</p>\
              <p><a href=\"/signup\">Create a different account</a></p>"
         ),
@@ -308,10 +332,31 @@ mod tests {
     }
 
     #[test]
+    fn managed_key_visibility_escapes_public_text_and_handles_absence() {
+        let html = account(
+            "xid",
+            "Managed (C2)",
+            &AccountManagedKey::Ed25519("<key>&".into()),
+            &[],
+        );
+        assert!(html.contains("&lt;key&gt;&amp;"));
+        assert!(!html.contains("<key>"));
+        let absent = account(
+            "xid",
+            "Self-custody (C3)",
+            &AccountManagedKey::Unavailable,
+            &[],
+        );
+        assert!(absent.contains("No operational public key available."));
+        assert!(!absent.contains("Held by IdentiKey"));
+    }
+
+    #[test]
     fn account_page_shows_xid_and_not_a_sub() {
         let html = account(
             "abc123",
             "Managed (C2)",
+            &AccountManagedKey::Unavailable,
             &[AccountPasskey {
                 nickname: None,
                 provider_name: None,
@@ -372,6 +417,7 @@ mod tests {
         let html = account(
             "abc123",
             "Managed (C2)",
+            &AccountManagedKey::Unavailable,
             &[AccountPasskey {
                 nickname: Some("  Work <key>  ".into()),
                 provider_name: Some("Provider <ignored>".into()),
@@ -394,6 +440,7 @@ mod tests {
         let html = account(
             "abc123",
             "Managed (C2)",
+            &AccountManagedKey::Unavailable,
             &[AccountPasskey {
                 nickname: None,
                 provider_name: None,
@@ -417,6 +464,7 @@ mod tests {
             let html = account(
                 "abc123",
                 "Managed (C2)",
+                &AccountManagedKey::Unavailable,
                 &[AccountPasskey {
                     nickname: None,
                     provider_name: None,
@@ -437,6 +485,7 @@ mod tests {
         let html = account(
             "abc123",
             "Managed (C2)",
+            &AccountManagedKey::Unavailable,
             &[AccountPasskey {
                 nickname: None,
                 provider_name: Some("Provider <unsafe> & friends".into()),

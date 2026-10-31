@@ -672,6 +672,29 @@ async fn account_page(State(state): State<AppState>, headers: HeaderMap) -> Resp
             .collect::<Vec<_>>(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    // Read public document material only. Never load or unseal the custody blob.
+    let managed_key = if custody.rung.holds_managed_key() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        match operational_ed25519_public(&custody.document) {
+            Ok(public) => pages::AccountManagedKey::Ed25519(URL_SAFE_NO_PAD.encode(public)),
+            Err(_)
+                if identikey_keys::is_c2(&custody.document)
+                    && identikey_keys::held_publics(&custody.document)
+                        .iter()
+                        .any(|public| {
+                            matches!(
+                                public.signing_public_key(),
+                                bc_components::SigningPublicKey::Schnorr(_)
+                            )
+                        }) =>
+            {
+                pages::AccountManagedKey::LegacySchnorr
+            }
+            Err(_) => pages::AccountManagedKey::Unavailable,
+        }
+    } else {
+        pages::AccountManagedKey::Unavailable
+    };
     let rung = match custody.rung {
         CustodyRung::C0 => "Placeholder (C0)",
         CustodyRung::C1 => "Managed (C1)",
@@ -682,7 +705,7 @@ async fn account_page(State(state): State<AppState>, headers: HeaderMap) -> Resp
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        pages::account(&xid.to_string(), rung, &passkeys),
+        pages::account(&xid.to_string(), rung, &managed_key, &passkeys),
     )
         .into_response()
 }
@@ -1679,6 +1702,96 @@ async fn main() -> Result<(), BoxError> {
 mod tests {
     use super::*;
     use identikey_oidc::{Client, s256_challenge};
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn managed_key_visibility_authenticated_public_only_and_legacy(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use axum::http::Request;
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use tower::ServiceExt;
+
+        let store = KeysStore::from_pool(pool);
+        let sessions = Arc::new(account::AccountSessions::default());
+        let app = test_router_with_accounts(store.clone(), sessions.clone());
+        let operational = OperationalEd25519::generate();
+        let public_doc = c2_native(&PrivateKeyBase::new(), operational.public_keys()).unwrap();
+        let public = URL_SAFE_NO_PAD.encode(operational_ed25519_public(&public_doc).unwrap());
+        let legacy_doc = c2_native(&PrivateKeyBase::new(), &PrivateKeyBase::new()).unwrap();
+        let seed = URL_SAFE_NO_PAD.encode(operational.seed());
+        let blob_marker = b"PRIVATE_CUSTODY_BLOB_MUST_NOT_APPEAR";
+        for (doc, legacy) in [(public_doc, false), (legacy_doc, true)] {
+            let xid = store
+                .create_managed(CustodyRung::C2, &doc, blob_marker)
+                .await
+                .unwrap();
+            store
+                .insert_passkey(xid, &[if legacy { 0xAC } else { 0xAA }; 16], &[0xBB; 8], 0)
+                .await
+                .unwrap();
+            let token = sessions.issue(xid).unwrap();
+            for cookie in [
+                None,
+                Some("identikey_account=invalid".to_owned()),
+                Some(format!("identikey_account={token}")),
+            ] {
+                let signed_in =
+                    cookie.as_deref() == Some(format!("identikey_account={token}").as_str());
+                let mut request = Request::builder().uri("/account");
+                if let Some(cookie) = cookie {
+                    request = request.header(header::COOKIE, cookie);
+                }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    if signed_in {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::UNAUTHORIZED
+                    }
+                );
+                let html = String::from_utf8(
+                    body::to_bytes(response.into_body(), usize::MAX)
+                        .await
+                        .unwrap()
+                        .to_vec(),
+                )
+                .unwrap();
+                assert!(!html.contains(std::str::from_utf8(blob_marker).unwrap()));
+                assert!(!html.contains(&URL_SAFE_NO_PAD.encode(blob_marker)));
+                assert!(!html.contains("managed_key_blob"));
+                assert!(!html.contains(&seed));
+                if signed_in {
+                    assert!(html.contains("Held by IdentiKey"));
+                    assert!(html.contains("<ul class=\"passkeys\"><li class=\"passkey\">"));
+                    let section = html
+                        .split("<section aria-labelledby=\"managed-key-title\">")
+                        .nth(1)
+                        .unwrap()
+                        .split("</section>")
+                        .next()
+                        .unwrap();
+                    assert!(!section.contains("<li"));
+                    assert!(!section.contains("<button"));
+                    assert!(!section.contains("<a "));
+                    assert!(!section.contains("<form"));
+                    assert_eq!(section.contains("not usable for the responder"), legacy);
+                    assert_eq!(section.contains(&public), !legacy);
+                    assert_eq!(
+                        section.contains("Ed25519 operational public key (base64url)"),
+                        !legacy
+                    );
+                } else {
+                    assert!(!html.contains(&public));
+                    assert!(!html.contains("Held by IdentiKey"));
+                    assert!(!html.contains("managed-key-title"));
+                }
+            }
+        }
+    }
 
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
     async fn email_magic_link_requires_session_and_redeems_without_cookie(pool: sqlx::PgPool) {
