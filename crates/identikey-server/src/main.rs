@@ -128,6 +128,8 @@ fn router_with_keyring(
         )
         .route("/signup", get(signup_page).post(signup))
         .route("/account", get(account_page))
+        .route("/account/passkeys/{id}/nickname", post(passkey_nickname))
+        .route("/account/passkeys/{id}/revoke", post(passkey_revoke))
         .route("/account/email/begin", post(email_link::begin))
         .route("/account/email/redeem", get(email_link::redeem))
         .route("/account/encapsulation/begin", post(encapsulation::begin))
@@ -457,7 +459,11 @@ fn request_cookies(headers: &HeaderMap) -> Option<&str> {
 }
 
 /// Record a passkey that just succeeded in this browser. Hint only.
-fn device_passkey_cookie(state: &AppState, headers: &HeaderMap, credential_id: &[u8]) -> HeaderValue {
+fn device_passkey_cookie(
+    state: &AppState,
+    headers: &HeaderMap,
+    credential_id: &[u8],
+) -> HeaderValue {
     let existing = device_passkeys::parse(request_cookies(headers));
     let ids = device_passkeys::remember(&existing, credential_id);
     device_passkeys::set_cookie(&ids, cookie_secure(state))
@@ -576,6 +582,9 @@ async fn register_finish(
     let Ok(xid) = Xid::parse(&body.xid) else {
         return ceremony_http(ceremonies::CeremonyError::UnknownAccount);
     };
+    if signed_in_xid(&state, &headers) != Some(xid) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     match state
         .ceremonies
         .finish_register(
@@ -615,6 +624,76 @@ async fn register_finish(
     }
 }
 
+#[derive(Deserialize)]
+struct PasskeyNickname {
+    nickname: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PasskeyRevoke {
+    #[serde(default)]
+    confirm_last_access: bool,
+}
+
+fn account_store_error(error: identikey_keys::StoreError) -> Response {
+    match error {
+        identikey_keys::StoreError::NotFound => StatusCode::NOT_FOUND.into_response(),
+        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn passkey_nickname(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<uuid::Uuid>,
+    Json(body): Json<PasskeyNickname>,
+) -> Response {
+    let Some(xid) = signed_in_xid(&state, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match state
+        .store
+        .rename_passkey(xid, id, body.nickname.as_deref())
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => account_store_error(error),
+    }
+}
+
+async fn passkey_revoke(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<uuid::Uuid>,
+    Json(body): Json<PasskeyRevoke>,
+) -> Response {
+    let Some(xid) = signed_in_xid(&state, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    // This surface manages passkeys only; the shared operation supports all
+    // account-access kinds for their respective callers.
+    match state.store.list_devices(xid).await {
+        Ok(rows) if rows.iter().any(|row| row.id == id && row.kind == "passkey") => {}
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => return account_store_error(error),
+    }
+    match state
+        .store
+        .revoke_account_access(xid, id, body.confirm_last_access)
+        .await
+    {
+        Ok(identikey_keys::AccountAccessRevocation::Revoked) => {
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(identikey_keys::AccountAccessRevocation::LastAccessConfirmationRequired) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "last_access_confirmation_required"})),
+        )
+            .into_response(),
+        Err(error) => account_store_error(error),
+    }
+}
+
 async fn account_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let cookie = headers
         .get(header::COOKIE)
@@ -648,25 +727,19 @@ async fn account_page(State(state): State<AppState>, headers: HeaderMap) -> Resp
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     let used_here = device_passkeys::parse(request_cookies(&headers));
-    let passkey_ids = match state.store.list_passkeys(xid).await {
-        Ok(rows) => rows,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
     let passkeys = match state.store.list_passkey_presentations(xid).await {
         Ok(rows) => rows
             .into_iter()
-            .enumerate()
-            .map(|(index, row)| {
+            .map(|row| {
                 let metadata = row.aaguid.as_ref().and_then(passkey_metadata::resolve);
-                let credential_id = passkey_ids.get(index).map(|row| &row.credential_id);
                 pages::AccountPasskey {
+                    id: row.id.to_string(),
                     nickname: row.nickname,
                     provider_name: metadata.as_ref().map(|entry| entry.name.clone()),
                     icon: metadata.and_then(|entry| entry.icon),
                     backed_up: row.backed_up,
                     last_used: row.last_used_at.map(|value| value.date().to_string()),
-                    used_here: credential_id
-                        .is_some_and(|id| used_here.iter().any(|stored| stored == id)),
+                    used_here: used_here.iter().any(|stored| stored == &row.credential_id),
                 }
             })
             .collect::<Vec<_>>(),
@@ -1703,6 +1776,245 @@ mod tests {
     use super::*;
     use identikey_oidc::{Client, s256_challenge};
 
+    async fn passkey_account_mgmt_post(
+        app: &Router,
+        path: &str,
+        cookie: Option<&str>,
+        body: serde_json::Value,
+    ) -> Response {
+        use axum::body::Body;
+        use tower::ServiceExt;
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(cookie) = cookie {
+            request = request.header(header::COOKIE, cookie);
+        }
+        app.clone()
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn passkey_account_mgmt_add_rename_revoke_and_remaining_login(pool: sqlx::PgPool) {
+        use axum::body::{self, Body};
+        use tower::ServiceExt;
+        use webauthn_authenticator_rs::{prelude::WebauthnAuthenticator, softpasskey::SoftPasskey};
+        use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse};
+        let store = KeysStore::from_pool(pool);
+        let operational = OperationalEd25519::generate();
+        let doc = c2_native(&PrivateKeyBase::new(), operational.public_keys()).unwrap();
+        let xid = store
+            .create_managed(CustodyRung::C2, &doc, b"private-blob")
+            .await
+            .unwrap();
+        let foreign_doc = c2_native(&PrivateKeyBase::new(), &PrivateKeyBase::new()).unwrap();
+        let other = store
+            .create_managed(CustodyRung::C2, &foreign_doc, b"other-blob")
+            .await
+            .unwrap();
+        let sessions = Arc::new(account::AccountSessions::default());
+        let cookie = format!("identikey_account={}", sessions.issue(xid).unwrap());
+        let foreign_cookie = format!("identikey_account={}", sessions.issue(other).unwrap());
+        let app = test_router_with_accounts(store.clone(), sessions);
+        let origin = url::Url::parse("https://auth.identikey.me").unwrap();
+        let mut authenticators = [
+            WebauthnAuthenticator::new(SoftPasskey::new(true)),
+            WebauthnAuthenticator::new(SoftPasskey::new(true)),
+        ];
+        for authenticator in &mut authenticators {
+            let begin_body = serde_json::json!({"xid": xid.to_string()});
+            for denied_cookie in [None, Some(foreign_cookie.as_str())] {
+                assert_eq!(
+                    passkey_account_mgmt_post(
+                        &app,
+                        "/webauthn/register/begin",
+                        denied_cookie,
+                        begin_body.clone()
+                    )
+                    .await
+                    .status(),
+                    StatusCode::FORBIDDEN
+                );
+            }
+            let begin = passkey_account_mgmt_post(
+                &app,
+                "/webauthn/register/begin",
+                Some(&cookie),
+                begin_body,
+            )
+            .await;
+            let (status, begin) = signal_json(begin).await;
+            assert_eq!(status, StatusCode::OK);
+            let mut options = begin["publicKey"].clone();
+            options["authenticatorSelection"]["residentKey"] = "discouraged".into();
+            options["authenticatorSelection"]["requireResidentKey"] = false.into();
+            let credential = authenticator
+                .do_registration(
+                    origin.clone(),
+                    CreationChallengeResponse {
+                        public_key: serde_json::from_value(options).unwrap(),
+                    },
+                )
+                .unwrap();
+            let finish_body = serde_json::json!({"session": begin["session"], "xid": xid.to_string(), "credential": credential});
+            for denied_cookie in [None, Some(foreign_cookie.as_str())] {
+                assert_eq!(
+                    passkey_account_mgmt_post(
+                        &app,
+                        "/webauthn/register/finish",
+                        denied_cookie,
+                        finish_body.clone()
+                    )
+                    .await
+                    .status(),
+                    StatusCode::FORBIDDEN
+                );
+            }
+            assert_eq!(
+                passkey_account_mgmt_post(
+                    &app,
+                    "/webauthn/register/finish",
+                    Some(&cookie),
+                    finish_body
+                )
+                .await
+                .status(),
+                StatusCode::OK
+            );
+        }
+        let devices = store.list_devices(xid).await.unwrap();
+        assert_eq!(devices.len(), 2);
+        let first = devices[0].id;
+        let second = devices[1].id;
+        for (suffix, body) in [
+            ("nickname", serde_json::json!({"nickname": "stolen"})),
+            ("revoke", serde_json::json!({"confirm_last_access": true})),
+        ] {
+            let path = format!("/account/passkeys/{first}/{suffix}");
+            assert_eq!(
+                passkey_account_mgmt_post(&app, &path, None, body.clone())
+                    .await
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(
+                passkey_account_mgmt_post(&app, &path, Some(&foreign_cookie), body)
+                    .await
+                    .status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+        for nickname in [" Home <key> ", " Work <key> "] {
+            assert_eq!(
+                passkey_account_mgmt_post(
+                    &app,
+                    &format!("/account/passkeys/{second}/nickname"),
+                    Some(&cookie),
+                    serde_json::json!({"nickname": nickname})
+                )
+                .await
+                .status(),
+                StatusCode::NO_CONTENT
+            );
+        }
+        let page = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/account")
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.status(), StatusCode::OK);
+        let html = String::from_utf8(
+            body::to_bytes(page.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains("Work &lt;key&gt;"));
+        assert!(html.contains(&format!("data-passkey-id=\"{second}\"")));
+        assert!(html.contains("Add a passkey"));
+        let managed_section = html
+            .split("<section aria-labelledby=\"managed-key-title\">")
+            .nth(1)
+            .unwrap()
+            .split("</section>")
+            .next()
+            .unwrap();
+        assert!(managed_section.contains("Held by IdentiKey"));
+        assert!(!managed_section.contains("button"));
+        assert!(!html.contains("private-blob"));
+        assert_eq!(
+            passkey_account_mgmt_post(
+                &app,
+                &format!("/account/passkeys/{first}/revoke"),
+                Some(&cookie),
+                serde_json::json!({})
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(store.list_devices(xid).await.unwrap()[0].id, second);
+        let hub = ceremonies::CeremonyHub::from_config(&test_webauthn());
+        let (session, options) = hub.begin_assert(&store, Some(xid), None).await.unwrap();
+        let assertion = authenticators[1]
+            .do_authentication(
+                origin,
+                RequestChallengeResponse {
+                    public_key: serde_json::from_value(options).unwrap(),
+                    mediation: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            hub.finish_assert(&store, &session, assertion)
+                .await
+                .unwrap()
+                .xid,
+            xid
+        );
+        let last_path = format!("/account/passkeys/{second}/revoke");
+        let response =
+            passkey_account_mgmt_post(&app, &last_path, Some(&cookie), serde_json::json!({})).await;
+        let (status, body) = signal_json(response).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "last_access_confirmation_required");
+        assert_eq!(store.list_devices(xid).await.unwrap().len(), 1);
+        assert_eq!(
+            passkey_account_mgmt_post(
+                &app,
+                &last_path,
+                Some(&cookie),
+                serde_json::json!({"confirm_last_access": true})
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert!(store.list_devices(xid).await.unwrap().is_empty());
+        let recovery_links: i64 = sqlx::query_scalar("SELECT count(*) FROM email_magic_links")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(recovery_links, 0);
+        let blob: Vec<u8> =
+            sqlx::query_scalar("SELECT managed_key_blob FROM custody_records WHERE xid = $1")
+                .bind(xid.as_bytes().as_slice())
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(blob, b"private-blob");
+    }
+
     #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
     async fn managed_key_visibility_authenticated_public_only_and_legacy(pool: sqlx::PgPool) {
         use axum::body::{self, Body};
@@ -1766,7 +2078,7 @@ mod tests {
                 assert!(!html.contains(&seed));
                 if signed_in {
                     assert!(html.contains("Held by IdentiKey"));
-                    assert!(html.contains("<ul class=\"passkeys\"><li class=\"passkey\">"));
+                    assert!(html.contains("<ul class=\"passkeys\"><li class=\"passkey\" data-passkey-id="));
                     let section = html
                         .split("<section aria-labelledby=\"managed-key-title\">")
                         .nth(1)
@@ -2027,7 +2339,7 @@ mod tests {
             ids.push(serde_json::to_value(&credential).unwrap()["id"].clone());
             let (status, result) = signal_json(register_finish(
                 State(state.clone()),
-                HeaderMap::new(),
+                HeaderMap::from_iter([(header::COOKIE, format!("identikey_account={}", state.accounts.issue(xid).unwrap()).parse().unwrap())]),
                 Json(
                     serde_json::from_value(serde_json::json!({ "session": begin["session"], "xid": xid.to_string(), "credential": credential })).unwrap(),
                 ),
@@ -4121,6 +4433,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/webauthn/register/finish")
+                    .header(header::COOKIE, &cookie)
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(format!(
                         r#"{{"session":"{session}","xid":"{xid}","credential":{{"id":"x","rawId":"AA","type":"public-key","response":{{"clientDataJSON":"e30","attestationObject":"AA"}}}}}}"#
@@ -4252,6 +4565,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/webauthn/register/finish")
+                    .header(header::COOKIE, &cookie)
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::json!({

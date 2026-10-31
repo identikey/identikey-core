@@ -33,6 +33,7 @@ pub fn json_for_script(raw: &str) -> String {
 const PAGES_CSS: &str = include_str!("pages.css");
 const COMMON_JS: &str = include_str!("pages-common.js");
 const LOGIN_JS: &str = include_str!("pages-login.js");
+const ACCOUNT_JS: &str = include_str!("pages-account.js");
 const SIGNUP_JS: &str = include_str!("pages-signup.js");
 const DEVICE_JS: &str = include_str!("pages-device.js");
 
@@ -152,6 +153,7 @@ pub fn signup() -> String {
 /// Signed-in first-party account page after hosted signup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountPasskey {
+    pub id: String,
     pub nickname: Option<String>,
     pub provider_name: Option<String>,
     pub icon: Option<String>,
@@ -174,6 +176,7 @@ pub fn account(
     managed_key: &AccountManagedKey,
     passkeys: &[AccountPasskey],
 ) -> String {
+    let account_json = json_for_script(&serde_json::json!({"xid": xid}).to_string());
     let xid = html_escape(xid);
     let rung = html_escape(rung);
     let passkeys = render_passkeys(passkeys);
@@ -190,17 +193,27 @@ pub fn account(
         "Your account — IdentiKey",
         &format!(
             "<h1>Your IdentiKey</h1>\
-             <p>This is the account you just created. Use the passkey you saved to sign in to apps that use IdentiKey.</p>\
+             <p>Use your passkeys to sign in to apps that use IdentiKey.</p>\
              <dl class=\"facts\">\
              <dt>Account</dt><dd><code>{xid}</code></dd>\
              <dt>Custody</dt><dd>{rung}</dd>\
              <dt>Passkeys</dt><dd>{passkeys}</dd>\
              </dl>\
+             {LOCAL_NOTICE}{STATUS_PANEL}\
+             <button type=\"button\" id=\"go\">Add a passkey</button>\
+             <section id=\"last-access\" aria-labelledby=\"last-access-title\" hidden>\
+             <h2 id=\"last-access-title\">Remove your last way to sign in?</h2>\
+             <p>You will have no account login left. This does not start account recovery.</p>\
+             <button type=\"button\" id=\"confirm-last-access\">Revoke my last account login</button>\
+             <button type=\"button\" id=\"cancel-last-access\">Keep this passkey</button></section>\
              <section aria-labelledby=\"managed-key-title\">\
              <h2 id=\"managed-key-title\">Operational key</h2>\
              {managed_key}</section>\
              <p>Keep the passkey. Creating another account will not restore this one.</p>\
-             <p><a href=\"/signup\">Create a different account</a></p>"
+             <p><a href=\"/signup\">Create a different account</a></p>\
+             {TECHNICAL_DETAILS}\
+             <script type=\"application/json\" id=\"account-data\">{account_json}</script>\
+             <script>{COMMON_JS}\n{ACCOUNT_JS}</script>"
         ),
     )
 }
@@ -225,6 +238,8 @@ fn render_passkeys(passkeys: &[AccountPasskey]) -> String {
 }
 
 fn render_passkey(passkey: &AccountPasskey) -> String {
+    let id = html_escape(&passkey.id);
+    let nickname = html_escape(passkey.nickname.as_deref().unwrap_or(""));
     let label = passkey
         .nickname
         .as_deref()
@@ -251,8 +266,12 @@ fn render_passkey(passkey: &AccountPasskey) -> String {
         ""
     };
     format!(
-        "<li class=\"passkey\"><div class=\"passkey-name\">{icon}<span>{label}</span></div>\
-         <div class=\"passkey-meta\">{backup} · {last_used}{here}</div></li>"
+        "<li class=\"passkey\" data-passkey-id=\"{id}\"><div class=\"passkey-name\">{icon}<span>{label}</span></div>\
+         <div class=\"passkey-meta\">{backup} · {last_used}{here}</div>\
+         <form class=\"passkey-nickname\"><label>Nickname \
+         <input name=\"nickname\" value=\"{nickname}\"/></label>\
+         <button type=\"submit\">Save nickname</button></form>\
+         <button type=\"button\" class=\"revoke-passkey\">Revoke passkey</button></li>"
     )
 }
 
@@ -358,6 +377,7 @@ mod tests {
             "Managed (C2)",
             &AccountManagedKey::Unavailable,
             &[AccountPasskey {
+                id: "test-passkey".into(),
                 nickname: None,
                 provider_name: None,
                 icon: None,
@@ -419,6 +439,7 @@ mod tests {
             "Managed (C2)",
             &AccountManagedKey::Unavailable,
             &[AccountPasskey {
+                id: "test-passkey".into(),
                 nickname: Some("  Work <key>  ".into()),
                 provider_name: Some("Provider <ignored>".into()),
                 icon: Some("data:image/svg+xml;base64,PHN2Zy8+\" onerror=\"x".into()),
@@ -442,6 +463,7 @@ mod tests {
             "Managed (C2)",
             &AccountManagedKey::Unavailable,
             &[AccountPasskey {
+                id: "test-passkey".into(),
                 nickname: None,
                 provider_name: None,
                 icon: None,
@@ -466,6 +488,7 @@ mod tests {
                 "Managed (C2)",
                 &AccountManagedKey::Unavailable,
                 &[AccountPasskey {
+                    id: "test-passkey".into(),
                     nickname: None,
                     provider_name: None,
                     icon: None,
@@ -487,6 +510,7 @@ mod tests {
             "Managed (C2)",
             &AccountManagedKey::Unavailable,
             &[AccountPasskey {
+                id: "test-passkey".into(),
                 nickname: None,
                 provider_name: Some("Provider <unsafe> & friends".into()),
                 icon: None,

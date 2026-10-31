@@ -108,8 +108,8 @@ pub use privilege::{
 pub use resolve::{FetchedDocument, ResolutionTier, ResolveError, WinningDoc, resolve_documents};
 pub use rung::{AccessLevel, CustodyRung, ParseRungError};
 pub use store::{
-    ADD_DEVICE_ACTION, ConsentAppend, DeviceRecord, KeysStore, PublishedDocument, SshGitInsert,
-    StoreError, StoredAccount, StoredCustody, StoredPasskey,
+    ADD_DEVICE_ACTION, AccountAccessRevocation, ConsentAppend, DeviceRecord, KeysStore,
+    PublishedDocument, SshGitInsert, StoreError, StoredAccount, StoredCustody, StoredPasskey,
 };
 pub use xid::{Xid, XidError};
 

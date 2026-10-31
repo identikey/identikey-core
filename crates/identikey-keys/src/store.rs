@@ -104,10 +104,19 @@ pub struct StoredPasskey {
 /// Passkey fields safe to show in account-management UI. No key material.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PasskeyPresentation {
+    pub id: Uuid,
+    pub credential_id: Vec<u8>,
     pub aaguid: Option<[u8; 16]>,
     pub backed_up: Option<bool>,
     pub nickname: Option<String>,
     pub last_used_at: Option<OffsetDateTime>,
+}
+
+/// Result of an atomic account-access revocation decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountAccessRevocation {
+    Revoked,
+    LastAccessConfirmationRequired,
 }
 
 /// A credential listed as a device. No public keys, no trust flags.
@@ -120,9 +129,7 @@ pub struct DeviceRecord {
     pub last_used_at: Option<OffsetDateTime>,
 }
 
-fn presentation_from_row(
-    row: sqlx::postgres::PgRow,
-) -> Result<PasskeyPresentation, StoreError> {
+fn presentation_from_row(row: sqlx::postgres::PgRow) -> Result<PasskeyPresentation, StoreError> {
     use sqlx::Row;
 
     let raw: Option<Vec<u8>> = row.try_get("aaguid")?;
@@ -134,6 +141,8 @@ fn presentation_from_row(
         })
         .transpose()?;
     Ok(PasskeyPresentation {
+        id: row.try_get("id")?,
+        credential_id: row.try_get("webauthn_credential_id")?,
         aaguid,
         backed_up: row.try_get("backed_up")?,
         nickname: row.try_get("nickname")?,
@@ -660,7 +669,7 @@ impl KeysStore {
         webauthn_credential_id: &[u8],
     ) -> Result<Option<PasskeyPresentation>, StoreError> {
         let row = sqlx::query(
-            "SELECT aaguid, backed_up, nickname, last_used_at
+            "SELECT id, webauthn_credential_id, aaguid, backed_up, nickname, last_used_at
              FROM credentials
              WHERE webauthn_credential_id = $1
                AND kind = 'passkey'
@@ -702,7 +711,7 @@ impl KeysStore {
         xid: Xid,
     ) -> Result<Vec<PasskeyPresentation>, StoreError> {
         let rows = sqlx::query(
-            "SELECT aaguid, backed_up, nickname, last_used_at
+            "SELECT id, webauthn_credential_id, aaguid, backed_up, nickname, last_used_at
              FROM credentials
              WHERE xid = $1
                AND kind = 'passkey'
@@ -758,6 +767,86 @@ impl KeysStore {
                 last_used_at: rec.last_used_at,
             })
             .collect())
+    }
+
+    /// Rename only a live passkey belonging to this account.
+    pub async fn rename_passkey(
+        &self,
+        xid: Xid,
+        credential_id: Uuid,
+        nickname: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let nickname = nickname.map(str::trim).filter(|value| !value.is_empty());
+        let result = sqlx::query(
+            "UPDATE credentials SET nickname = $3
+             WHERE xid = $1 AND id = $2 AND kind = 'passkey' AND revoked_at IS NULL",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .bind(credential_id)
+        .bind(nickname)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::NotFound);
+        }
+        Ok(())
+    }
+
+    /// Revoke any credential, requiring explicit confirmation for the last login.
+    /// The custody lock serializes decisions for an XID, including concurrent
+    /// revokes of different rows. Keep custody → credential lock order shared
+    /// with managed signing and the unconditional `revoke_device` primitive.
+    pub async fn revoke_account_access(
+        &self,
+        xid: Xid,
+        credential_id: Uuid,
+        confirm_last_access: bool,
+    ) -> Result<AccountAccessRevocation, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let custody = sqlx::query("SELECT xid FROM custody_records WHERE xid = $1 FOR UPDATE")
+            .bind(xid.as_bytes().as_slice())
+            .fetch_optional(&mut *tx)
+            .await?;
+        if custody.is_none() {
+            return Err(StoreError::NotFound);
+        }
+        let (kind, revoked): (String, bool) = sqlx::query_as(
+            "SELECT kind, revoked_at IS NOT NULL FROM credentials
+             WHERE xid = $1 AND id = $2 FOR UPDATE",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .bind(credential_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(StoreError::NotFound)?;
+        if !revoked
+            && !confirm_last_access
+            && matches!(
+                kind.as_str(),
+                "passkey" | "oidc_apple" | "oidc_google" | "identikey_auth" | "password"
+            )
+        {
+            let surviving: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM credentials
+                 WHERE xid = $1 AND id <> $2 AND revoked_at IS NULL
+                 AND kind IN ('passkey', 'oidc_apple', 'oidc_google', 'identikey_auth', 'password'))",
+            )
+            .bind(xid.as_bytes().as_slice())
+            .bind(credential_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if !surviving {
+                tx.commit().await?;
+                return Ok(AccountAccessRevocation::LastAccessConfirmationRequired);
+            }
+        }
+        sqlx::query("UPDATE credentials SET revoked_at = COALESCE(revoked_at, now()) WHERE xid = $1 AND id = $2")
+            .bind(xid.as_bytes().as_slice())
+            .bind(credential_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(AccountAccessRevocation::Revoked)
     }
 
     /// Soft-revoke a credential. Idempotent if `revoked_at` is already set.
@@ -1714,6 +1803,146 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(id, Uuid::nil());
+    }
+
+    async fn passkey_account_mgmt_credential(store: &KeysStore, xid: Xid, kind: &str) -> Uuid {
+        match kind {
+            "passkey" => store.insert_passkey(xid, Uuid::new_v4().as_bytes(), b"public", 0).await.unwrap(),
+            "oidc_apple" | "oidc_google" => sqlx::query_scalar(
+                "INSERT INTO credentials (xid, kind, issuer, subject_at_issuer) VALUES ($1, $2, $3, $4) RETURNING id",
+            ).bind(xid.as_bytes().as_slice()).bind(kind).bind(kind).bind(Uuid::new_v4().to_string())
+                .fetch_one(store.pool()).await.unwrap(),
+            _ => sqlx::query_scalar(
+                "INSERT INTO credentials (xid, kind, device_public_key) VALUES ($1, $2, $3) RETURNING id",
+            ).bind(xid.as_bytes().as_slice()).bind(kind).bind(b"public".as_slice())
+                .fetch_one(store.pool()).await.unwrap(),
+        }
+    }
+
+    #[sqlx::test]
+    async fn passkey_account_mgmt_all_login_kinds_and_unconditional_primitive(pool: PgPool) {
+        let store = KeysStore::from_pool(pool);
+        // Password is not yet a schema kind. Simulate its future presence only
+        // in this sqlx test's isolated database, without changing migrations.
+        sqlx::query("ALTER TABLE credentials DROP CONSTRAINT credentials_kind_known, DROP CONSTRAINT credentials_kind_shape")
+            .execute(store.pool()).await.unwrap();
+        for kind in [
+            "passkey",
+            "oidc_apple",
+            "oidc_google",
+            "identikey_auth",
+            "password",
+        ] {
+            let xid = email_magic_link_account(&store).await;
+            let passkey = passkey_account_mgmt_credential(&store, xid, "passkey").await;
+            let other = passkey_account_mgmt_credential(&store, xid, kind).await;
+            let ssh = passkey_account_mgmt_credential(&store, xid, "ssh_git").await;
+            assert_eq!(
+                store
+                    .revoke_account_access(xid, passkey, false)
+                    .await
+                    .unwrap(),
+                AccountAccessRevocation::Revoked
+            );
+            assert_eq!(
+                store
+                    .revoke_account_access(xid, other, false)
+                    .await
+                    .unwrap(),
+                AccountAccessRevocation::LastAccessConfirmationRequired
+            );
+            assert_eq!(store.list_devices(xid).await.unwrap().len(), 2);
+            assert_eq!(
+                store.revoke_account_access(xid, other, true).await.unwrap(),
+                AccountAccessRevocation::Revoked
+            );
+            assert_eq!(
+                store
+                    .revoke_account_access(xid, other, false)
+                    .await
+                    .unwrap(),
+                AccountAccessRevocation::Revoked
+            );
+            assert_eq!(store.list_devices(xid).await.unwrap()[0].id, ssh);
+            assert_eq!(
+                store.revoke_account_access(xid, ssh, false).await.unwrap(),
+                AccountAccessRevocation::Revoked
+            );
+        }
+        let xid = email_magic_link_account(&store).await;
+        let sole = passkey_account_mgmt_credential(&store, xid, "passkey").await;
+        assert_eq!(
+            store.revoke_account_access(xid, sole, false).await.unwrap(),
+            AccountAccessRevocation::LastAccessConfirmationRequired
+        );
+        store.revoke_device(xid, sole).await.unwrap();
+        assert!(store.list_devices(xid).await.unwrap().is_empty());
+    }
+
+    #[sqlx::test]
+    async fn passkey_account_mgmt_concurrent_last_two_and_foreign_ids(pool: PgPool) {
+        let store = KeysStore::from_pool(pool);
+        for kind in ["passkey", "oidc_apple", "oidc_google", "identikey_auth"] {
+            let xid = email_magic_link_account(&store).await;
+            let first = passkey_account_mgmt_credential(&store, xid, "passkey").await;
+            let second = passkey_account_mgmt_credential(&store, xid, kind).await;
+            let (a, b) = tokio::join!(
+                store.revoke_account_access(xid, first, false),
+                store.revoke_account_access(xid, second, false),
+            );
+            let outcomes = [a.unwrap(), b.unwrap()];
+            assert!(outcomes.contains(&AccountAccessRevocation::Revoked));
+            assert!(outcomes.contains(&AccountAccessRevocation::LastAccessConfirmationRequired));
+            assert_eq!(store.list_devices(xid).await.unwrap().len(), 1);
+            let other = email_magic_link_account(&store).await;
+            assert!(matches!(
+                store.revoke_account_access(other, second, true).await,
+                Err(StoreError::NotFound)
+            ));
+            assert!(matches!(
+                store.revoke_account_access(xid, Uuid::nil(), true).await,
+                Err(StoreError::NotFound)
+            ));
+        }
+    }
+
+    #[sqlx::test]
+    async fn passkey_account_mgmt_rename_scope(pool: PgPool) {
+        let store = KeysStore::from_pool(pool);
+        let xid = email_magic_link_account(&store).await;
+        let other = email_magic_link_account(&store).await;
+        let id = passkey_account_mgmt_credential(&store, xid, "passkey").await;
+        store
+            .rename_passkey(xid, id, Some(" Home <key> "))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.list_devices(xid).await.unwrap()[0]
+                .nickname
+                .as_deref(),
+            Some("Home <key>")
+        );
+        store.rename_passkey(xid, id, Some("Work")).await.unwrap();
+        assert_eq!(
+            store.list_devices(xid).await.unwrap()[0]
+                .nickname
+                .as_deref(),
+            Some("Work")
+        );
+        assert!(matches!(
+            store.rename_passkey(other, id, Some("stolen")).await,
+            Err(StoreError::NotFound)
+        ));
+        let ssh = passkey_account_mgmt_credential(&store, xid, "ssh_git").await;
+        assert!(matches!(
+            store.rename_passkey(xid, ssh, Some("wrong kind")).await,
+            Err(StoreError::NotFound)
+        ));
+        store.revoke_device(xid, id).await.unwrap();
+        assert!(matches!(
+            store.rename_passkey(xid, id, Some("revoked")).await,
+            Err(StoreError::NotFound)
+        ));
     }
 
     #[sqlx::test]
