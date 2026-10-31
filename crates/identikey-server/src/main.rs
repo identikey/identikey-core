@@ -2238,6 +2238,265 @@ mod tests {
         assert_eq!(held, vec![0x73; 32]);
     }
 
+    #[sqlx::test(migrator = "identikey_keys::MIGRATOR")]
+    async fn account_recovery_drill(pool: sqlx::PgPool) {
+        use axum::body::Body;
+        use axum::http::Request;
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+        use identikey_auth::{Response as AuthResponse, signing_payload, verify_classical};
+        use identikey_keys::verifier_commitment;
+        use tower::ServiceExt;
+        use webauthn_authenticator_rs::{prelude::WebauthnAuthenticator, softpasskey::SoftPasskey};
+        use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse};
+
+        async fn enroll(
+            app: &Router,
+            xid: Xid,
+            cookie: &str,
+            authenticator: &mut WebauthnAuthenticator<SoftPasskey>,
+        ) {
+            let (status, begin) = signal_json(
+                passkey_account_mgmt_post(
+                    app,
+                    "/webauthn/register/begin",
+                    Some(cookie),
+                    serde_json::json!({"xid": xid.to_string()}),
+                )
+                .await,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let mut options = begin["publicKey"].clone();
+            // SoftPasskey cannot store resident keys; relax only client options.
+            options["authenticatorSelection"]["residentKey"] = "discouraged".into();
+            options["authenticatorSelection"]["requireResidentKey"] = false.into();
+            let credential = authenticator
+                .do_registration(
+                    url::Url::parse("https://auth.identikey.me").unwrap(),
+                    CreationChallengeResponse {
+                        public_key: serde_json::from_value(options).unwrap(),
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                passkey_account_mgmt_post(
+                    app,
+                    "/webauthn/register/finish",
+                    Some(cookie),
+                    serde_json::json!({
+                        "xid": xid.to_string(), "session": begin["session"],
+                        "credential": credential,
+                    }),
+                )
+                .await
+                .status(),
+                StatusCode::OK
+            );
+        }
+
+        async fn redeem_email(app: &Router, cookie: &str) {
+            let (status, link) = signal_json(
+                passkey_account_mgmt_post(
+                    app,
+                    "/account/email/begin",
+                    Some(cookie),
+                    serde_json::json!({"email": "recovery@example.com"}),
+                )
+                .await,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let url = url::Url::parse(link["redeem_url"].as_str().unwrap()).unwrap();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("{}?{}", url.path(), url.query().unwrap()))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            // Redemption needs no cookie and establishes no new account session.
+            assert!(!response.headers().contains_key(header::SET_COOKIE));
+            let (status, redeemed) = signal_json(response).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(redeemed["email_verified"], true);
+        }
+
+        let store = KeysStore::from_pool(pool);
+        let app = test_router(store.clone());
+        let signup = passkey_account_mgmt_post(&app, "/signup", None, serde_json::json!({})).await;
+        let cookie = signup.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let (status, signup) = signal_json(signup).await;
+        assert_eq!(status, StatusCode::OK);
+        let xid: Xid = signup["xid"].as_str().unwrap().parse().unwrap();
+        let mut original = WebauthnAuthenticator::new(SoftPasskey::new(true));
+        enroll(&app, xid, &cookie, &mut original).await;
+        redeem_email(&app, &cookie).await;
+        let verified: bool = sqlx::query_scalar(
+            "SELECT email = 'recovery@example.com' AND email_verified_at IS NOT NULL
+             FROM accounts WHERE xid = $1",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert!(verified);
+        let original_rows = store.list_passkeys(xid).await.unwrap();
+        assert_eq!(original_rows.len(), 1);
+        let devices = store.list_devices(xid).await.unwrap();
+        assert_eq!(devices.len(), 1);
+        let original_device_id = devices[0].id;
+        let revoke = format!("/account/passkeys/{}/revoke", devices[0].id);
+        let (status, denied) = signal_json(
+            passkey_account_mgmt_post(&app, &revoke, Some(&cookie), serde_json::json!({})).await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(denied["error"], "last_access_confirmation_required");
+        assert_eq!(store.list_passkeys(xid).await.unwrap().len(), 1);
+        assert_eq!(
+            passkey_account_mgmt_post(
+                &app,
+                &revoke,
+                Some(&cookie),
+                serde_json::json!({"confirm_last_access": true}),
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert!(store.list_passkeys(xid).await.unwrap().is_empty());
+        assert!(store.list_devices(xid).await.unwrap().is_empty());
+
+        // The existing hosted session can begin and register after revocation.
+        // The email token verifies the binding; it grants no signing authority.
+        redeem_email(&app, &cookie).await;
+        let mut replacement = WebauthnAuthenticator::new(SoftPasskey::new(true));
+        enroll(&app, xid, &cookie, &mut replacement).await;
+        let rows = store.list_passkeys(xid).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].xid, xid);
+        assert_ne!(rows[0].credential_id, original_rows[0].credential_id);
+        let devices = store.list_devices(xid).await.unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].kind, "passkey");
+        assert_ne!(devices[0].id, original_device_id);
+
+        let mut challenge = identikey_auth::Challenge::from_bytes(
+            &test_provider().issue_challenge().unwrap(),
+        )
+        .unwrap();
+        // Managed signing expects the verifier's Edge XID as its audience.
+        challenge.audience = Xid::from_bytes([0xab; 32]).to_string();
+        let challenge = challenge.to_bytes();
+        let verifier = "account recovery drill client verifier";
+        let (status, begin) = signal_json(
+            passkey_account_mgmt_post(
+                &app,
+                "/managed-challenge/begin",
+                Some(&cookie),
+                serde_json::json!({
+                    "xid": xid.to_string(), "challenge": B64.encode(&challenge),
+                    "verifier_commitment": B64.encode(verifier_commitment(verifier)),
+                    "proof": "a3",
+                    "session_public_key": {"alg": "ed25519", "key": B64.encode([0x11; 32])},
+                    "operation": ["vms", "stop"], "resource": ["vm", "A"],
+                    "channel": B64.encode([0x22; 32]),
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let finish = serde_json::json!({"request_id": begin["request_id"]});
+        // Even after enrollment, a hosted cookie cannot substitute for A3.
+        assert_eq!(
+            passkey_account_mgmt_post(&app, "/managed-challenge/finish/a3", Some(&cookie), finish,)
+                .await
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let retrieve = serde_json::json!({
+            "request_id": begin["request_id"], "verifier": verifier,
+        });
+        let (status, pending) = signal_json(
+            passkey_account_mgmt_post(
+                &app,
+                "/managed-challenge/retrieve",
+                Some(&cookie),
+                retrieve.clone(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(pending["state"], "pending");
+        assert!(pending.get("response").is_none());
+        assert!(pending.get("bind").is_none());
+
+        let assertion = replacement
+            .do_authentication(
+                url::Url::parse("https://auth.identikey.me").unwrap(),
+                RequestChallengeResponse {
+                    public_key: serde_json::from_value(begin["public_key"].clone()).unwrap(),
+                    mediation: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            passkey_account_mgmt_post(
+                &app,
+                "/managed-challenge/finish/a3",
+                None,
+                serde_json::json!({"request_id": begin["request_id"], "credential": assertion}),
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        let (status, completed) = signal_json(
+            passkey_account_mgmt_post(&app, "/managed-challenge/retrieve", None, retrieve).await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(completed["state"], "completed");
+        let signed =
+            AuthResponse::from_bytes(&B64.decode(completed["response"].as_str().unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(signed.challenge_bytes, challenge);
+        let custody = store.get_custody(xid).await.unwrap().unwrap();
+        assert_eq!(
+            signed.public_key.bytes,
+            operational_ed25519_public(&custody.document).unwrap()
+        );
+        verify_classical(
+            &signed.public_key,
+            &signing_payload(&challenge),
+            &signed.signature,
+        )
+        .unwrap();
+        let authorized: (uuid::Uuid, String, String) = sqlx::query_as(
+            "SELECT credential_id, access_level, proof_kind FROM consent_log
+             WHERE xid = $1 AND action = 'signing_instruction_authorized'",
+        )
+        .bind(xid.as_bytes().as_slice())
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            authorized,
+            (devices[0].id, "a3".into(), "webauthn_assertion".into())
+        );
+    }
+
     fn test_provider() -> Arc<Provider> {
         let salt = PairwiseSalt::from_hex(&"ab".repeat(32)).unwrap();
         let provider = Provider::generate("http://127.0.0.1:8080", salt).unwrap();
