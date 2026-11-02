@@ -28,8 +28,7 @@
 //! The type system holds that line: [`AccountRecovery`] and [`KeyRecovery`] are
 //! uninhabited markers with no conversion. [`restore_access`] does not return
 //! key bytes. [`restore_key`] does not accept [`AccountRecoveryProof`]. Email,
-//! SMS, and guardian ceremonies are not implemented here; this crate currently
-//! exists to make a merge unrepresentable.
+//! SMS ceremonies live in this crate; guardian reconstruction remains separate.
 //!
 //! # The unsolved problem
 //!
@@ -37,6 +36,9 @@
 //! on the ladder, and the one that determines whether anyone reaches C3 at all.
 //! It is a design problem, not an implementation one, and it is not solved by
 //! writing this crate.
+
+mod a1;
+pub use a1::*;
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -73,33 +75,34 @@ pub enum KeyRecovery {}
 ///     proof.into()
 /// }
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// The unchecked constructor is unavailable to callers.
+///
+/// ```compile_fail
+/// let proof = identikey_recovery::AccountRecoveryProof::granted();
+/// ```
+#[derive(Debug)]
 pub struct AccountRecoveryProof {
-    _kind: PhantomData<AccountRecovery>,
+    // Taking this before validation makes every acceptance attempt single-use.
+    binding: Option<Binding>,
 }
 
 impl AccountRecoveryProof {
-    /// Mark that an A1/A2 check succeeded.
-    ///
-    /// Email, SMS, and social verification are not implemented. This
-    /// constructor exists so the access-restore path can be typed without
-    /// ever mentioning a key.
     #[must_use]
-    pub const fn granted() -> Self {
-        Self { _kind: PhantomData }
+    pub fn binding(&self) -> Option<&Binding> {
+        self.binding.as_ref()
     }
 }
 
-/// Access to a managed account at C1/C2. Not a key.
+/// Legacy access result; an A1 proof alone does not authorize managed access.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ManagedAccess {
     _private: (),
 }
 
-/// Restore access to a managed account. Does not yield key material.
+/// Consume an A1 proof without granting access. Use purpose-specific acceptance.
 #[must_use]
-pub fn restore_access(_proof: AccountRecoveryProof) -> ManagedAccess {
-    ManagedAccess { _private: () }
+pub fn restore_access(_proof: AccountRecoveryProof) -> Option<ManagedAccess> {
+    None
 }
 
 /// Proof that a C3 key-recovery reconstruction succeeded.
@@ -169,16 +172,6 @@ pub fn restore_key(proof: KeyRecoveryProof) -> RecoveredKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn account_recovery_restores_access_not_a_key() {
-        let proof = AccountRecoveryProof::granted();
-        let access = restore_access(proof);
-        assert_eq!(access, ManagedAccess { _private: () });
-        // There is no proof.as_bytes(), proof.into_bytes(), or
-        // restore_key(proof). The compile-fail doctests on
-        // AccountRecoveryProof are the type-system check.
-    }
 
     #[test]
     fn key_recovery_restores_key_bytes() {
