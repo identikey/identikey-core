@@ -121,6 +121,7 @@ fn router_with_keyring(
         .route("/.well-known/openid-configuration", get(discovery))
         .route("/.well-known/jwks.json", get(jwks))
         .route("/.well-known/webauthn", get(well_known_webauthn))
+        .route("/.well-known/security.txt", get(well_known_security_txt))
         .route("/authorize", get(authorize))
         .route(
             "/authorize/passkey",
@@ -269,6 +270,33 @@ fn apply_spa_cors(response: &mut Response, origin: Option<&str>, allowed: bool) 
 /// or user-content origins.
 async fn well_known_webauthn(State(state): State<AppState>) -> Json<webauthn::RelatedOrigins> {
     Json(state.webauthn.related_origins())
+}
+
+/// RFC 9116. The contact is the private GitHub advisory. The human policy
+/// lives on the marketing site. This route is registered ahead of the SPA
+/// fallback so the file is `text/plain`, not `200.html`.
+const SECURITY_TXT: &str = "\
+Contact: https://github.com/identikey/identikey-core/security/advisories/new\n\
+Expires: 2027-11-02T00:00:00.000Z\n\
+Preferred-Languages: en\n\
+Canonical: https://auth.identikey.me/.well-known/security.txt\n\
+Policy: https://identikey.io/security\n\
+";
+
+async fn well_known_security_txt() -> impl IntoResponse {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            ),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=86400"),
+            ),
+        ],
+        SECURITY_TXT,
+    )
 }
 
 fn body_etag(bytes: &[u8]) -> String {
@@ -3511,6 +3539,34 @@ mod tests {
         let addr = parse_bind(DEFAULT_BIND).unwrap();
         assert!(addr.ip().is_loopback());
         assert_eq!(addr.port(), 8080);
+    }
+
+    #[test]
+    fn security_txt_is_rfc9116_plain_text() {
+        assert!(SECURITY_TXT.starts_with(
+            "Contact: https://github.com/identikey/identikey-core/security/advisories/new\n"
+        ));
+        assert!(SECURITY_TXT.contains("Expires: 2027-11-02T00:00:00.000Z\n"));
+        assert!(
+            SECURITY_TXT
+                .contains("Canonical: https://auth.identikey.me/.well-known/security.txt\n")
+        );
+        assert!(SECURITY_TXT.contains("Policy: https://identikey.io/security\n"));
+        assert!(!SECURITY_TXT.contains('<'));
+    }
+
+    #[tokio::test]
+    async fn security_txt_response_is_plain_text() {
+        let response = well_known_security_txt().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/plain; charset=utf-8"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(bytes, SECURITY_TXT.as_bytes());
     }
 
     #[test]

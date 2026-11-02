@@ -8,7 +8,10 @@ Use **Report a vulnerability** on the
 [Security tab](https://github.com/identikey/identikey-core/security/advisories/new).
 That opens a private advisory for the maintainers of this repository.
 It covers `identikey-core` and the production provider at
-`https://auth.identikey.me`.
+`https://auth.identikey.me`. The same policy is on
+[identikey.io/security](https://identikey.io/security). Machines can read
+`https://identikey.io/.well-known/security.txt` and
+`https://auth.identikey.me/.well-known/security.txt`.
 
 Include:
 
