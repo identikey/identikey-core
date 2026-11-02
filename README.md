@@ -100,6 +100,8 @@ Contributors to identikey-core must agree to the [Contributor License
 Agreement](CLA.md). Contributors to identikey-protocol use the
 identikey-protocol Developer Certificate of Origin instead of this CLA.
 
+Security reports go through [SECURITY.md](SECURITY.md), not a public issue.
+
 ## License
 
 Private — IdentiKey Platform
