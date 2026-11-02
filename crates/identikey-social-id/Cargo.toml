@@ -1,0 +1,25 @@
+[package]
+name = "identikey-social-id"
+description = "Apple and Google RS256 identity token verification"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+openidconnect = { version = "4", default-features = false }
+base64 = "0.22"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+josekit.workspace = true

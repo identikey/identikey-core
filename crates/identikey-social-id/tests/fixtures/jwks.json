@@ -1,0 +1,12 @@
+{
+  "keys": [
+    {
+      "kty": "RSA",
+      "kid": "pinned-rsa",
+      "use": "sig",
+      "alg": "RS256",
+      "n": "pO7QJ3GM2szz9nAp8h1WMOojelkEZ9UXB7sNozKGpY283tryqrZXts48zydZI-tubliam_4JhdbMb1Yv5VXmCrrV0n4uP5sPXe0-Jv4mrZyZ71EltwXd3DTB9zv0HPGHYkpBUZjjf-q2sjjjNZBJWkZwvMwwKkugs8-ejNJUxpQhYjlUVEuKGkw144oUY1fjCIfcqM0P5Chyn8sYoBmRqFSS93fnv_A_EpRDEGilzdhb92iJFV-spTo5yp9ypEACblRmTiyfEGMN7z6vAePQdV23CyK6oiDS9ANFnOm9S9XOSnWlGxmLdphWHnXkHvDFmsGXvTzUAGMol89BmVRNcw",
+      "e": "AQAB"
+    }
+  ]
+}
