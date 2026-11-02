@@ -69,3 +69,52 @@ A bootstrap proof refuses `accept_recover`. A recover proof refuses
 The transport vendor, the page, and the route shape. The length of the
 expiry. Which managed rung a bootstrap closure picks, beyond the rung
 check `create_managed` already has.
+
+## Store transition
+
+The factor store applies one conditional transition for finish. It
+reads live state, expiry, the attempt budget, and consumption
+together, and it commits the new state before a proof exists. Two
+matching finishes produce one proof. A store error produces none.
+A wrong SMS attempt and a matching finish on the same factor have
+one winner: if the committed state is the fifth failure, no proof
+is issued; if the committed state is consumption, the proof is
+issued and the failure is not. Wrong attempts stay recorded after
+a failed write is not the way they persist: a failed attempt write
+does not increment the budget.
+
+## Binding
+
+Begin asks the directory. The directory result is the trusted
+binding: channel, destination, purpose, and, for recover, the XID
+and the rung. That binding is immutable on the factor. A caller-
+supplied XID that disagrees with the directory is refused at begin.
+If the destination is unbound or rebound before finish, finish
+refuses and does not consume a recover factor whose directory XID
+no longer matches. Finish does not freeze destination authority.
+`accept_recover` checks the directory again. If that destination is
+gone or now belongs to another XID, acceptance refuses and consumes
+the proof. The current-custody check and single use still apply.
+Acceptance callbacks are trusted integration
+code and must use the XID and destination the library passes them.
+A bootstrap proof proves possession of the destination that began
+it. It does not verify some other address the callback invents.
+
+## Proof lifetime
+
+Finish returns one proof. Acceptance consumes that proof. A second
+`accept_bootstrap` or `accept_recover` on it does not run the
+closure. If the closure returns an error, the proof stays consumed.
+`AccountRecoveryProof::granted` is not public. `restore_access` on
+this proof does not authorize managed access and does not bypass
+`accept_bootstrap` or `accept_recover`. `restore_key` still refuses
+the proof.
+
+## Generation
+
+Email secrets and SMS digits come from a cryptographic generator.
+Six digits are sampled without bias and may include leading zeros.
+A challenge id collision does not overwrite a live factor or reset
+its attempt count. Entropy failure or insertion failure returns no
+factor and no secret. The hash input is the challenge id bytes
+followed by the secret bytes, with those lengths unambiguous.

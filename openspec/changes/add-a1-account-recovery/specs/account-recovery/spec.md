@@ -110,5 +110,95 @@ SHALL accept that proof and SHALL NOT return key bytes.
 #### Scenario: Proof does not restore a key
 
 - GIVEN an `AccountRecoveryProof` from a successful finish
-- WHEN `restore_access` is called with it
-- THEN the result is managed access and no API on that proof yields key bytes
+- WHEN `restore_key` is called with it
+- THEN the call is refused
+- AND `restore_access` on that proof does not authorize managed access
+
+### Requirement: Factor consumption is one committed transition
+
+The factor store SHALL decide expiry, the attempt budget, and
+consumption in one conditional transition. Only a committed
+consumption SHALL produce a proof. A store error SHALL produce no
+proof. Two concurrent matching finishes of one factor SHALL produce
+one proof. A concurrent wrong SMS attempt and a matching finish
+SHALL have one committed winner. The fifth committed failure SHALL
+produce no proof. A failed attempt write SHALL NOT increment the
+budget.
+
+#### Scenario: Two matching finishes
+
+- GIVEN one live factor
+- WHEN two finishes present the matching secret concurrently
+- THEN one proof is returned and the factor is consumed
+
+#### Scenario: Fifth failure wins the race
+
+- GIVEN an SMS factor with four wrong attempts recorded
+- WHEN a wrong finish and a matching finish commit, and the committed state is the fifth failure
+- THEN no proof is returned
+
+### Requirement: The directory binds the factor
+
+Begin SHALL take the destination binding from the directory. The
+factor SHALL record channel, destination, purpose, and, for recover,
+the directory XID. A caller-supplied XID that differs SHALL be
+refused. Finish SHALL refuse a recover factor whose directory
+binding no longer matches, and SHALL NOT consume it for that
+refusal. Acceptance callbacks SHALL receive the bound destination
+and, for recover, the bound XID. A bootstrap proof SHALL prove the
+destination that began it. `accept_recover` SHALL check the
+directory again. If the destination is unbound or bound to a
+different XID, acceptance SHALL refuse and SHALL consume the proof.
+The current-custody check SHALL still apply.
+
+#### Scenario: A supplied XID cannot retarget recovery
+
+- GIVEN a destination the directory binds to XID A
+- WHEN begin is asked to recover XID B
+- THEN no factor is issued
+
+#### Scenario: Removal after finish consumes the proof
+
+- GIVEN a recover proof for destination D and XID A, and A is still C2
+- WHEN D is no longer bound to A and `accept_recover` is called
+- THEN the closure does not run and the proof is consumed
+
+#### Scenario: Reassignment after finish consumes the proof
+
+- GIVEN a recover proof for destination D and XID A, and A is still C2
+- WHEN the directory binds D to XID B and `accept_recover` is called
+- THEN the closure does not run and the proof is consumed
+
+#### Scenario: A rebound destination does not finish
+
+- GIVEN a recover factor bound to XID A
+- WHEN the directory now binds that destination to XID B and finish presents the matching secret
+- THEN no proof is returned and the factor is not consumed
+
+### Requirement: Acceptance consumes the proof
+
+`accept_bootstrap` and `accept_recover` SHALL consume the proof. A
+second acceptance SHALL NOT run the closure. A closure error SHALL
+leave the proof consumed. `AccountRecoveryProof::granted` SHALL NOT
+be a public constructor. `restore_access` SHALL NOT turn this proof
+into an authorization that bypasses those functions.
+
+#### Scenario: A second acceptance does not run
+
+- GIVEN a bootstrap proof that `accept_bootstrap` has already consumed
+- WHEN `accept_bootstrap` is called again
+- THEN the closure does not run
+
+### Requirement: Secrets are unpredictable
+
+Email secrets and SMS digits SHALL come from a cryptographic
+generator. SMS digits SHALL be an unbiased sample of six decimal
+digits, including leading zeros. A challenge id collision SHALL NOT
+overwrite a live factor or reset its attempt count. Entropy failure
+or insertion failure SHALL return no factor.
+
+#### Scenario: Insertion failure issues nothing
+
+- GIVEN the factor store rejects the insert
+- WHEN begin runs
+- THEN no challenge id and no secret are returned

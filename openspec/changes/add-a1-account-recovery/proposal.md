@@ -1,6 +1,6 @@
 # add-a1-account-recovery
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 Bead `identikey-core-vt4.5`, from `identikey-core-vt4.4`. Steer 2026-10-30.
 **Rigor:** architecture
@@ -10,16 +10,16 @@ Bead `identikey-core-vt4.5`, from `identikey-core-vt4.4`. Steer 2026-10-30.
 `restore_key` accepts only `KeyRecoveryProof`. `ProofKind::EmailLink`
 and `ProofKind::SmsOtp` exist on the consent hash and have no ceremony.
 `KeysStore::create_managed` already rejects a rung that does not hold a
-managed key. Outcome: new contract. Authority: none. The
-`identikey-core-pgz` grant does not cover this node.
+managed key. Outcome: new contract. Authority: the 2026-11-02 activate-wave
+grant on `identikey-core-max`.
 
 ## Why
 
-A lost passkey on a managed account has no in-repo way back on. The
-custody ladder already names email and SMS as access level A1, for
-account bootstrap and account recovery at C1 and C2. The recovery crate
-holds that line as marker types only. `AccountRecoveryProof::granted`
-succeeds without checking a factor.
+The hosted email link already stores `accounts.email` and returns a
+redeem URL. The recovery crate still holds email and SMS as marker
+types, and `AccountRecoveryProof::granted` succeeds without checking
+a factor. This change is that library ceremony. It does not replace
+the hosted link.
 
 ## What
 

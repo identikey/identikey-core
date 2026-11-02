@@ -1,15 +1,18 @@
 # add-social-id-token-verify
 
-> **PENDING**
+> **ACTIVE BUILD**
 
-Bead `identikey-core-ccf.6`. Steer 2026-09-26.
+**Rigor:** change
+
+Bead `identikey-core-ccf.6`. Steer 2026-09-26. Activated 2026-11-02
+under `identikey-core-max`.
 
 **Preparation:** still valid. Behavior source is
 `web/src/lib/auth/provider-jwks/provider-jwks.ts`,
 `web/src/lib/auth/apple/verify.ts`, and
 `web/src/lib/auth/google/verify.ts`. `identikey-oidc-client` verifies
 EdDSA tokens for an IdentiKey issuer and is the wrong home for RS256
-Apple/Google keys. Authority: none (bare `/run` is not a grant).
+Apple/Google keys. Authority: the 2026-11-02 activate-wave grant on `identikey-core-max`.
 
 ## Why
 

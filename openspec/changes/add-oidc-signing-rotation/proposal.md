@@ -1,16 +1,19 @@
 # add-oidc-signing-rotation
 
-> **PENDING**
+> **ACTIVE BUILD**
 
-Bead `identikey-core-ccf.13`, extracted from `identikey-core-ccf.9`.
+**Rigor:** change
+
+Bead `identikey-core-ccf.9`. Email/password login is
+`identikey-core-ccf.13`, not this change.
 Preparation 2026-10-28: `SigningKey` holds one Ed25519 JWK and
 `public_jwks` publishes that one key. `sign_id_token` is the only
 JWT signer. Access tokens are `random_token` and refresh tokens are
 stored as a hash, so they are not checked through JWKS. ID-token
 lifetime is `ACCESS_TTL` (3600 seconds). `PairwiseSalt` lives in
 `pairwise.salt` and its module says it is never rotated. Outcome:
-new contract. Authority: none. The post-quantum campaign grant does
-not cover this node. Activation stays off.
+new contract. Authority: the 2026-11-02 activate-wave grant on
+`identikey-core-max`.
 
 ## Why
 
@@ -62,6 +65,8 @@ grow a rotate operation.
 ## Out of scope
 
 - Rotating a user's XID, Elect key, or ML-DSA control key.
+- A `credentials` row, `list_devices`, or `revoke_device`. This
+  key is the OP signing key, not a device record.
 - Choosing a replacement for josekit (`identikey-core-ccf.10`).
 - Making refresh tokens into JWTs.
 - A hosted button that an operator clicks. The contract is the
