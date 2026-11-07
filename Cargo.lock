@@ -433,26 +433,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitfield"
-version = "0.19.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b45721c9db4c7a20899d05efb7ad9235f50b256e980db30ffb229abf732934c3"
-dependencies = [
- "bitfield-macros",
-]
-
-[[package]]
-name = "bitfield-macros"
-version = "0.19.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0cb6f3d4773a2107b94cbeccaa5b5f0b35a88389b5d522d13d659f64317b22d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
-]
-
-[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -636,16 +616,6 @@ name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
-
-[[package]]
-name = "core-foundation"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
-dependencies = [
- "core-foundation-sys",
- "libc",
-]
 
 [[package]]
 name = "core-foundation-sys"
@@ -1030,26 +1000,6 @@ dependencies = [
  "sec1",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "enumflags2"
-version = "0.7.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1027f7680c853e056ebcec683615fb6fbbc07dbaa13b4d5d9442b146ded4ecef"
-dependencies = [
- "enumflags2_derive",
-]
-
-[[package]]
-name = "enumflags2_derive"
-version = "0.7.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67c78a4d8fdf9953a5c9d458f9efe940fd97a0cab0941c075a813ac594733827"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -1458,12 +1408,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hostname-validator"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f558a64ac9af88b5ba400d99b579451af0d39c6d360980045b91aac966d705e2"
-
-[[package]]
 name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1697,20 +1641,16 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "identikey-auth"
 version = "0.1.0"
-source = "git+https://github.com/identikey/identikey-protocol.git?rev=fd073c0c5cb08f7102e73a4f2b7f9a529210cf98#fd073c0c5cb08f7102e73a4f2b7f9a529210cf98"
+source = "git+https://github.com/identikey/identikey-protocol.git?rev=e4fe668c7e6b21d6fb103d755dffcef86dd286e1#e4fe668c7e6b21d6fb103d755dffcef86dd286e1"
 dependencies = [
  "blake3",
  "bs58",
- "core-foundation",
  "ed25519-dalek",
  "fips204",
  "p256",
  "rand_core 0.6.4",
- "security-framework",
- "security-framework-sys",
  "sha2 0.10.9",
  "thiserror 2.0.19",
- "tss-esapi",
  "windows",
  "zeroize",
 ]
@@ -1747,7 +1687,7 @@ dependencies = [
 [[package]]
 name = "identikey-log"
 version = "0.1.0"
-source = "git+https://github.com/identikey/identikey-protocol.git?rev=093ceb13148d5fb5267ad309ecdfea15f2637d9e#093ceb13148d5fb5267ad309ecdfea15f2637d9e"
+source = "git+https://github.com/identikey/identikey-protocol.git?rev=e4fe668c7e6b21d6fb103d755dffcef86dd286e1#e4fe668c7e6b21d6fb103d755dffcef86dd286e1"
 dependencies = [
  "bc-components",
  "bc-envelope",
@@ -2084,16 +2024,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
-name = "mbox"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26d142aeadbc4e8c679fc6d93fbe7efe1c021fa7d80629e615915b519e3bc6de"
-dependencies = [
- "libc",
- "stable_deref_trait",
-]
-
-[[package]]
 name = "md-5"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2269,7 +2199,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.21.7",
  "chrono",
  "getrandom 0.2.17",
  "http",
@@ -2280,15 +2210,6 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 1.0.69",
  "url",
-]
-
-[[package]]
-name = "oid"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c19903c598813dba001b53beeae59bb77ad4892c5c1b9b3500ce4293a0d06c2"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -2550,41 +2471,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
 dependencies = [
  "siphasher",
-]
-
-[[package]]
-name = "picky-asn1"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ff038f9360b934342fb3c0a1d6e82c438a2624b51c3c6e3e6d7cf252b6f3ee3"
-dependencies = [
- "oid",
- "serde",
- "serde_bytes",
-]
-
-[[package]]
-name = "picky-asn1-der"
-version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d413165e4bf7f808b9a27cbaba657657a2921f0965db833f488c4d4be96dcd2e"
-dependencies = [
- "picky-asn1",
- "serde",
- "serde_bytes",
-]
-
-[[package]]
-name = "picky-asn1-x509"
-version = "0.15.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "859d4117bd1b1dc5646359ee7243c50c5000c0920ea2d1fb120335a2f4c684b8"
-dependencies = [
- "base64 0.22.1",
- "oid",
- "picky-asn1",
- "picky-asn1-der",
- "serde",
 ]
 
 [[package]]
@@ -3230,29 +3116,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "security-framework"
-version = "3.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7f4bc775c73d9a02cde8bf7b2ec4c9d12743edf609006c7facc23998404cd1d"
-dependencies = [
- "bitflags 2.13.1",
- "core-foundation",
- "core-foundation-sys",
- "libc",
- "security-framework-sys",
-]
-
-[[package]]
-name = "security-framework-sys"
-version = "2.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
-dependencies = [
- "core-foundation-sys",
- "libc",
-]
-
-[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3866,12 +3729,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "target-lexicon"
-version = "0.12.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
-
-[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4160,39 +4017,6 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
-
-[[package]]
-name = "tss-esapi"
-version = "7.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f10b25a84912b894d0e6d68f4a3771c923e9c44ddaaed7920cde92ed28aa84e"
-dependencies = [
- "bitfield",
- "enumflags2",
- "getrandom 0.4.3",
- "hostname-validator",
- "log",
- "mbox",
- "num-derive",
- "num-traits",
- "oid",
- "picky-asn1",
- "picky-asn1-x509",
- "regex",
- "serde",
- "tss-esapi-sys",
- "zeroize",
-]
-
-[[package]]
-name = "tss-esapi-sys"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7f972672926a3d3d18ecc04524720e4d20b7d1664a3fb73dbf7d4274196dbd9"
-dependencies = [
- "pkg-config",
- "target-lexicon",
-]
 
 [[package]]
 name = "typenum"
