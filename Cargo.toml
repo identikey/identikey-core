@@ -71,9 +71,9 @@ bs58 = "0.5"
 identikey-keys = { path = "crates/identikey-keys", version = "0.1.0" }
 identikey-oidc = { path = "crates/identikey-oidc", version = "0.1.0" }
 identikey-recovery = { path = "crates/identikey-recovery", version = "0.1.0" }
-# Protocol-tier proof. Pin a rev; CI has no sibling checkout.
-identikey-auth = { git = "https://github.com/identikey/identikey-protocol.git", rev = "e4fe668c7e6b21d6fb103d755dffcef86dd286e1", version = "0.1.0" }
-identikey-log = { git = "https://github.com/identikey/identikey-protocol.git", rev = "e4fe668c7e6b21d6fb103d755dffcef86dd286e1", version = "0.1.0" }
+# Track protocol main. Cargo.lock records the revision used by CI.
+identikey-auth = { git = "https://github.com/identikey/identikey-protocol.git", branch = "main", version = "0.1.0" }
+identikey-log = { git = "https://github.com/identikey/identikey-protocol.git", branch = "main", version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

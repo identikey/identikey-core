@@ -1641,7 +1641,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "identikey-auth"
 version = "0.1.0"
-source = "git+https://github.com/identikey/identikey-protocol.git?rev=e4fe668c7e6b21d6fb103d755dffcef86dd286e1#e4fe668c7e6b21d6fb103d755dffcef86dd286e1"
+source = "git+https://github.com/identikey/identikey-protocol.git?branch=main#e4fe668c7e6b21d6fb103d755dffcef86dd286e1"
 dependencies = [
  "blake3",
  "bs58",
@@ -1687,7 +1687,7 @@ dependencies = [
 [[package]]
 name = "identikey-log"
 version = "0.1.0"
-source = "git+https://github.com/identikey/identikey-protocol.git?rev=e4fe668c7e6b21d6fb103d755dffcef86dd286e1#e4fe668c7e6b21d6fb103d755dffcef86dd286e1"
+source = "git+https://github.com/identikey/identikey-protocol.git?branch=main#e4fe668c7e6b21d6fb103d755dffcef86dd286e1"
 dependencies = [
  "bc-components",
  "bc-envelope",
