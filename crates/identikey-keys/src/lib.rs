@@ -75,6 +75,7 @@
 pub mod ceremony;
 pub mod consent;
 pub mod encapsulation;
+pub mod forgejo_binding;
 pub mod keyspace;
 pub mod managed_challenge;
 pub mod privilege;
