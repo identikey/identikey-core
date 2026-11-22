@@ -301,31 +301,6 @@ naming question closed.
 
 ---
 
-### Trademark risk on the name itself ⚠️
-
-`identikey.com` (registered 1998, via MarkMonitor — a corporate brand-protection registrar) and
-`identikey.org` both redirect to OneSpan's authentication-server product. **IDENTIKEY is a
-registered trademark of VASCO Data Security International** (now OneSpan, NASDAQ: OSPN), listed
-among their marks in SEC filings, used for an authentication server — *the same product
-category we are entering*, with roughly 28 years of prior use.
-
-This is material beyond the domain question:
-
-- The **certification-mark revenue line** (`identikey-core-ydd.11`) proposes licensing
-  "IdentiKey Certified". A certification mark in the authentication category is squarely in
-  OneSpan's lane and is exactly the kind of commercial use that draws enforcement.
-- The **anti-burial trademark policy** (`ydd.3`) presumes we can hold the mark at all.
-- Brand exposure grows precisely as the product becomes visible in enterprise identity — the
-  "MS Entra alternative" market where OneSpan also sells.
-
-**Mitigating:** OneSpan has *rebranded* IDENTIKEY to "OneSpan Authentication Server." A US
-registration unused for three consecutive years is vulnerable to cancellation for abandonment,
-so the mark may be weakening or already dormant — which is a risk *and* a possible opening.
-
-**This is a flag, not an opinion — get an actual search.** USPTO and EUIPO, live status,
-classes, territories, and evidence of continued use, before further brand investment and
-*definitely* before building a revenue line on the mark. Tracked as P0.
-
 ## ADR-005: The URN grant requires an `identikey-auth` Response, not a WebAuthn assertion ✅ Decided 2026-08-01
 
 **Context.** `urn:identikey:params:oauth:grant-type:challenge-response` lets a key holder obtain
