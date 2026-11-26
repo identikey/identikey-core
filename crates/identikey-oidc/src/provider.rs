@@ -264,7 +264,11 @@ impl Provider {
 
     #[must_use]
     pub fn discovery(&self) -> DiscoveryDocument {
-        DiscoveryDocument::for_issuer(&self.issuer)
+        let mut document = DiscoveryDocument::for_issuer(&self.issuer);
+        if self.signing.signs_rs256() {
+            document.advertise_rs256();
+        }
+        document
     }
 
     #[must_use]

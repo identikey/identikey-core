@@ -29,7 +29,9 @@ jobs:
       PGUSER: postgres
       SQLX_OFFLINE: "true"
       IDENTIKEY_BIND: "0.0.0.0:8080"
-      IDENTIKEY_ISSUER: "http://host.docker.internal:8080"
+      IDENTIKEY_ISSUER: "https://host.docker.internal:8445"
+      # The config profile requires RS256 in discovery. The flag publishes a real RSA key.
+      IDENTIKEY_CONFORMANCE_RS256: "1"
       IDENTIKEY_DATA_DIR: /tmp/identikey-oidf-data
       WEBAUTHN_RP_ID: localhost
       WEBAUTHN_EXPECTED_ORIGIN: http://localhost
@@ -77,8 +79,15 @@ jobs:
           mkdir -p "$IDENTIKEY_DATA_DIR"
           ./target/release/identikey-server &
           echo $! > /tmp/identikey-server.pid
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout /tmp/op.key -out /tmp/op.crt -days 1 \
+            -subj /CN=host.docker.internal \
+            -addext subjectAltName=DNS:host.docker.internal
+          python3 scripts/oidf-https-proxy.py 0.0.0.0 8445 127.0.0.1 8080 /tmp/op.crt /tmp/op.key &
+          echo $! > /tmp/identikey-proxy.pid
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8080/health | grep -q ok; then
+            if curl -fsS http://127.0.0.1:8080/health | grep -q ok \
+              && curl -kfsS https://127.0.0.1:8445/health | grep -q ok; then
               exit 0
             fi
             sleep 1
@@ -89,19 +98,23 @@ jobs:
       - name: discovery document names this issuer
         run: |
           curl -fsS http://127.0.0.1:8080/.well-known/openid-configuration \
-            | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "S256" in str(d); assert d["issuer"]=="http://host.docker.internal:8080"'
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "S256" in str(d); assert "RS256" in d["id_token_signing_alg_values_supported"]; assert d["issuer"]=="https://host.docker.internal:8445"'
 
       - name: Config OP
         working-directory: /tmp/conformance-suite/scripts
         run: |
+          python3 -c 'import json,os,pathlib; src=pathlib.Path(os.environ["GITHUB_WORKSPACE"])/"docs/oidc/config-op.json"; doc=json.loads(src.read_text()); doc["server"]["discoveryUrl"]="https://host.docker.internal:8445/.well-known/openid-configuration"; pathlib.Path("/tmp/config-op.json").write_text(json.dumps(doc))'
           python3 run-test-plan.py \
             oidcc-config-certification-test-plan \
-            "${{ github.workspace }}/docs/oidc/config-op.json"
+            /tmp/config-op.json
 
       - name: stop
         if: always()
         run: |
           if [ -f /tmp/identikey-server.pid ]; then
             kill "$(cat /tmp/identikey-server.pid)" || true
+          fi
+          if [ -f /tmp/identikey-proxy.pid ]; then
+            kill "$(cat /tmp/identikey-proxy.pid)" || true
           fi
           docker compose -f docs/oidc/docker-compose.yml down || true

@@ -1928,6 +1928,12 @@ async fn main() -> Result<(), BoxError> {
         std::env::var("IDENTIKEY_SIGNING_KEY").ok().as_deref(),
         data_path,
     )?;
+    // The OIDF config profile requires RS256 in discovery. Publish a real RSA
+    // key only when this job asks for it. Production stays Ed25519.
+    if std::env::var("IDENTIKEY_CONFORMANCE_RS256").as_deref() == Ok("1") {
+        signing.enable_rs256()?;
+        tracing::info!("conformance RS256 signing key ready");
+    }
     tracing::info!("signing key ready");
 
     let issuer =
