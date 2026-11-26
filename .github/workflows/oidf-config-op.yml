@@ -33,6 +33,8 @@ jobs:
       IDENTIKEY_DATA_DIR: /tmp/identikey-oidf-data
       WEBAUTHN_RP_ID: localhost
       WEBAUTHN_EXPECTED_ORIGIN: http://localhost
+      # Throwaway key for this job. Boot fails closed without one.
+      IDENTIKEY_MANAGED_WRAP_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
       CONFORMANCE_DEV_MODE: "1"
       CONFORMANCE_SERVER: "https://127.0.0.1:8443"
       CONFORMANCE_SERVER_MTLS: "https://127.0.0.1:8444"

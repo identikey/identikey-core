@@ -15,8 +15,8 @@
 //!
 mod account;
 mod ceremonies;
-mod device_passkeys;
 mod clients;
+mod device_passkeys;
 mod email_link;
 mod encapsulation;
 mod local_register;
@@ -524,11 +524,7 @@ async fn browser_passkey_labels(
     let mut labels = Vec::new();
     let mut unnamed = false;
     for id in &stored {
-        match state
-            .store
-            .passkey_presentation_by_credential_id(id)
-            .await
-        {
+        match state.store.passkey_presentation_by_credential_id(id).await {
             Ok(Some(row)) => {
                 live.push(id.clone());
                 let label = row
@@ -2295,7 +2291,11 @@ mod tests {
                 assert!(!html.contains(&seed));
                 if signed_in {
                     assert!(html.contains("Held by IdentiKey"));
-                    assert!(html.contains("<ul class=\"passkeys\"><li class=\"passkey\" data-passkey-id="));
+                    assert!(
+                        html.contains(
+                            "<ul class=\"passkeys\"><li class=\"passkey\" data-passkey-id="
+                        )
+                    );
                     let section = html
                         .split("<section aria-labelledby=\"managed-key-title\">")
                         .nth(1)
@@ -4817,7 +4817,10 @@ mod tests {
         let response = test_router(store)
             .oneshot(
                 Request::builder()
-                    .uri(format!("/authorize/passkey?{}", authorize_qs(&s256_challenge(VERIFIER))))
+                    .uri(format!(
+                        "/authorize/passkey?{}",
+                        authorize_qs(&s256_challenge(VERIFIER))
+                    ))
                     .header(header::COOKIE, cookie)
                     .body(Body::empty())
                     .unwrap(),
@@ -4842,7 +4845,9 @@ mod tests {
         .unwrap();
         assert!(body.contains("This browser has used "));
         assert!(!body.contains(&URL_SAFE_NO_PAD.encode(&cred)));
-        assert!(body.contains("\"allowCredentials\":[]") || body.contains("\"allowCredentials\": []"));
+        assert!(
+            body.contains("\"allowCredentials\":[]") || body.contains("\"allowCredentials\": []")
+        );
         let kept = device_passkeys::parse(Some(&set_cookie));
         assert_eq!(kept, vec![cred]);
     }
@@ -5474,7 +5479,10 @@ mod tests {
                 .headers()
                 .get_all(header::SET_COOKIE)
                 .iter()
-                .any(|value| value.to_str().unwrap_or("").starts_with("identikey_account="))
+                .any(|value| value
+                    .to_str()
+                    .unwrap_or("")
+                    .starts_with("identikey_account="))
         );
 
         let provider = test_provider();
