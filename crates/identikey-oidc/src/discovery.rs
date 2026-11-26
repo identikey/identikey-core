@@ -60,17 +60,6 @@ impl DiscoveryDocument {
         }
     }
 
-    /// The conformance profile requires `RS256` in this list. Call it only
-    /// when an RSA signing key is actually published in the JWKS.
-    pub fn advertise_rs256(&mut self) {
-        if !self
-            .id_token_signing_alg_values_supported
-            .contains(&"RS256")
-        {
-            self.id_token_signing_alg_values_supported.push("RS256");
-        }
-    }
-
     /// Advertise `POST /register`. The server calls this only for the loopback registrar.
     #[must_use]
     pub fn with_registration_endpoint(mut self) -> Self {

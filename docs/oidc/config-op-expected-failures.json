@@ -1,0 +1,11 @@
+[
+  {
+    "test-name": "oidcc-discovery-endpoint-verification",
+    "variant": "*",
+    "configuration-filename": "*",
+    "current-block": "*",
+    "condition": "OIDCCCheckDiscEndpointIdTokenSigningAlgValuesSupported",
+    "expected-result": "failure",
+    "comment": "OpenID Connect Core requires RS256 in id_token_signing_alg_values_supported. IdentiKey signs ID tokens with Ed25519 only and does not advertise RSA."
+  }
+]

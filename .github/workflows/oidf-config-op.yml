@@ -30,8 +30,6 @@ jobs:
       SQLX_OFFLINE: "true"
       IDENTIKEY_BIND: "0.0.0.0:8080"
       IDENTIKEY_ISSUER: "https://host.docker.internal:8445"
-      # The config profile requires RS256 in discovery. The flag publishes a real RSA key.
-      IDENTIKEY_CONFORMANCE_RS256: "1"
       IDENTIKEY_DATA_DIR: /tmp/identikey-oidf-data
       WEBAUTHN_RP_ID: localhost
       WEBAUTHN_EXPECTED_ORIGIN: http://localhost
@@ -79,7 +77,7 @@ jobs:
           mkdir -p "$IDENTIKEY_DATA_DIR"
           ./target/release/identikey-server &
           echo $! > /tmp/identikey-server.pid
-          openssl req -x509 -newkey rsa:2048 -nodes \
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
             -keyout /tmp/op.key -out /tmp/op.crt -days 1 \
             -subj /CN=host.docker.internal \
             -addext subjectAltName=DNS:host.docker.internal
@@ -98,13 +96,17 @@ jobs:
       - name: discovery document names this issuer
         run: |
           curl -fsS http://127.0.0.1:8080/.well-known/openid-configuration \
-            | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "S256" in str(d); assert "RS256" in d["id_token_signing_alg_values_supported"]; assert d["issuer"]=="https://host.docker.internal:8445"'
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["id_token_signing_alg_values_supported"]==["EdDSA"]; assert "RS256" not in str(d); assert "sub" in d["claims_supported"]; assert d["issuer"]=="https://host.docker.internal:8445"'
 
       - name: Config OP
         working-directory: /tmp/conformance-suite/scripts
         run: |
           python3 -c 'import json,os,pathlib; src=pathlib.Path(os.environ["GITHUB_WORKSPACE"])/"docs/oidc/config-op.json"; doc=json.loads(src.read_text()); doc["server"]["discoveryUrl"]="https://host.docker.internal:8445/.well-known/openid-configuration"; pathlib.Path("/tmp/config-op.json").write_text(json.dumps(doc))'
+          # Core 1.0 requires RS256 in id_token_signing_alg_values_supported.
+          # IdentiKey signs ID tokens with Ed25519 only, so that one condition
+          # is an expected failure. A pass would fail this job.
           python3 run-test-plan.py \
+            --expected-failures-file "$GITHUB_WORKSPACE/docs/oidc/config-op-expected-failures.json" \
             oidcc-config-certification-test-plan \
             /tmp/config-op.json
 

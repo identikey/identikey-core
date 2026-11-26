@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 
 use josekit::jwk::alg::ed::EdCurve;
 use josekit::jwk::{Jwk, JwkSet, KeyPair};
-use josekit::jws::{EdDSA, JwsHeader, RS256};
+use josekit::jws::{EdDSA, JwsHeader};
 use josekit::jwt::{self, JwtPayload};
 
 const FILE_NAME: &str = "signing.jwk";
@@ -27,8 +27,6 @@ pub struct SigningKey {
 struct SigningState {
     jwk: Jwk,
     retiring: Vec<RetiringKey>,
-    /// Present only when conformance mode publishes an RSA signer.
-    rsa: Option<Jwk>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -99,7 +97,6 @@ impl SigningKey {
             state: Arc::new(RwLock::new(SigningState {
                 jwk,
                 retiring: Vec::new(),
-                rsa: None,
             })),
             data_dir: None,
         }
@@ -120,11 +117,6 @@ impl SigningKey {
         if let Ok(state) = self.state.read() {
             if let Ok(public) = public_key(&state.jwk) {
                 set.push_key(public);
-            }
-            if let Some(rsa) = &state.rsa {
-                if let Ok(public) = public_key(rsa) {
-                    set.push_key(public);
-                }
             }
             for retired in &state.retiring {
                 if retired.public.key_id() != state.jwk.key_id() && in_overlap(retired, now) {
@@ -172,33 +164,6 @@ impl SigningKey {
         state.jwk = next.jwk.clone();
         fs::File::open(dir)?.sync_all()?;
         Ok(())
-    }
-
-    /// Publish an RSA signing key and remember that ID tokens may use `RS256`.
-    /// The Ed25519 key stays the default signer.
-    pub fn enable_rs256(&self) -> Result<(), SigningError> {
-        let mut pair = RS256
-            .generate_key_pair(2048)
-            .map_err(|e| SigningError::Entropy(e.to_string()))?;
-        pair.set_key_id(Some(random_kid()?));
-        pair.set_algorithm(Some("RS256"));
-        let mut jwk = pair.to_jwk_key_pair();
-        jwk.set_key_use("sig");
-        jwk.set_algorithm("RS256");
-        RS256
-            .signer_from_jwk(&jwk)
-            .map_err(|e| SigningError::Jose(e.to_string()))?;
-        let mut state = self.state.write().map_err(|_| SigningError::Poisoned)?;
-        state.rsa = Some(jwk);
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn signs_rs256(&self) -> bool {
-        self.state
-            .read()
-            .ok()
-            .is_some_and(|state| state.rsa.is_some())
     }
 
     pub fn sign_id_token(
