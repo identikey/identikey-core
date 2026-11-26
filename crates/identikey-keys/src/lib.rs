@@ -762,13 +762,13 @@ mod tests {
         assert_eq!(store.list_passkeys(id).await.unwrap().len(), 1);
         for presented in [0, 2, 4] {
             sqlx::query("UPDATE credentials SET last_used_at = now() - interval '1 day' WHERE webauthn_credential_id = $1")
-                .bind(&cred).execute(store.pool()).await.unwrap();
+                .bind(cred).execute(store.pool()).await.unwrap();
             store
                 .update_passkey_sign_counter(&cred, presented)
                 .await
                 .unwrap();
             let (counter, recent): (i64, bool) = sqlx::query_as("SELECT sign_counter, last_used_at > now() - interval '1 minute' FROM credentials WHERE webauthn_credential_id = $1")
-                .bind(&cred).fetch_one(store.pool()).await.unwrap();
+                .bind(cred).fetch_one(store.pool()).await.unwrap();
             assert_eq!(counter, 3.max(presented));
             assert!(recent);
         }

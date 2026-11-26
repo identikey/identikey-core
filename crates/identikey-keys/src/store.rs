@@ -1352,6 +1352,7 @@ pub(crate) fn decode_document(bytes: &[u8]) -> Result<XIDDocument, StoreError> {
 #[allow(
     clippy::unwrap_used,
     clippy::expect_used,
+    clippy::indexing_slicing,
     reason = "panicking on failure is the assertion in a test"
 )]
 mod tests {

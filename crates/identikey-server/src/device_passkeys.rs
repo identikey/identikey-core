@@ -98,6 +98,11 @@ fn header_value(payload: &str, max_age: &str, secure: bool) -> HeaderValue {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "panicking on failure is the assertion in a test"
+)]
 mod tests {
     use super::*;
 
