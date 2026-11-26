@@ -19,6 +19,7 @@ pub struct DiscoveryDocument {
     pub id_token_signing_alg_values_supported: Vec<&'static str>,
     pub token_endpoint_auth_methods_supported: Vec<&'static str>,
     pub scopes_supported: Vec<&'static str>,
+    pub claims_supported: Vec<&'static str>,
     /// Set only by a loopback registrar (`IDENTIKEY_LOCAL_REGISTER=1`).
     /// Production discovery omits this field.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,6 +49,7 @@ impl DiscoveryDocument {
             code_challenge_methods_supported: vec!["S256"],
             subject_types_supported: vec!["pairwise", "public"],
             id_token_signing_alg_values_supported: vec!["EdDSA"],
+            claims_supported: vec!["sub"],
             token_endpoint_auth_methods_supported: vec![
                 "none",
                 "client_secret_basic",
@@ -85,6 +87,7 @@ mod tests {
         assert!(json.contains("\"code\""));
         assert!(json.contains("S256"));
         assert!(json.contains("EdDSA"));
+        assert!(json.contains("\"sub\""));
         assert!(!json.contains("password"));
         assert!(!json.contains("\"token\""));
         assert_eq!(doc.issuer, "https://auth.example");

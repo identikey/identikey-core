@@ -760,6 +760,10 @@ fn sign_managed_result(
 impl KeysStore {
     /// Begin an immutable managed-signing attempt. `webauthn_state` is the
     /// serialised server verifier state for A3 and must be absent for A4.
+    ///
+    /// The arguments are the columns of one insert. `now` stays explicit so
+    /// tests can pin consent time.
+    #[allow(clippy::too_many_arguments)]
     pub async fn begin_managed_challenge(
         &self,
         xid: Xid,

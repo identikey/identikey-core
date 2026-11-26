@@ -15,8 +15,8 @@
 //!
 mod account;
 mod ceremonies;
-mod device_passkeys;
 mod clients;
+mod device_passkeys;
 mod email_link;
 mod encapsulation;
 mod local_register;
@@ -524,11 +524,7 @@ async fn browser_passkey_labels(
     let mut labels = Vec::new();
     let mut unnamed = false;
     for id in &stored {
-        match state
-            .store
-            .passkey_presentation_by_credential_id(id)
-            .await
-        {
+        match state.store.passkey_presentation_by_credential_id(id).await {
             Ok(Some(row)) => {
                 live.push(id.clone());
                 let label = row
@@ -597,6 +593,12 @@ async fn register_begin(
 
 // Hygiene metadata is loaded only after acceptance. Store failure must not
 // turn an accepted ceremony into a failed sign-in.
+fn insert_json_field(value: &mut serde_json::Value, key: &str, field: serde_json::Value) {
+    if let Some(object) = value.as_object_mut() {
+        object.insert(key.to_owned(), field);
+    }
+}
+
 async fn passkey_signal_fields(store: &KeysStore, xid: Xid) -> serde_json::Value {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     let Ok(rows) = store.list_passkeys(xid).await else {
@@ -638,7 +640,7 @@ async fn register_finish(
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             };
             let mut result = passkey_signal_fields(&state.store, xid).await;
-            result["next"] = serde_json::json!("/account");
+            insert_json_field(&mut result, "next", serde_json::json!("/account"));
             let mut response = (
                 StatusCode::OK,
                 [
@@ -1044,7 +1046,11 @@ async fn assert_finish(
             let mut response = if let Some(pending) = finished.pending {
                 issue_authorize_code(&state, pending, finished.xid, result)
             } else {
-                result["xid"] = serde_json::json!(finished.xid.to_string());
+                insert_json_field(
+                    &mut result,
+                    "xid",
+                    serde_json::json!(finished.xid.to_string()),
+                );
                 Json(result).into_response()
             };
             append_set_cookie(&mut response, cookie);
@@ -1476,7 +1482,11 @@ fn json_redirect(
             pairs.append_pair("state", state);
         }
     }
-    result["redirect"] = serde_json::json!(parsed.to_string());
+    insert_json_field(
+        &mut result,
+        "redirect",
+        serde_json::json!(parsed.to_string()),
+    );
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
@@ -1726,7 +1736,7 @@ async fn device_assert_finish(
             {
                 Ok(()) => {
                     let mut result = passkey_signal_fields(&state.store, finished.xid).await;
-                    result["approved"] = serde_json::json!(true);
+                    insert_json_field(&mut result, "approved", serde_json::json!(true));
                     let mut response = Json(result).into_response();
                     append_set_cookie(
                         &mut response,
@@ -1985,6 +1995,7 @@ async fn main() -> Result<(), BoxError> {
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
+    clippy::expect_used,
     clippy::indexing_slicing,
     clippy::panic,
     reason = "panicking on failure is the assertion in a test"
@@ -2295,7 +2306,11 @@ mod tests {
                 assert!(!html.contains(&seed));
                 if signed_in {
                     assert!(html.contains("Held by IdentiKey"));
-                    assert!(html.contains("<ul class=\"passkeys\"><li class=\"passkey\" data-passkey-id="));
+                    assert!(
+                        html.contains(
+                            "<ul class=\"passkeys\"><li class=\"passkey\" data-passkey-id="
+                        )
+                    );
                     let section = html
                         .split("<section aria-labelledby=\"managed-key-title\">")
                         .nth(1)
@@ -4817,7 +4832,10 @@ mod tests {
         let response = test_router(store)
             .oneshot(
                 Request::builder()
-                    .uri(format!("/authorize/passkey?{}", authorize_qs(&s256_challenge(VERIFIER))))
+                    .uri(format!(
+                        "/authorize/passkey?{}",
+                        authorize_qs(&s256_challenge(VERIFIER))
+                    ))
                     .header(header::COOKIE, cookie)
                     .body(Body::empty())
                     .unwrap(),
@@ -4842,7 +4860,9 @@ mod tests {
         .unwrap();
         assert!(body.contains("This browser has used "));
         assert!(!body.contains(&URL_SAFE_NO_PAD.encode(&cred)));
-        assert!(body.contains("\"allowCredentials\":[]") || body.contains("\"allowCredentials\": []"));
+        assert!(
+            body.contains("\"allowCredentials\":[]") || body.contains("\"allowCredentials\": []")
+        );
         let kept = device_passkeys::parse(Some(&set_cookie));
         assert_eq!(kept, vec![cred]);
     }
@@ -5474,7 +5494,10 @@ mod tests {
                 .headers()
                 .get_all(header::SET_COOKIE)
                 .iter()
-                .any(|value| value.to_str().unwrap_or("").starts_with("identikey_account="))
+                .any(|value| value
+                    .to_str()
+                    .unwrap_or("")
+                    .starts_with("identikey_account="))
         );
 
         let provider = test_provider();

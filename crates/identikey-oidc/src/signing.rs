@@ -298,6 +298,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), SigningError> {
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
+    clippy::indexing_slicing,
     reason = "panicking on failure is the assertion in a test"
 )]
 mod tests {

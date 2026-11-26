@@ -139,6 +139,13 @@ ignore = [
     { id = "RUSTSEC-2026-0166", reason = "pqcrypto-mldsa: PQClean archived; see identikey-core-zan.10" },
     { id = "RUSTSEC-2026-0161", reason = "pqcrypto-mlkem: PQClean archived; see identikey-core-zan.10" },
     { id = "RUSTSEC-2026-0162", reason = "pqcrypto-traits: PQClean archived; see identikey-core-zan.10" },
+    # No patched pqcrypto release. Same bc-components path as zan.10.
+    { id = "RUSTSEC-2026-0585", reason = "pqcrypto-mlkem omits FIPS 203 input checks; PQClean archived, no upgrade (identikey-core-zan.10)" },
+    { id = "RUSTSEC-2026-0586", reason = "pqcrypto-mldsa AVX2 verifier accepts non-conforming signatures; no upgrade (identikey-core-zan.10)" },
+    # Fix is crypto-bigint 0.7.6. elliptic-curve 0.13.8 requires ^0.5, so the
+    # lockfile cannot take it. The crate is only reached through p256/p384/p521.
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 timing variability; upgrade blocked by elliptic-curve 0.13 (^0.5)" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono 0.4 unmaintained; transitive via dcbor and oauth2; no patched release" },
 ]
 
 [sources]
