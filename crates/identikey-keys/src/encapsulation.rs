@@ -26,7 +26,9 @@ use crate::xid::Xid;
 
 const CONSENT_DOMAIN: &[u8] = b"identikey-encapsulation-consent-v1\n";
 const CONSENT_TTL: u64 = 5 * 60;
-const WRAP_LABEL: &[u8] = b"identikey-keyspace-v1-wrap";
+/// BLAKE3 key-derivation context for the X25519 wrap (keyspace v1 §7.1).
+/// Must equal `identikey-share`'s. The known-answer test below pins it.
+const WRAP_KDF_CONTEXT: &str = "identikey keyspace-v1 wrap key x25519-xchacha20poly1305";
 const EXPORT_ACTION: &str = "encapsulation_export";
 const UNWRAP_ACTION: &str = "encapsulation_unwrap";
 const REWRAP_ACTION: &str = "encapsulation_rewrap";
@@ -751,14 +753,11 @@ fn seal_ptk(
 }
 
 fn wrap_kdf(dh: &[u8; 32], ephemeral: &[u8; 32], recipient: &[u8; 32]) -> [u8; 32] {
-    let mut material = Vec::with_capacity(WRAP_LABEL.len() + 96);
-    material.extend_from_slice(WRAP_LABEL);
-    material.extend_from_slice(dh);
-    material.extend_from_slice(ephemeral);
-    material.extend_from_slice(recipient);
-    let hash = blake3::hash(&material);
-    material.zeroize();
-    *hash.as_bytes()
+    let mut hasher = blake3::Hasher::new_derive_key(WRAP_KDF_CONTEXT);
+    hasher.update(dh);
+    hasher.update(ephemeral);
+    hasher.update(recipient);
+    *hasher.finalize().as_bytes()
 }
 
 fn encode_wrap(
@@ -972,6 +971,18 @@ mod tests {
             panic!("operational encapsulation is not x25519");
         };
         assert_ne!(companion.as_bytes(), recipient.as_slice());
+    }
+
+    /// The vector in identikey-protocol `identikey-keyspace-v1.md` §7.1 and
+    /// in `identikey-share`. The two copies must agree.
+    #[test]
+    fn wrap_kdf_matches_the_protocol_vector() {
+        let key = wrap_kdf(&[0x11; 32], &[0x22; 32], &[0x33; 32]);
+        let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "ad799ab492b0d6c54e41260bd866c433f0f3072b0b7fa3a77cca58c6731c8d76"
+        );
     }
 
     #[test]
