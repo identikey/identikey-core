@@ -164,6 +164,23 @@ deploy` packs untracked files that are not gitignored —
 `.identikey-dev-data/` (local signing JWK and pairwise salt) must stay
 ignored. Deploy a clean tree, not a dirty checkout.
 
+Keyspace wrap key derivation changed 2026-11-27 (`2ab4de0`, protocol
+`16b06a1`): BLAKE3 `derive_key` with one context string per wrap
+algorithm (protocol `docs/standards/identikey-keyspace-v1.md` §7.1,
+convention in `key-derivation.md`). A wrap sealed by an earlier build
+does not open under a later one. This is not
+`IDENTIKEY_MANAGED_WRAP_KEY`, which is unchanged and still must not be
+rotated. Production (checked 2026-11-27) does not serve
+`/account/encapsulation/*` yet: a POST there gets the static fallback's
+405, where a live handler such as `/managed-challenge/begin` gives 422.
+The routes arrived in `fcdb920` (2026-10-21), after the live build. So
+production has sealed no wrap under the old derivation, and the next
+deploy brings the routes up on the new one. `identikey-local` and any
+dev database that used those routes between `fcdb920` and `2ab4de0` hold
+old wraps that stop opening once the binary is rebuilt. New derivations
+follow the protocol's `key-derivation.md`. The §7.1 known-answer vectors
+were reproduced with a second BLAKE3 implementation on 2026-11-27.
+
 Encoding (cite protocol `docs/standards/encoding-conventions.md`).
 Bytes stay bytes in Postgres, Rust, and CBOR. A **text** boundary
 picks one encoding per kind — hex is diagnostics only, not the
